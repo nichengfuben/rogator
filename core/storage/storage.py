@@ -316,3 +316,34 @@ def save_persist(
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(path)
+
+
+# ---------------------------------------------------------------------------
+# Generic JSON persistence helpers (task timers, etc.)
+# ---------------------------------------------------------------------------
+
+def load_json(path: Path) -> Any:
+    """Load JSON from ``path``, returning ``{}`` on any failure."""
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_json(path: Path, data: Any) -> None:
+    """Write ``data`` as JSON to ``path``, creating parent dirs as needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def load_task_timers(path: str) -> Dict[str, float]:
+    """Load task timer floats keyed by task id from ``path``."""
+    data = load_json(Path(path))
+    return {str(key): float(value) for key, value in data.items()}
+
+
+def save_task_timers(path: str, timers: Dict[str, float]) -> None:
+    """Persist task timer floats keyed by task id to ``path``."""
+    save_json(Path(path), timers)

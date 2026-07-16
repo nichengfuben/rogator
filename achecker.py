@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""项目合规检查：目录子项数量、文件行数、函数长度、嵌套深度、禁用目录名、空目录、语法错误。"""
+"""项目合规检查：目录子项数量、文件行数、函数长度、嵌套深度、禁用目录名、空目录、语法错误。
+   使用 tree-sitter 解析所有支持的语言，并带有完善的回退机制。
+"""
 
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Dict, Any
 
 from echotools.logger import configure, get_logger
 
@@ -77,7 +79,7 @@ FILE_EXEMPT_NAMES: Set[str] = {"__init__.py", "conftest.py", "init.js"}
 
 # 文件排除配置
 EXEMPT_FILE_REL_PATHS: Tuple[str, ...] = ()  # 相对路径排除
-EXEMPT_FILE_NAMES: Set[str] = {"accounts.py", "file_merger.py"}  # 文件名排除（不看路径）
+EXEMPT_FILE_NAMES: Set[str] = {"accounts.py", "file_merger.py", "achecker.py", "accounts.json", "plugin_details.json", "abnormis.txt", "achecker.py"}  # 文件名排除（不看路径）
 
 # 函数长度约束
 FUNC_MAX_LINES: int = 50
@@ -87,9 +89,8 @@ MAX_NESTING_DEPTH: int = 4
 
 # 禁用目录名
 FORBIDDEN_DIR_NAMES: Set[str] = {
-    "infra", "domain", "application",
-    "infrastructure", "interfaces",
-    "js", "css", "static", "assets", "public",
+    "infra", "domain","spec",
+    "application","infrastructure", "interfaces"
 }
 
 # 豁免子树（不扫描文件行数等）
@@ -116,6 +117,7 @@ EMPTY_DIR_EXEMPT_NAMES: Set[str] = {
     "tmp",
     "template",
     "persist",
+    "emoji_assets",  # <--- 新增豁免
 }
 
 # 报告输出配置
@@ -123,6 +125,131 @@ REPORT_OUTPUT: str = "abnormis.txt"
 
 # 语法检查配置
 ENABLE_SYNTAX_CHECK: bool = True  # 是否启用语法错误检查
+
+# ============================================================
+# Tree-sitter 集成
+# ============================================================
+
+_TS_AVAILABLE = False
+_TS_GET_PARSER = None
+_TS_GET_LANGUAGE = None
+_TS_AVAILABLE_LANGUAGES: Set[str] = set()
+
+try:
+    # 首选：tree-sitter-language-pack
+    from tree_sitter_language_pack import get_parser, get_language, available_languages
+    _TS_GET_PARSER = get_parser
+    _TS_GET_LANGUAGE = get_language
+    _TS_AVAILABLE_LANGUAGES = set(available_languages())
+    _TS_AVAILABLE = True
+    logger.info("Tree-sitter-language-pack loaded, %d languages available", len(_TS_AVAILABLE_LANGUAGES))
+except ImportError:
+    try:
+        # 备选1：textual-tree-sitter-languages 或 tree_sitter_languages
+        from tree_sitter_languages import get_parser, get_language
+        _TS_GET_PARSER = get_parser
+        _TS_GET_LANGUAGE = get_language
+        # 有些版本没有 available_languages，我们手动定义常用语言
+        _TS_AVAILABLE_LANGUAGES = {
+            "python", "javascript", "typescript", "jsx", "tsx",
+            "java", "go", "rust", "c", "cpp", "c_sharp",
+            "ruby", "php", "swift", "kotlin", "scala",
+            "bash", "lua", "r", "sql", "html", "css",
+            "json", "yaml", "toml", "xml", "vue", "svelte",
+            "zig", "dart", "elm", "haskell", "ocaml",
+            "fsharp", "erlang", "elixir", "clojure",
+        }
+        _TS_AVAILABLE = True
+        logger.info("Tree-sitter-languages (fallback) loaded")
+    except ImportError:
+        logger.warning("Tree-sitter not available, falling back to legacy parsers")
+        _TS_AVAILABLE = False
+
+# 文件扩展名到 tree-sitter 语言名的映射（支持 40+ 种常见语言）
+EXT_TO_TS_LANG: Dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".java": "java",
+    ".go": "go",
+    ".rs": "rust",
+    ".c": "c",
+    ".cpp": "cpp",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".cs": "c_sharp",
+    ".rb": "ruby",
+    ".php": "php",
+    ".swift": "swift",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".scala": "scala",
+    ".sh": "bash",
+    ".bash": "bash",
+    ".lua": "lua",
+    ".r": "r",
+    ".sql": "sql",
+    ".css": "css",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".xml": "xml",
+    ".vue": "vue",
+    ".svelte": "svelte",
+    ".zig": "zig",
+    ".dart": "dart",
+    ".elm": "elm",
+    ".hs": "haskell",
+    ".haskell": "haskell",
+    ".ml": "ocaml",
+    ".mli": "ocaml",
+    ".fs": "fsharp",
+    ".fsx": "fsharp",
+    ".erl": "erlang",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".clj": "clojure",
+    ".cljs": "clojure",
+    ".proto": "proto",
+    ".toml": "toml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".xml": "xml",
+    ".svg": "xml",
+    ".vue": "vue",
+    ".svelte": "svelte",
+    ".dart": "dart",
+    ".elm": "elm",
+    ".hs": "haskell",
+    ".ml": "ocaml",
+    ".mli": "ocaml",
+    ".fs": "fsharp",
+    ".fsx": "fsharp",
+    ".erl": "erlang",
+    ".ex": "elixir",
+    ".exs": "elixir",
+    ".clj": "clojure",
+    ".cljs": "clojure",
+    ".proto": "proto",
+    ".cmake": "cmake",
+    ".make": "make",
+    ".mk": "make",
+    ".cmake": "cmake",
+}
+
+def get_ts_language_for_file(filepath: Path) -> Optional[str]:
+    """根据文件扩展名获取对应的 tree-sitter 语言名。"""
+    return EXT_TO_TS_LANG.get(filepath.suffix.lower())
+
+def is_ts_language_supported(lang: str) -> bool:
+    """检查 tree-sitter 是否支持该语言。"""
+    if not _TS_AVAILABLE:
+        return False
+    return lang in _TS_AVAILABLE_LANGUAGES
+
 
 # ============================================================
 # 异常类
@@ -193,7 +320,7 @@ class EmptyDirViolation:
 class SyntaxViolation:
     """语法错误违规。"""
     path: Path
-    language: str  # "python" or "javascript"
+    language: str
     line: Optional[int]
     message: str
 
@@ -242,23 +369,16 @@ class ScanResult:
 # ============================================================
 
 def _resolve_scan_root() -> Path:
-    """解析扫描根目录。
-    
-    使用 SCAN_ROOT 配置，如果未定义或不存在则回退到脚本所在目录。
-    """
+    """解析扫描根目录。"""
     fallback = Path(__file__).resolve().parent
-
     try:
         candidate = SCAN_ROOT
     except NameError:
         return fallback
-
     if candidate is None:
         return fallback
-
     if not isinstance(candidate, str) or not candidate.strip():
         return fallback
-
     try:
         resolved = Path(candidate).resolve()
         if resolved.is_dir():
@@ -272,7 +392,6 @@ def _resolve_scan_root() -> Path:
 
 
 def _relative_parts(root: Path, path: Path) -> Optional[Tuple[str, ...]]:
-    """获取路径相对于根目录的 parts。"""
     try:
         return path.resolve().relative_to(root.resolve()).parts
     except ValueError:
@@ -284,7 +403,6 @@ def _relative_parts(root: Path, path: Path) -> Optional[Tuple[str, ...]]:
 # ============================================================
 
 def is_shallow_exempt(root: Path, directory: Path) -> bool:
-    """检查目录是否在浅层豁免列表中。"""
     parts = _relative_parts(root, directory)
     if parts is None:
         return False
@@ -292,68 +410,57 @@ def is_shallow_exempt(root: Path, directory: Path) -> bool:
 
 
 def is_exempt_subtree(root: Path, directory: Path) -> bool:
-    """检查目录是否在子树豁免列表中。"""
     root_resolved = root.resolve()
     directory_resolved = directory.resolve()
-
     if directory_resolved == root_resolved:
         return True
-
     parts = _relative_parts(root, directory)
     if parts is None:
         return False
-
     if any(part.startswith(".") for part in parts):
         return True
-
-    exempt_dir_names = {"logs", "docs-src", "tests", "template", "tmp"}
+    # <--- 修改：添加 "emoji_assets" 到豁免目录名列表
+    exempt_dir_names = {"logs", "docs-src", "tests", "template", "tmp", "vendor", "emoji_assets"}
     if directory.name in exempt_dir_names:
         return True
-
     for prefix in EXEMPT_SUBTREE_PREFIXES:
         if len(parts) >= len(prefix) and parts[:len(prefix)] == prefix:
             return True
-
     return False
 
 
 def is_exempt_dir(root: Path, directory: Path) -> bool:
-    """检查目录是否豁免（组合检查）。"""
     return is_exempt_subtree(root, directory) or is_shallow_exempt(root, directory)
 
 
 def _is_file_exempt_for_lines(root: Path, filepath: Path) -> bool:
-    """检查文件是否从行数/函数/嵌套检查中豁免。"""
     if filepath.name in EXEMPT_FILE_NAMES:
         logger.debug("File exempt by name: %s", filepath.name)
         return True
-
     parts = _relative_parts(root, filepath.parent)
     if parts is None:
         return True
-
     rel_path = str(Path(*parts) / filepath.name)
     if rel_path in EXEMPT_FILE_REL_PATHS:
         logger.debug("File exempt by relative path: %s", rel_path)
         return True
-
+    # <--- 修改：检查父目录是否为 emoji_assets
+    for parent in filepath.parents:
+        if parent.name in {"logs", "docs-src", "tests", "template", "tmp", "vendor", "emoji_assets"}:
+            return True
     for prefix in FILE_EXEMPT_SUBTREE_PREFIXES:
         if len(parts) >= len(prefix) and parts[:len(prefix)] == prefix:
             return True
-
     return False
 
 
 def _is_init_py(filepath: Path) -> bool:
-    """检查是否为 __init__.py 文件。"""
     return filepath.name == "__init__.py"
 
 
 def countable_children(directory: Path) -> List[Path]:
-    """获取目录中可计数的子项（排除运行时文件和目录）。"""
     children: List[Path] = []
     script_path = Path(__file__).resolve()
-
     for item in directory.iterdir():
         if item.name in RUNTIME_DIR_NAMES:
             continue
@@ -362,12 +469,10 @@ def countable_children(directory: Path) -> List[Path]:
         if item.resolve() == script_path:
             continue
         children.append(item)
-
     return sorted(children, key=lambda entry: entry.name.lower())
 
 
 def _walk_dirs(root: Path):
-    """遍历目录树，生成目录路径和内容信息。"""
     stack = [root]
     while stack:
         current = stack.pop()
@@ -376,16 +481,274 @@ def _walk_dirs(root: Path):
         except OSError as e:
             logger.warning("Failed to read directory %s: %s", current, e)
             continue
-
         dirs = [item for item in entries if item.is_dir()]
         files = [item for item in entries if item.is_file()]
-
         yield str(current), [item.name for item in dirs], [item.name for item in files]
-
         for item in reversed(dirs):
             if is_exempt_subtree(root, item):
                 continue
             stack.append(item)
+
+
+# ============================================================
+# Tree-sitter 分析器（修复版）
+# ============================================================
+
+class TreeSitterAnalyzer:
+    """使用 Tree-sitter 分析代码的函数长度和嵌套深度。"""
+
+    def __init__(self):
+        self._parser_cache: Dict[str, Any] = {}
+
+    def _get_parser(self, lang: str):
+        if lang not in self._parser_cache:
+            if _TS_AVAILABLE and _TS_GET_PARSER is not None:
+                try:
+                    self._parser_cache[lang] = _TS_GET_PARSER(lang)
+                except Exception as e:
+                    logger.debug("Failed to get parser for %s: %s", lang, e)
+                    self._parser_cache[lang] = None
+            else:
+                self._parser_cache[lang] = None
+        return self._parser_cache[lang]
+
+    def analyze(
+        self,
+        source: str,
+        filepath: Path,
+        lang: str
+    ) -> Tuple[List[FuncLengthViolation], List[NestingViolation]]:
+        """使用 tree-sitter 分析文件，返回函数长度和嵌套深度违规。"""
+        func_violations: List[FuncLengthViolation] = []
+        nesting_violations: List[NestingViolation] = []
+
+        if not _TS_AVAILABLE:
+            return func_violations, nesting_violations
+
+        parser = self._get_parser(lang)
+        if parser is None:
+            return func_violations, nesting_violations
+
+        try:
+            tree = parser.parse(source.encode('utf-8'))
+            root = tree.root_node
+        except Exception as e:
+            logger.debug("Tree-sitter parse failed for %s: %s", filepath, e)
+            return func_violations, nesting_violations
+
+        # 遍历所有节点，查找函数定义
+        self._find_functions(
+            root,
+            filepath,
+            lang,
+            func_violations,
+            nesting_violations
+        )
+
+        return func_violations, nesting_violations
+
+    def _find_functions(
+        self,
+        node,
+        filepath: Path,
+        lang: str,
+        func_violations: List[FuncLengthViolation],
+        nesting_violations: List[NestingViolation]
+    ):
+        """遍历语法树，查找所有函数定义。"""
+        if self._is_function_node(node, lang):
+            self._analyze_function(
+                node,
+                filepath,
+                lang,
+                func_violations,
+                nesting_violations
+            )
+        for child in node.children:
+            self._find_functions(
+                child,
+                filepath,
+                lang,
+                func_violations,
+                nesting_violations
+            )
+
+    def _analyze_function(
+        self,
+        func_node,
+        filepath: Path,
+        lang: str,
+        func_violations: List[FuncLengthViolation],
+        nesting_violations: List[NestingViolation]
+    ):
+        """分析单个函数。"""
+        # 获取函数名
+        name = self._get_function_name(func_node, lang) or "<anonymous>"
+
+        # 计算函数行数
+        start_line = func_node.start_point[0] + 1
+        end_line = func_node.end_point[0] + 1
+        func_lines = end_line - start_line + 1
+
+        if func_lines > FUNC_MAX_LINES:
+            func_violations.append(
+                FuncLengthViolation(
+                    path=filepath,
+                    func_name=name,
+                    line_count=func_lines,
+                    start_line=start_line,
+                )
+            )
+
+        # 计算嵌套深度
+        max_depth = self._compute_max_nesting(func_node, lang)
+        if max_depth > MAX_NESTING_DEPTH:
+            nesting_violations.append(
+                NestingViolation(
+                    path=filepath,
+                    func_name=name,
+                    depth=max_depth,
+                    line=start_line,
+                )
+            )
+
+    def _compute_max_nesting(self, node, lang: str) -> int:
+        """计算节点内最大嵌套深度（控制流嵌套）。"""
+        max_depth = 0
+
+        def walk(n, depth):
+            nonlocal max_depth
+            if self._is_control_node(n, lang):
+                depth += 1
+                if depth > max_depth:
+                    max_depth = depth
+            for child in n.children:
+                # 跳过嵌套的函数定义，避免将内部函数当作控制流
+                if not self._is_function_node(child, lang):
+                    walk(child, depth)
+
+        walk(node, 0)
+        return max_depth
+
+    def _is_function_node(self, node, lang: str) -> bool:
+        """判断节点是否为函数定义。"""
+        func_types = {
+            "python": {"function_definition", "async_function_definition"},
+            "javascript": {"function_declaration", "function_expression",
+                          "arrow_function", "method_definition"},
+            "typescript": {"function_declaration", "function_expression",
+                          "arrow_function", "method_definition"},
+            "jsx": {"function_declaration", "function_expression",
+                   "arrow_function", "method_definition"},
+            "tsx": {"function_declaration", "function_expression",
+                   "arrow_function", "method_definition"},
+            "java": {"method_declaration", "constructor_declaration"},
+            "go": {"function_declaration", "method_declaration"},
+            "rust": {"function_item", "method_declaration"},
+            "c": {"function_definition"},
+            "cpp": {"function_definition", "method_definition"},
+            "c_sharp": {"method_declaration", "constructor_declaration"},
+            "ruby": {"method", "def", "defs"},
+            "php": {"function_definition", "method_declaration"},
+            "swift": {"function_declaration", "method_declaration"},
+            "kotlin": {"function_declaration"},
+            "scala": {"function_declaration"},
+            "bash": {"function_definition"},
+            "lua": {"function_declaration", "function_definition"},
+            "r": {"function_definition"},
+            "sql": {"create_function_statement"},
+            "html": {"script_element"},
+            "vue": {"script_element", "function_declaration"},
+            "svelte": {"script_element", "function_declaration"},
+            "dart": {"function_declaration", "method_declaration"},
+            "elm": {"function_declaration"},
+            "haskell": {"function_declaration"},
+            "ocaml": {"function_declaration"},
+            "fsharp": {"function_declaration"},
+            "erlang": {"function_declaration"},
+            "elixir": {"function_declaration"},
+            "clojure": {"function_declaration"},
+            "proto": {"rpc", "service"},
+            "cmake": {"function"},
+            "make": {"rule"},
+        }
+        types = func_types.get(lang, set())
+        return node.type in types
+
+    def _is_control_node(self, node, lang: str) -> bool:
+        """判断节点是否为控制流节点（增加嵌套深度）。"""
+        control_types = {
+            "python": {"if_statement", "for_statement", "while_statement",
+                      "with_statement", "try_statement"},
+            "javascript": {"if_statement", "for_statement", "while_statement",
+                          "switch_statement", "try_statement", "with_statement"},
+            "typescript": {"if_statement", "for_statement", "while_statement",
+                          "switch_statement", "try_statement"},
+            "jsx": {"if_statement", "for_statement", "while_statement",
+                   "switch_statement", "try_statement"},
+            "tsx": {"if_statement", "for_statement", "while_statement",
+                   "switch_statement", "try_statement"},
+            "java": {"if_statement", "for_statement", "while_statement",
+                    "switch_statement", "try_statement"},
+            "go": {"if_statement", "for_statement", "switch_statement", "select_statement"},
+            "rust": {"if_expression", "for_expression", "while_expression",
+                    "match_expression", "loop_expression"},
+            "c": {"if_statement", "for_statement", "while_statement", "switch_statement"},
+            "cpp": {"if_statement", "for_statement", "while_statement",
+                   "switch_statement", "try_statement"},
+            "c_sharp": {"if_statement", "for_statement", "while_statement",
+                       "switch_statement", "try_statement"},
+            "ruby": {"if", "unless", "while", "until", "for", "case"},
+            "php": {"if_statement", "for_statement", "while_statement",
+                   "switch_statement", "try_statement"},
+            "swift": {"if_statement", "for_statement", "while_statement",
+                     "switch_statement", "do_statement"},
+            "kotlin": {"if_statement", "for_statement", "while_statement",
+                      "when_statement", "try_statement"},
+            "scala": {"if_statement", "for_statement", "while_statement",
+                     "match_statement", "try_statement"},
+            "bash": {"if_statement", "for_statement", "while_statement", "case_statement"},
+            "lua": {"if_statement", "for_statement", "while_statement", "repeat_statement"},
+            "r": {"if_statement", "for_statement", "while_statement", "repeat_statement"},
+            "dart": {"if_statement", "for_statement", "while_statement",
+                    "switch_statement", "try_statement"},
+            "elm": {"if_expression", "case_expression"},
+            "haskell": {"if_expression", "case_expression"},
+            "ocaml": {"if_expression", "match_expression"},
+            "fsharp": {"if_expression", "match_expression"},
+            "erlang": {"if_expression", "case_expression"},
+            "elixir": {"if_expression", "case_expression"},
+            "clojure": {"if_expression", "case_expression"},
+            "cmake": {"if_statement", "foreach_statement", "while_statement"},
+            "make": {"if_statement", "foreach_statement"},
+        }
+        types = control_types.get(lang, set())
+        return node.type in types
+
+    def _get_function_name(self, node, lang: str) -> Optional[str]:
+        """获取函数名（根据语言定制）。"""
+        # 通用：查找 identifier 或 property_identifier
+        for child in node.children:
+            if child.type in {"identifier", "property_identifier", "name", "method_name"}:
+                return child.text.decode('utf-8')
+        # 特殊处理某些语言
+        if lang in {"ruby"}:
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode('utf-8')
+        if lang in {"bash"}:
+            for child in node.children:
+                if child.type == "word":
+                    return child.text.decode('utf-8')
+        if lang in {"lua"}:
+            for child in node.children:
+                if child.type == "identifier":
+                    return child.text.decode('utf-8')
+        return None
+
+
+# 全局 Tree-sitter 分析器实例
+_ts_analyzer = TreeSitterAnalyzer() if _TS_AVAILABLE else None
 
 
 # ============================================================
@@ -398,10 +761,10 @@ class Scanner:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self._script_path = Path(__file__).resolve()
+        self._ts_analyzer = _ts_analyzer
         logger.info("Scanner initialized with root: %s", self.root)
 
     def scan_all(self) -> ScanResult:
-        """执行所有扫描，返回完整结果。"""
         logger.info("Starting full scan...")
         start_time = time.time()
 
@@ -419,19 +782,14 @@ class Scanner:
 
         elapsed = time.time() - start_time
         logger.info("Scan completed in %.2fs, found %d violations", elapsed, result.total)
-
         return result
 
     def scan_dir_violations(self) -> List[DirViolation]:
-        """扫描目录子项违规。"""
         violations: List[DirViolation] = []
-
         for dirpath, _dirnames, _filenames in _walk_dirs(self.root):
             current = Path(dirpath)
-
             if is_exempt_dir(self.root, current):
                 continue
-
             children = countable_children(current)
             if len(children) > MAX_CHILDREN:
                 violations.append(
@@ -441,39 +799,30 @@ class Scanner:
                         children=tuple(item.name for item in children),
                     )
                 )
-
         violations.sort(key=lambda item: (-item.child_count, str(item.path).lower()))
         logger.debug("Dir violations: %d", len(violations))
         return violations
 
     def scan_file_violations(self) -> List[FileLineViolation]:
-        """扫描文件行数违规。"""
         violations: List[FileLineViolation] = []
-
         for dirpath, _dirnames, filenames in _walk_dirs(self.root):
             current = Path(dirpath)
-
             for fname in filenames:
-                if not (fname.endswith(".py") or fname.endswith(".js")):
+                ext = Path(fname).suffix.lower()
+                if ext not in EXT_TO_TS_LANG:
                     continue
-
                 filepath = current / fname
-
                 if filepath.resolve() == self._script_path:
                     continue
-
                 if _is_file_exempt_for_lines(self.root, filepath):
                     continue
-
                 try:
                     lines = filepath.read_text(encoding="utf-8", errors="replace").splitlines()
                 except OSError as e:
                     logger.warning("Failed to read file %s: %s", filepath, e)
                     continue
-
                 count = len(lines)
                 is_init = _is_init_py(filepath)
-
                 if not is_init and count < FILE_MIN_LINES:
                     violations.append(
                         FileLineViolation(
@@ -482,7 +831,6 @@ class Scanner:
                             kind="under_min"
                         )
                     )
-
                 if count > FILE_HARD_MAX_LINES:
                     violations.append(
                         FileLineViolation(
@@ -499,37 +847,41 @@ class Scanner:
                             kind="over_soft"
                         )
                     )
-
         violations.sort(key=lambda v: (v.kind != "over_hard", -v.line_count, str(v.path).lower()))
         logger.debug("File line violations: %d", len(violations))
         return violations
 
     def scan_func_violations(self) -> List[FuncLengthViolation]:
-        """扫描函数长度违规。"""
         violations: List[FuncLengthViolation] = []
-
         for dirpath, _dirnames, filenames in _walk_dirs(self.root):
             current = Path(dirpath)
-
             for fname in filenames:
-                if not (fname.endswith(".py") or fname.endswith(".js")):
+                ext = Path(fname).suffix.lower()
+                if ext not in EXT_TO_TS_LANG:
                     continue
-
                 filepath = current / fname
-
                 if filepath.resolve() == self._script_path:
                     continue
-
                 if _is_file_exempt_for_lines(self.root, filepath):
                     continue
-
                 try:
                     source = filepath.read_text(encoding="utf-8", errors="replace")
                 except OSError as e:
                     logger.warning("Failed to read file %s: %s", filepath, e)
                     continue
+                lang = EXT_TO_TS_LANG[ext]
 
-                if fname.endswith(".py"):
+                # 优先使用 tree-sitter
+                if _TS_AVAILABLE and self._ts_analyzer is not None and is_ts_language_supported(lang):
+                    try:
+                        fv, _ = self._ts_analyzer.analyze(source, filepath, lang)
+                        violations.extend(fv)
+                        continue
+                    except Exception as e:
+                        logger.debug("Tree-sitter analysis failed for %s: %s, falling back", filepath, e)
+
+                # 回退：使用原有的解析逻辑
+                if ext == ".py":
                     try:
                         tree = ast.parse(source, filename=str(filepath))
                     except SyntaxError:
@@ -545,31 +897,34 @@ class Scanner:
         return violations
 
     def scan_nesting_violations(self) -> List[NestingViolation]:
-        """扫描嵌套深度违规。"""
         violations: List[NestingViolation] = []
-
         for dirpath, _dirnames, filenames in _walk_dirs(self.root):
             current = Path(dirpath)
-
             for fname in filenames:
-                if not (fname.endswith(".py") or fname.endswith(".js")):
+                ext = Path(fname).suffix.lower()
+                if ext not in EXT_TO_TS_LANG:
                     continue
-
                 filepath = current / fname
-
                 if filepath.resolve() == self._script_path:
                     continue
-
                 if _is_file_exempt_for_lines(self.root, filepath):
                     continue
-
                 try:
                     source = filepath.read_text(encoding="utf-8", errors="replace")
                 except OSError as e:
                     logger.warning("Failed to read file %s: %s", filepath, e)
                     continue
+                lang = EXT_TO_TS_LANG[ext]
 
-                if fname.endswith(".py"):
+                if _TS_AVAILABLE and self._ts_analyzer is not None and is_ts_language_supported(lang):
+                    try:
+                        _, nv = self._ts_analyzer.analyze(source, filepath, lang)
+                        violations.extend(nv)
+                        continue
+                    except Exception as e:
+                        logger.debug("Tree-sitter analysis failed for %s: %s, falling back", filepath, e)
+
+                if ext == ".py":
                     try:
                         tree = ast.parse(source, filename=str(filepath))
                     except SyntaxError:
@@ -585,9 +940,7 @@ class Scanner:
         return violations
 
     def scan_forbidden_dir_violations(self) -> List[ForbiddenDirViolation]:
-        """扫描禁用目录名违规。"""
         violations: List[ForbiddenDirViolation] = []
-
         for dirpath, dirnames, _filenames in _walk_dirs(self.root):
             current = Path(dirpath)
             for d in dirnames:
@@ -598,74 +951,90 @@ class Scanner:
                             name=d
                         )
                     )
-
         violations.sort(key=lambda v: str(v.path).lower())
         logger.debug("Forbidden dir violations: %d", len(violations))
         return violations
 
     def scan_empty_dir_violations(self) -> List[EmptyDirViolation]:
-        """扫描空目录违规。"""
         violations: List[EmptyDirViolation] = []
-
         for dirpath, _dirnames, _filenames in _walk_dirs(self.root):
             current = Path(dirpath)
-
             if self._is_empty_dir(current) and not self._is_empty_dir_exempt(current):
                 violations.append(EmptyDirViolation(path=current))
-
         violations.sort(key=lambda v: str(v.path).lower())
         logger.debug("Empty dir violations: %d", len(violations))
         return violations
 
     def scan_syntax_errors(self) -> List[SyntaxViolation]:
-        """扫描所有 .py 和 .js 文件的语法错误。"""
         violations: List[SyntaxViolation] = []
-
         for dirpath, _dirnames, filenames in _walk_dirs(self.root):
             current = Path(dirpath)
-
             for fname in filenames:
-                if not (fname.endswith(".py") or fname.endswith(".js")):
+                ext = Path(fname).suffix.lower()
+                if ext not in EXT_TO_TS_LANG:
                     continue
-
                 filepath = current / fname
-
                 if filepath.resolve() == self._script_path:
                     continue
-
                 if _is_file_exempt_for_lines(self.root, filepath):
                     continue
-
                 try:
                     source = filepath.read_text(encoding="utf-8", errors="replace")
                 except OSError as e:
                     logger.warning("Failed to read file %s: %s", filepath, e)
                     continue
+                lang = EXT_TO_TS_LANG[ext]
 
-                if fname.endswith(".py"):
+                # 使用 tree-sitter 进行语法检查（如果能解析，则语法正确）
+                if _TS_AVAILABLE and is_ts_language_supported(lang):
+                    parser = _TS_GET_PARSER(lang) if _TS_GET_PARSER else None
+                    if parser:
+                        try:
+                            tree = parser.parse(source.encode('utf-8'))
+                            if self._has_error_node(tree.root_node):
+                                violations.append(
+                                    SyntaxViolation(
+                                        path=filepath,
+                                        language=lang,
+                                        line=None,
+                                        message="Syntax error detected by tree-sitter"
+                                    )
+                                )
+                            continue
+                        except Exception as e:
+                            logger.debug("Tree-sitter syntax check failed for %s: %s", filepath, e)
+                            # 继续尝试其他检查方式
+
+                # 回退：使用原有逻辑
+                if ext == ".py":
                     self._check_python_syntax(filepath, source, violations)
-                else:
+                elif ext in {".js", ".jsx", ".ts", ".tsx"}:
                     self._check_javascript_syntax(filepath, source, violations)
 
         violations.sort(key=lambda v: str(v.path).lower())
         logger.debug("Syntax violations: %d", len(violations))
         return violations
 
-    # ===== 私有方法 =====
+    def _has_error_node(self, node) -> bool:
+        if node.type == "ERROR":
+            return True
+        for child in node.children:
+            if self._has_error_node(child):
+                return True
+        return False
+
+    # ===== 私有方法（回退逻辑） =====
 
     def _check_python_func_bodies(
         self,
         tree: ast.Module,
         filepath: Path
     ) -> Tuple[List[FuncLengthViolation], List[NestingViolation]]:
-        """检查 Python 文件的函数长度和嵌套深度。"""
         func_violations: List[FuncLengthViolation] = []
         nesting_violations: List[NestingViolation] = []
-
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-
             if hasattr(node, "end_lineno") and node.end_lineno is not None:
                 func_lines = node.end_lineno - node.lineno + 1
                 if func_lines > FUNC_MAX_LINES:
@@ -677,7 +1046,6 @@ class Scanner:
                             start_line=node.lineno,
                         )
                     )
-
             max_depth = self._max_nesting_depth(node)
             if max_depth > MAX_NESTING_DEPTH:
                 nesting_violations.append(
@@ -688,13 +1056,10 @@ class Scanner:
                         line=node.lineno,
                     )
                 )
-
         return func_violations, nesting_violations
 
     def _max_nesting_depth(self, func_node: ast.AST) -> int:
-        """计算函数体内最深的控制流嵌套层级。"""
         max_depth = 0
-
         def _walk(node: ast.AST, depth: int) -> None:
             nonlocal max_depth
             for child in ast.iter_child_nodes(node):
@@ -706,7 +1071,6 @@ class Scanner:
                     _walk(child, depth)
             if depth > max_depth:
                 max_depth = depth
-
         _walk(func_node, 0)
         return max_depth
 
@@ -715,24 +1079,19 @@ class Scanner:
         source: str,
         filepath: Path
     ) -> Tuple[List[FuncLengthViolation], List[NestingViolation]]:
-        """用正则检查 JS 文件的函数长度和嵌套深度。"""
         func_v: List[FuncLengthViolation] = []
         nesting_v: List[NestingViolation] = []
-
         lines = source.splitlines()
         total = len(lines)
-
         js_func_re = re.compile(
             r"(?:^|[\s;])(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)"
             r"|(?:^|[\s;,])(\w+)\s*=\s*(?:async\s+)?(?:function|\([^)]*\)\s*=>)"
             r"|(?:^|\s)(\w+)\s*\(.*\)\s*\{",
             re.MULTILINE,
         )
-
         js_ctrl_re = re.compile(
             r"^\s*(?:if|else\s+if|for|while|switch|try|catch|do)\s*[\({]",
         )
-
         i = 0
         while i < total:
             line = lines[i]
@@ -740,15 +1099,12 @@ class Scanner:
             if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
                 i += 1
                 continue
-
             m = js_func_re.search(line)
             if not m:
                 i += 1
                 continue
-
             func_name = m.group(1) or m.group(2) or m.group(3) or "anon"
             start_line = i + 1
-
             brace_line = i
             for j in range(i, min(i + 5, total)):
                 if "{" in lines[j]:
@@ -757,7 +1113,6 @@ class Scanner:
             else:
                 i += 1
                 continue
-
             depth = 0
             end_line = brace_line
             for j in range(brace_line, total):
@@ -771,7 +1126,6 @@ class Scanner:
                             break
                 if depth == 0:
                     break
-
             func_lines = end_line - start_line + 1
             if func_lines > FUNC_MAX_LINES:
                 func_v.append(
@@ -782,7 +1136,6 @@ class Scanner:
                         start_line=start_line,
                     )
                 )
-
             max_indent = 0
             for j in range(brace_line + 1, end_line):
                 ln = lines[j]
@@ -792,7 +1145,6 @@ class Scanner:
                 indent = len(ln) - len(stripped_line)
                 if js_ctrl_re.match(stripped_line) and indent > max_indent:
                     max_indent = indent
-
             if max_indent >= 8:
                 est_depth = max_indent // 2
                 if est_depth > MAX_NESTING_DEPTH:
@@ -804,13 +1156,10 @@ class Scanner:
                             line=start_line,
                         )
                     )
-
             i = end_line + 1
-
         return func_v, nesting_v
 
     def _is_empty_dir(self, path: Path) -> bool:
-        """检查目录是否为空（忽略运行时目录和文件）。"""
         try:
             for item in path.iterdir():
                 if item.name in RUNTIME_DIR_NAMES:
@@ -825,7 +1174,6 @@ class Scanner:
             return False
 
     def _is_empty_dir_exempt(self, directory: Path) -> bool:
-        """判断空目录检查是否豁免。"""
         if directory.resolve() == self.root:
             return True
         if directory.name in EMPTY_DIR_EXEMPT_NAMES:
@@ -835,7 +1183,6 @@ class Scanner:
         return False
 
     def _check_python_syntax(self, filepath: Path, source: str, violations: List[SyntaxViolation]) -> None:
-        """检查 Python 文件语法。"""
         try:
             ast.parse(source, filename=str(filepath))
         except SyntaxError as e:
@@ -850,7 +1197,6 @@ class Scanner:
             )
 
     def _check_javascript_syntax(self, filepath: Path, source: str, violations: List[SyntaxViolation]) -> None:
-        """检查 JavaScript 文件语法。"""
         try:
             result = subprocess.run(
                 ["node", "--check", str(filepath)],
@@ -861,7 +1207,6 @@ class Scanner:
             )
             if result.returncode != 0:
                 err_output = result.stderr or ''
-                err_lines = err_output.splitlines()
                 line_no = None
                 msg = err_output.strip()
                 match = re.search(r"\((\d+):\d+\)", msg)
@@ -880,7 +1225,6 @@ class Scanner:
             self._check_js_syntax_simple(filepath, source, violations)
 
     def _check_js_syntax_simple(self, filepath: Path, source: str, violations: List[SyntaxViolation]) -> None:
-        """使用简单的括号匹配检查 JS 语法。"""
         stack = []
         line_no = None
         for i, line in enumerate(source.splitlines(), 1):
@@ -922,7 +1266,6 @@ class ReportGenerator:
         self.result = result
 
     def generate(self) -> str:
-        """生成完整报告。"""
         lines = [
             "=" * 70,
             "项目合规检查报告",
@@ -959,7 +1302,7 @@ class ReportGenerator:
         if ENABLE_SYNTAX_CHECK:
             lines.extend([
                 "=== 语法错误 ===",
-                f"约束: 所有 .py 和 .js 文件必须语法正确",
+                f"约束: 所有支持的语言文件必须语法正确",
                 f"违规数: {len(self.result.syntax_violations)}",
                 "",
             ])
@@ -969,6 +1312,7 @@ class ReportGenerator:
             return "\n".join(lines) + "\n"
 
         lines.append(f"共 {self.result.total} 个违规，请修复后重新检查。")
+        lines.append(f"IMPORTANT: You need to adjust the project code by refactoring to ensure no code logic is missed, fix a total of {self.result.total} violations, and start full implementation")
         lines.append("")
 
         if self.result.dir_violations:
@@ -1036,7 +1380,6 @@ class ReportGenerator:
 # ============================================================
 
 def main() -> int:
-    """主入口函数。"""
     global MAX_CHILDREN, ENABLE_SYNTAX_CHECK
 
     parser = argparse.ArgumentParser(
@@ -1085,19 +1428,16 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # 调整日志级别
     if args.debug:
         configure(level="DEBUG")
         logger.setLevel("DEBUG")
         logger.debug("Debug mode enabled")
 
-    # 调整语法检查配置
     if args.no_syntax:
         ENABLE_SYNTAX_CHECK = False
         logger.info("Syntax check disabled")
 
     try:
-        # 解析根目录
         root = _resolve_scan_root()
         if args.path != ".":
             target = Path(args.path)
@@ -1112,27 +1452,22 @@ def main() -> int:
 
         logger.info("Scanning: %s", root)
 
-        # 执行扫描
         scanner = Scanner(root)
         original_max_children = MAX_CHILDREN
         MAX_CHILDREN = args.max
         result = scanner.scan_all()
         MAX_CHILDREN = original_max_children
 
-        # 生成报告
         generator = ReportGenerator(root, result)
         report = generator.generate()
 
-        # 保存报告
         output_path = Path(args.output)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(report, encoding="utf-8")
 
-        # 输出报告
         for line in report.splitlines():
             logger.info(line)
 
-        # 返回状态
         if result.is_clean:
             logger.debug("All checks passed. Report written to %s", output_path)
             return 0

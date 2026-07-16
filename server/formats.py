@@ -153,6 +153,36 @@ class LongTextSplitter:
 
 
 # ============================================================
+# Qwen 聊天消息构建
+# ============================================================
+
+def build_qwen_message(
+    user_content: str, model: str,
+    files: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
+        "role": "user", "content": user_content, "user_action": "chat",
+        "files": files or [], "timestamp": int(time.time() * 1000), "models": [model],
+        "chat_type": "t2t", "feature_config": {
+            "thinking_enabled": True, "output_schema": "phase", "research_mode": "normal",
+            "auto_thinking": False, "thinking_mode": "Thinking", "thinking_format": "raw",
+            "auto_search": False,
+        }, "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t",
+    }
+
+
+def build_chat_payload(
+    chat_id: str, model: str, qwen_message: Dict[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "stream": True, "version": "2.1", "incremental_output": True,
+        "chat_id": chat_id, "chat_mode": "local", "model": model, "parent_id": None,
+        "messages": [qwen_message], "timestamp": int(time.time() * 1000),
+    }
+
+
+# ============================================================
 # 格式构建（对�� OpenCode 输出格式）
 # ============================================================
 

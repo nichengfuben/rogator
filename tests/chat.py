@@ -20,23 +20,19 @@ if __package__ in {None, ""}:
     from core.transport.endpoints import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
     from core.crypto.crypto import build_headers, build_login_headers, hash_password
     from core.transport.sse import parse_sse_event
-    from accounts import ACCOUNTS
 else:
     from ..core.transport.endpoints import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
     from ..core.crypto.crypto import build_headers, build_login_headers, hash_password
     from ..core.transport.sse import parse_sse_event
-    from ..accounts import ACCOUNTS
 
 
 def get_credentials() -> Tuple[str, str]:
-    """Return credentials from environment variables or the first account."""
+    """Return credentials from environment variables GENERALUSR/GENERALPWD."""
     email = os.environ.get("GENERALUSR", "").strip()
     password = os.environ.get("GENERALPWD", "").strip()
-    if email and password:
-        return email, password
-    if not ACCOUNTS:
-        raise SystemExit("no Qwen accounts configured")
-    return ACCOUNTS[0].username, ACCOUNTS[0].password
+    if not email or not password:
+        raise SystemExit("GENERALUSR/GENERALPWD environment variables not set")
+    return email, password
 
 
 async def _login(session: aiohttp.ClientSession, email: str, password: str) -> str:
@@ -207,4 +203,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
     asyncio.run(main())

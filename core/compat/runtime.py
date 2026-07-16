@@ -217,7 +217,7 @@ from ..storage.storage import (
     save_video_file,
     save_wav_file,
 )
-from ..storage.persistence import build_oss_authorization
+from ..storage.storage import build_oss_authorization
 from ..transport.sse import parse_sse_event, parse_sse_line
 from ..media.video import build_cdn_video_url
 from ..compat.payloads import (

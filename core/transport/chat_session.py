@@ -194,7 +194,7 @@ class UploadMixin:
         filetype: str,
     ) -> Dict[str, Any]:
         """Request temporary STS credentials for OSS upload."""
-        from ..storage.persistence import build_oss_authorization
+        from ..storage.storage import build_oss_authorization
 
         headers = {
             "authorization": f"Bearer {token}",
@@ -236,7 +236,7 @@ class UploadMixin:
         creds: Dict[str, Any],
     ) -> str:
         """Upload bytes to OSS and return the final file URL."""
-        from ..storage.persistence import build_oss_authorization
+        from ..storage.storage import build_oss_authorization
 
         file_url = str(creds.get("file_url", ""))
         object_key = str(creds.get("file_path", ""))

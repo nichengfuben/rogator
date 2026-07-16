@@ -20,7 +20,6 @@ import aiohttp
 _root = Path(__file__).resolve().parents[1]
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
-from accounts import ACCOUNTS
 
 BASE_URL = "https://chat.qwen.ai"
 AUTH_BASE_URL = "https://auth.qwen.ai"
@@ -110,11 +109,9 @@ def build_oss_authorization(method: str, content_type: str, date: str,
 def get_credentials() -> tuple[str, str]:
     email = os.environ.get("GENERALUSR", "").strip()
     password = os.environ.get("GENERALPWD", "").strip()
-    if email and password:
-        return email, password
-    if not ACCOUNTS:
-        raise SystemExit("no Qwen accounts configured")
-    return ACCOUNTS[0].username, ACCOUNTS[0].password
+    if not email or not password:
+        raise SystemExit("GENERALUSR/GENERALPWD environment variables not set")
+    return email, password
 
 async def login(session: aiohttp.ClientSession, email: str, password: str) -> str:
     payload = {"email": email, "password": hash_password(password), "remember_me": True}

@@ -182,6 +182,30 @@ class VideoService:
 class VideoGenMixin:
     """Mixin providing video generation helpers."""
 
+    async def _poll_once(self, url: str, headers: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        try:
+            async with self._session.get(
+                url,
+                headers=headers,
+                ssl=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+                proxy=self._get_proxy_kwarg(),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                task_status = data.get("task_status", "")
+                if task_status == "succeeded":
+                    return data
+                if task_status == "failed":
+                    raise RuntimeError(f"任务失败: {data.get('message', '未知')}")
+                return None
+        except Exception as exc:
+            if "任务失败" in str(exc):
+                raise
+            logger.debug("轮询异常: %s", exc)
+            return None
+
     async def _poll_task_status(
         self,
         task_id: str,
@@ -198,25 +222,9 @@ class VideoGenMixin:
         )
         start = time.time()
         while time.time() - start < VIDEO_TASK_MAX_POLL_TIME:
-            try:
-                async with self._session.get(
-                    url,
-                    headers=headers,
-                    ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                    proxy=self._get_proxy_kwarg(),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        task_status = data.get("task_status", "")
-                        if task_status == "succeeded":
-                            return data
-                        if task_status == "failed":
-                            raise RuntimeError(f"任务失败: {data.get('message', '未知')}")
-            except Exception as exc:
-                if "任务失败" in str(exc):
-                    raise
-                logger.debug("轮询异常: %s", exc)
+            data = await self._poll_once(url, headers)
+            if data is not None:
+                return data
             await asyncio.sleep(VIDEO_TASK_POLL_INTERVAL)
         raise RuntimeError(f"任务轮询超时 ({VIDEO_TASK_MAX_POLL_TIME}s)")
 

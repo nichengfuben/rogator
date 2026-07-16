@@ -3,7 +3,6 @@ from __future__ import annotations
 """Primary Qwen HTTP client implementation."""
 
 import asyncio
-import json
 import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
@@ -36,7 +35,7 @@ from .transport.endpoints import (
 from .crypto.crypto import WafBlockedError, build_headers, generate_cookies, generate_fingerprint
 from .compat.platform import LogsMixin, ProxyState, extract_model_ids
 from .compat.payloads import build_payload
-from .storage.persistence import load_persist, save_persist
+from .storage.storage import load_persist, load_task_timers, save_persist, save_task_timers
 from .transport.sse import StreamHandler
 from .media.tts import MediaMixin, TtsService
 from .media.video import VideoGenMixin, VideoService
@@ -190,24 +189,11 @@ class QwenClient(AuthMixin, UploadMixin, MediaMixin, VideoGenMixin, LogsMixin):
     def _save_persist(self) -> None:
         save_persist(self._account_states, self._cookies, self._proxy_state)
 
-    def _load_json(self, path: Path) -> Any:
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-
-    def _save_json(self, path: Path, data: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
     def _load_task_timers(self) -> Dict[str, float]:
-        data = self._load_json(Path(TASK_TIMERS_PATH))
-        return {str(key): float(value) for key, value in data.items()}
+        return load_task_timers(TASK_TIMERS_PATH)
 
     def _save_task_timers(self, timers: Dict[str, float]) -> None:
-        self._save_json(Path(TASK_TIMERS_PATH), timers)
+        save_task_timers(TASK_TIMERS_PATH, timers)
 
     async def _bg_persist(self) -> None:
         while not self._closing:
@@ -223,24 +209,28 @@ class QwenClient(AuthMixin, UploadMixin, MediaMixin, VideoGenMixin, LogsMixin):
             cand.models = list(models)
         if self._account_states:
             self._rebuild_candidates()
+    async def _fetch_models_from_endpoint(self, endpoint: str, headers: Dict[str, str]) -> List[str]:
+        try:
+            async with self._session.get(
+                endpoint, headers=headers, ssl=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+                proxy=self._get_proxy_kwarg(),
+            ) as response:
+                if response.status != 200:
+                    return []
+                return extract_model_ids(await response.json(content_type=None))
+        except Exception:
+            return []
+
     async def fetch_remote_models(self) -> List[str]:
         token = self._get_any_valid_token()
         if not token:
             return []
         headers = {**build_headers(token), "Accept": "application/json"}
         for endpoint in [f"{BASE_URL}{MODELS_PATH}", f"{BASE_URL}/api/v1/models"]:
-            try:
-                async with self._session.get(
-                    endpoint, headers=headers, ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=30),
-                    proxy=self._get_proxy_kwarg(),
-                ) as response:
-                    if response.status == 200:
-                        models = extract_model_ids(await response.json(content_type=None))
-                        if models:
-                            return models
-            except Exception:
-                continue
+            models = await self._fetch_models_from_endpoint(endpoint, headers)
+            if models:
+                return models
         return []
 
     def _get_any_valid_token(self) -> Optional[str]:

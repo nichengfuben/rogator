@@ -21,6 +21,24 @@ logger = logging.getLogger("rogator")
 STS_TOKEN_PATHS = ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]
 
 
+async def _request_sts_credentials(
+    url: str, payload: Dict[str, Any], headers: Dict[str, str],
+) -> Optional[Dict[str, Any]]:
+    async with aiohttp.ClientSession() as s:
+        async with s.post(
+            url, json=payload, headers=headers, ssl=False,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+            creds = data.get("data", data)
+            required = ("access_key_id", "access_key_secret", "security_token")
+            if all(k in creds for k in required):
+                return creds
+            return None
+
+
 async def get_sts_credentials(
     base_url: str, token: str, filename: str, filesize: int,
 ) -> Dict[str, Any]:
@@ -36,17 +54,9 @@ async def get_sts_credentials(
     payload = {"filename": filename, "filesize": filesize, "filetype": "file"}
     for path in STS_TOKEN_PATHS:
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.post(
-                    f"{base_url}{path}", json=payload, headers=headers, ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        creds = data.get("data", data)
-                        required = ("access_key_id", "access_key_secret", "security_token")
-                        if all(k in creds for k in required):
-                            return creds
+            creds = await _request_sts_credentials(f"{base_url}{path}", payload, headers)
+            if creds:
+                return creds
         except Exception:
             continue
     raise RuntimeError("All STS endpoints failed")

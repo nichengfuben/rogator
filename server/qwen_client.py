@@ -33,6 +33,8 @@ from server.formats import (
     REQUEST_TOTAL_TIMEOUT,
     TOKEN_EXPIRE_SECONDS,
     TokenExpiredError,
+    build_chat_payload,
+    build_qwen_message,
     extract_last_user_content,
 )
 
@@ -247,6 +249,17 @@ class QwenClient:
             pass
         return list(DEFAULT_MODELS)
 
+    def _check_create_chat_error(self, session: QwenSession, data: Dict[str, Any]) -> None:
+        data_obj = data.get("data") or {}
+        if not isinstance(data_obj, dict):
+            raise RuntimeError(f"Create chat failed: {data}")
+        code = str(data_obj.get("code", "")).lower()
+        details = str(data_obj.get("details", "")).lower()
+        if code == "unauthorized" or "token" in details or "expired" in details or "log in" in details:
+            session.is_valid = False
+            raise TokenExpiredError(f"Token expired: {data_obj.get('details', '')}")
+        raise RuntimeError(f"Create chat failed: {data}")
+
     async def create_chat(self, session: QwenSession, model: str) -> str:
         async with aiohttp.ClientSession() as s:
             payload = {
@@ -265,18 +278,26 @@ class QwenClient:
                     raise RuntimeError(f"Create chat HTTP {resp.status}")
                 data = await resp.json()
                 if not data.get("success"):
-                    data_obj = data.get("data") or {}
-                    if isinstance(data_obj, dict):
-                        code = str(data_obj.get("code", "")).lower()
-                        details = str(data_obj.get("details", "")).lower()
-                        if code == "unauthorized" or "token" in details or "expired" in details or "log in" in details:
-                            session.is_valid = False
-                            raise TokenExpiredError(f"Token expired: {data_obj.get('details', '')}")
-                    raise RuntimeError(f"Create chat failed: {data}")
+                    self._check_create_chat_error(session, data)
                 chat_id = str((data.get("data") or {}).get("id", ""))
                 if not chat_id:
                     raise RuntimeError(f"Create chat failed: no chat_id in {data}")
                 return chat_id
+
+    async def _request_sts_token(self, path: str, payload: Dict[str, Any],
+                                  headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                f"{BASE_URL}{path}", json=payload, headers=headers, ssl=False,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.json()
+                creds = data.get("data", data)
+                if all(k in creds for k in ("access_key_id", "access_key_secret", "security_token")):
+                    return creds
+                return None
 
     async def _get_sts_credentials(self, session: QwenSession, filename: str, filesize: int) -> Dict[str, Any]:
         headers = build_headers(session.token)
@@ -284,16 +305,9 @@ class QwenClient:
         payload = {"filename": filename, "filesize": filesize, "filetype": "file"}
         for path in ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]:
             try:
-                async with aiohttp.ClientSession() as s:
-                    async with s.post(
-                        f"{BASE_URL}{path}", json=payload, headers=headers, ssl=False,
-                        timeout=aiohttp.ClientTimeout(total=15),
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            creds = data.get("data", data)
-                            if all(k in creds for k in ("access_key_id", "access_key_secret", "security_token")):
-                                return creds
+                creds = await self._request_sts_token(path, payload, headers)
+                if creds:
+                    return creds
             except Exception:
                 continue
         raise RuntimeError("All STS endpoints failed")
@@ -350,18 +364,24 @@ async def _handle_chat_error(resp, session):
     raise RuntimeError(f"Chat HTTP {resp.status}: {body[:200]}")
 
 
+def _check_error_line(line: str, session) -> None:
+    if not (line.startswith("{") and "success" in line):
+        return
+    err = json.loads(line)
+    if err.get("success", True):
+        return
+    msg = json.dumps(err, ensure_ascii=False)
+    if "RateLimited" in msg or "daily usage" in msg:
+        session.is_valid = False
+        raise TokenExpiredError(f"Rate limited: {msg}")
+    raise RuntimeError(f"Qwen API error: {msg}")
+
+
 async def _iter_sse_events(resp, session):
     async for raw in resp.content:
         line = raw.decode("utf-8", errors="replace").strip()
         if not line.startswith("data:"):
-            if line.startswith("{") and "success" in line:
-                err = json.loads(line)
-                if not err.get("success", True):
-                    msg = json.dumps(err, ensure_ascii=False)
-                    if "RateLimited" in msg or "daily usage" in msg:
-                        session.is_valid = False
-                        raise TokenExpiredError(f"Rate limited: {msg}")
-                    raise RuntimeError(f"Qwen API error: {msg}")
+            _check_error_line(line, session)
             continue
         data_str = line[5:].strip()
         if not data_str or data_str == "[DONE]":
@@ -369,29 +389,3 @@ async def _iter_sse_events(resp, session):
         event = parse_sse_event(data_str)
         if event:
             yield event
-
-
-def build_qwen_message(
-    user_content: str, model: str,
-    files: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    return {
-        "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
-        "role": "user", "content": user_content, "user_action": "chat",
-        "files": files or [], "timestamp": int(time.time() * 1000), "models": [model],
-        "chat_type": "t2t", "feature_config": {
-            "thinking_enabled": True, "output_schema": "phase", "research_mode": "normal",
-            "auto_thinking": False, "thinking_mode": "Thinking", "thinking_format": "raw",
-            "auto_search": False,
-        }, "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t",
-    }
-
-
-def build_chat_payload(
-    chat_id: str, model: str, qwen_message: Dict[str, Any],
-) -> Dict[str, Any]:
-    return {
-        "stream": True, "version": "2.1", "incremental_output": True,
-        "chat_id": chat_id, "chat_mode": "local", "model": model, "parent_id": None,
-        "messages": [qwen_message], "timestamp": int(time.time() * 1000),
-    }
