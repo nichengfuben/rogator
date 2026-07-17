@@ -138,6 +138,26 @@ class UploadMixin:
                     return None
                 return save_image_file(await resp.read(), resp.headers.get("Content-Type", "image/png"), save_dir)
 
+    async def upload_file_from_url(self, session: QwenSession, image_url: str) -> Tuple[str, Dict[str, Any]]:
+        """下载远程图片 URL 并上传为 Qwen 文件对象。"""
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                image_url,
+                headers={
+                    "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+                    "User-Agent": USER_AGENT,
+                },
+                ssl=False,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"download image failed: HTTP {resp.status}")
+                data = await resp.read()
+                content_type = resp.headers.get("Content-Type", "image/png").split(";", 1)[0]
+        ext = DATA_URI_EXT_MAP.get(content_type, ".jpg")
+        filename = f"upload_{uuid.uuid4().hex[:8]}{ext}"
+        return await self.upload_file(session, data, filename)
+
     async def upload_file_from_path(
         self, session: QwenSession, file_path: str,
     ) -> Tuple[str, Dict[str, Any]]:
@@ -211,4 +231,10 @@ class UploadMixin:
                 file_objects.append(file_obj)
             except Exception as exc:
                 logger.warning("Upload inline image failed: %s", exc)
+        for image_url in self.extract_image_urls(messages):
+            try:
+                _, file_obj = await self.upload_file_from_url(session, image_url)
+                file_objects.append(file_obj)
+            except Exception as exc:
+                logger.warning("Upload remote image %s failed: %s", image_url, exc)
         return file_objects

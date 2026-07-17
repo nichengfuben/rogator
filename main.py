@@ -238,7 +238,7 @@ async def main_async(
     state = get_state()
 
     # 清理过期 session
-    state.client._clean_expired()
+    await state.client._ensure_cleanup()
 
     await _prelogin_accounts(state, prelogin_count)
     state.start_background_tasks()
