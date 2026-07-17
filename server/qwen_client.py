@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""Qwen session and client implementation."""
+"""Qwen session and client implementation。"""
 
 import asyncio
 import json
 import logging
+import random
 import time
 import uuid
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -22,8 +21,21 @@ from core.transport.endpoints import (
     MODELS_PATH,
     NEW_CHAT_PATH,
 )
+from core.transport.chat_session import ChatSession
 from core.transport.sse import parse_sse_event
-from server.oss_upload import upload_to_oss
+from core.media.tts import TtsService
+from core.media.video import VideoService
+from server.session_store import (
+    CLEANUP_INTERVAL,
+    QwenSession,
+    clean_expired,
+    describe_sessions,
+    fetch_user_id,
+    load_sessions,
+    mark_invalid as mark_invalid_in,
+    save_sessions,
+)
+from server.upload_mixin import UploadMixin
 from server.formats import (
     DEFAULT_MODELS,
     DEFAULT_USER_AGENT,
@@ -31,7 +43,6 @@ from server.formats import (
     MODELS_CACHE_FILE,
     MODELS_FETCH_TIMEOUT,
     REQUEST_TOTAL_TIMEOUT,
-    TOKEN_EXPIRE_SECONDS,
     TokenExpiredError,
     build_chat_payload,
     build_qwen_message,
@@ -41,32 +52,44 @@ from server.formats import (
 logger = logging.getLogger("rogator")
 
 
-@dataclass
-class QwenSession:
-    account: Account
-    token: str
-    user_id: str
-    login_time: float = field(default_factory=time.time)
-    is_valid: bool = True
-
-    @property
-    def username(self) -> str:
-        return self.account.username
-
-    def is_expired(self) -> bool:
-        """检查 token 是否��过 12 小时"""
-        return time.time() - self.login_time > TOKEN_EXPIRE_SECONDS
-
-
-class QwenClient:
+class QwenClient(UploadMixin):
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
-        self._sessions: List[QwenSession] = []
+        self._sessions: List[QwenSession] = load_sessions()
         self._current_index: int = 0
         self._lock = asyncio.Lock()
         self._models: List[str] = list(DEFAULT_MODELS)
         self._models_fetch_time: float = 0
         self._models_cache_ttl: float = 300
+        self._last_cleanup: float = 0.0
+
+    async def _ensure_cleanup(self) -> None:
+        """按 CLEANUP_INTERVAL 节流批量清理过期/失效 session。"""
+        now = time.time()
+        if now - self._last_cleanup < CLEANUP_INTERVAL:
+            return
+        self._last_cleanup = now
+        self._sessions, removed = clean_expired(self._sessions)
+        if removed:
+            if self._current_index >= len(self._sessions):
+                self._current_index = 0
+            save_sessions(self._sessions)
+
+    def mark_invalid(self, username: str) -> bool:
+        """按 username 精确标记单个 session 失效并立即持久化。"""
+        found = mark_invalid_in(self._sessions, username)
+        if found:
+            save_sessions(self._sessions)
+        return found
+
+    def mark_invalid_current(self) -> None:
+        session = self.current_session
+        if session:
+            self.mark_invalid(session.username)
+
+    def describe_sessions(self) -> Dict[str, Any]:
+        """汇总当前 session 池状态，供管理端点 / 日志排障使用。"""
+        return describe_sessions(self._sessions)
 
     @property
     def current_session(self) -> Optional[QwenSession]:
@@ -77,24 +100,6 @@ class QwenClient:
     @property
     def session_count(self) -> int:
         return len(self._sessions)
-
-    def _clean_expired(self) -> List[str]:
-        """清理过期和无效的 session，返回被移除的 username ��表"""
-        removed = []
-        valid_sessions = []
-        for s in self._sessions:
-            if s.is_expired():
-                logger.debug("Session %s expired (login_time: %s), removing",
-                             s.username[:6], s.login_time)
-                removed.append(s.username)
-            elif not s.is_valid:
-                logger.debug("Session %s invalid, removing", s.username[:6])
-                removed.append(s.username)
-            else:
-                valid_sessions.append(s)
-        if len(valid_sessions) != len(self._sessions):
-            self._sessions = valid_sessions
-        return removed
 
     async def login_account(self, account: Account) -> Optional[QwenSession]:
         try:
@@ -116,7 +121,7 @@ class QwenClient:
                     if not token:
                         logger.warning("Login %s no token", account.username[:6])
                         return None
-                    user_id = await self._fetch_user_id(session, token)
+                    user_id = await fetch_user_id(session, token, AUTH_BASE_URL)
                     qs = QwenSession(account=account, token=token, user_id=user_id or account.username[:12])
                     logger.info("Logged in: %s", account.username[:6])
                     return qs
@@ -127,42 +132,32 @@ class QwenClient:
             logger.warning("Login exception for %s: %s", account.username[:6], e)
             return None
 
-    async def _fetch_user_id(self, session: aiohttp.ClientSession, token: str) -> str:
-        try:
-            async with session.get(
-                f"{AUTH_BASE_URL}/api/v2/user",
-                headers={"Authorization": f"Bearer {token}", "User-Agent": DEFAULT_USER_AGENT},
-                ssl=False,
-            ) as ur:
-                if ur.status == 200:
-                    return str((await ur.json()).get("data", {}).get("id", ""))
-        except Exception:
-            pass
-        return ""
-
     async def prelogin_accounts(self, count: int) -> None:
+        await self._ensure_cleanup()
         if not ACCOUNTS:
             logger.warning("No accounts available")
             return
-        import random
-        shuffled = list(ACCOUNTS)
+        existing_usernames = {s.username for s in self._sessions}
+        shuffled = [a for a in ACCOUNTS if a.username not in existing_usernames]
         random.shuffle(shuffled)
-        sessions: List[QwenSession] = []
+        new_sessions: List[QwenSession] = []
+        need = max(0, count - len(self._sessions))
         for i, account in enumerate(shuffled):
-            if len(sessions) >= count:
+            if len(new_sessions) >= need:
                 break
-            logger.info("Trying account %d/%d (%s)...", i + 1, count, account.username[:6])
+            logger.info("Trying account %d/%d (%s)...", i + 1, need, account.username[:6])
             qs = await self.login_account(account)
             if qs:
-                sessions.append(qs)
+                new_sessions.append(qs)
                 logger.info("Account %s OK", account.username[:6])
             else:
                 logger.warning("Account %s failed, skipping", account.username[:6])
-        if sessions:
-            self._sessions = sessions
+        if new_sessions:
+            self._sessions.extend(new_sessions)
             self._current_index = 0
-            logger.info("Prelogin done: %d/%d ready", len(sessions), count)
-        else:
+            save_sessions(self._sessions)
+            logger.info("Prelogin done: %d new, %d total ready", len(new_sessions), len(self._sessions))
+        elif not self._sessions:
             logger.error("All %d login attempts failed", count)
 
     async def switch_to_next(self) -> Optional[QwenSession]:
@@ -173,18 +168,19 @@ class QwenClient:
                     if qs:
                         self._sessions.append(qs)
                         self._current_index = 0
+                        save_sessions(self._sessions)
                         return qs
                 return None
 
             if self._current_index < len(self._sessions):
                 self._sessions[self._current_index].is_valid = False
 
-            start = (self._current_index + 1) % len(self._sessions)
-            for i in range(len(self._sessions)):
-                idx = (start + i) % len(self._sessions)
-                if self._sessions[idx].is_valid:
-                    self._current_index = idx
-                    return self._sessions[idx]
+            valid = [i for i, s in enumerate(self._sessions) if s.is_valid]
+            if valid:
+                idx = random.choice(valid)
+                self._current_index = idx
+                save_sessions(self._sessions)
+                return self._sessions[idx]
 
             tried_usernames = {s.account.username for s in self._sessions}
             for account in ACCOUNTS:
@@ -193,21 +189,62 @@ class QwenClient:
                 qs = await self.login_account(account)
                 if qs:
                     self._sessions[self._current_index] = qs
+                    save_sessions(self._sessions)
                     return qs
 
             current_account = self._sessions[self._current_index].account
             qs = await self.login_account(current_account)
             if qs:
                 self._sessions[self._current_index] = qs
+                save_sessions(self._sessions)
                 return qs
 
             return None
 
     async def get_valid_session(self) -> Optional[QwenSession]:
+        await self._ensure_cleanup()
         session = self.current_session
         if session and session.is_valid:
             return session
         return await self.switch_to_next()
+
+    async def generate_video(
+        self,
+        prompt: str,
+        image_url: str,
+        token: str,
+        user_id: str,
+        model: str = "qwen-max-latest",
+        size: str = "16:9",
+        image_name: str = "source.png",
+        download: bool = True,
+    ) -> Dict[str, Any]:
+        """图生视频：委托给 core.media.video.VideoService，避免重复实现聊天/轮询逻辑。"""
+        async with aiohttp.ClientSession() as s:
+            chat_session = ChatSession(s, lambda: None, lambda: {}, lambda: "")
+            video_service = VideoService(s, lambda: None, lambda: {}, chat_session.create, chat_session.cleanup)
+            return await video_service.generate(
+                prompt, image_url, token, user_id, model=model, size=size,
+                image_name=image_name, download=download,
+            )
+
+    async def synthesize_tts(
+        self,
+        text: str,
+        token: str,
+        model: str = "qwen3-max",
+        save_dir: Optional[str] = None,
+    ) -> Optional[str]:
+        """文本转语音：委托给 core.media.tts.TtsService，避免重复实现聊天/占位消息逻辑。"""
+        from core.transport.endpoints import TTS_DIR
+
+        async with aiohttp.ClientSession() as s:
+            chat_session = ChatSession(s, lambda: None, lambda: {}, lambda: "")
+            tts_service = TtsService(
+                s, lambda: None, lambda: {}, lambda: "",
+                chat_session.create, chat_session.send_placeholder_message, chat_session.cleanup,
+            )
+            return await tts_service.synthesize(text, token, model=model, save_dir=save_dir or TTS_DIR)
 
     async def fetch_models(self, use_cache: bool = True) -> List[str]:
         now = time.time()
@@ -238,6 +275,7 @@ class QwenClient:
 
     def load_models_cache(self) -> List[str]:
         try:
+            from pathlib import Path
             p = Path(MODELS_CACHE_FILE)
             if p.exists():
                 data = json.loads(p.read_text(encoding="utf-8"))
@@ -283,45 +321,6 @@ class QwenClient:
                 if not chat_id:
                     raise RuntimeError(f"Create chat failed: no chat_id in {data}")
                 return chat_id
-
-    async def _request_sts_token(self, path: str, payload: Dict[str, Any],
-                                  headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                f"{BASE_URL}{path}", json=payload, headers=headers, ssl=False,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                creds = data.get("data", data)
-                if all(k in creds for k in ("access_key_id", "access_key_secret", "security_token")):
-                    return creds
-                return None
-
-    async def _get_sts_credentials(self, session: QwenSession, filename: str, filesize: int) -> Dict[str, Any]:
-        headers = build_headers(session.token)
-        headers.update({"Content-Type": "application/json;charset=UTF-8", "Accept": "application/json"})
-        payload = {"filename": filename, "filesize": filesize, "filetype": "file"}
-        for path in ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]:
-            try:
-                creds = await self._request_sts_token(path, payload, headers)
-                if creds:
-                    return creds
-            except Exception:
-                continue
-        raise RuntimeError("All STS endpoints failed")
-
-    async def upload_file(self, session: QwenSession, file_data: bytes, filename: str) -> Tuple[str, Dict[str, Any]]:
-        creds = await self._get_sts_credentials(session, filename, len(file_data))
-        file_url = await upload_to_oss(file_data, "text/plain", creds)
-        file_obj = {
-            "id": str(creds.get("file_id", uuid.uuid4())), "name": filename,
-            "type": "file", "size": len(file_data), "url": file_url,
-            "file_type": "text/plain", "showType": "file", "file_class": "document",
-            "user_id": session.user_id, "isQuote": False,
-        }
-        return file_url, file_obj
 
     async def chat_completion(
         self,

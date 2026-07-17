@@ -60,3 +60,4 @@ amerger.py
 upload.txt
 accounts.csv
 .backup/
+.repo/

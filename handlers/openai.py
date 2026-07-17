@@ -74,6 +74,7 @@ async def _prepare_stream(state, messages, model, tools, req_id):
     session = await state.client.get_valid_session()
     if not session:
         raise TokenExpiredError("No valid session available")
+    image_uris = state.client.extract_base64_images(messages)
     messages = fold_system_into_user(messages)
     openai_tools = convert_tools_to_openai(tools)
     injected = inject_fncall(messages, openai_tools, state.protocol, lang="zh")
@@ -81,6 +82,12 @@ async def _prepare_stream(state, messages, model, tools, req_id):
     final_messages = injected
     send_text, filename, file_bytes = state.splitter.split(full_content)
     files = []
+    for uri in image_uris:
+        try:
+            _, image_obj = await state.client.upload_file_from_base64(session, uri)
+            files.append(image_obj)
+        except Exception as e:
+            logger.warning("Image upload failed: %s", e)
     if filename and file_bytes:
         try:
             _, file_obj = await state.client.upload_file(session, file_bytes, filename)

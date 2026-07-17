@@ -11,7 +11,7 @@ from echotools.fncall import inject_fncall
 from echotools.logger import get_logger
 from echotools.protocol.base import ToolProtocol
 
-from server.formats import _json_response, extract_last_user_content
+from server.formats import _error_response, _json_response, extract_last_user_content
 from state import AppState
 
 logger = get_logger("rogator")
@@ -187,6 +187,79 @@ async def anthropic_root_handler(request: web.Request) -> web.Response:
     )
 
 
+async def count_tokens_handler(request: web.Request) -> web.Response:
+    """估算请求消息的 token 数量（OpenAI / Anthropic 兼容）。"""
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return _json_response({"input_tokens": 0})
+    messages = body.get("messages", []) or []
+    system = body.get("system", "")
+    total_chars = len(system) if isinstance(system, str) else 0
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in ("text", "input_text"):
+                    total_chars += len(part.get("text", ""))
+    return _json_response({"input_tokens": _estimate_tokens_from_chars(total_chars)})
+
+
+def _estimate_tokens_from_chars(total_chars: int) -> int:
+    return max(0, total_chars // 3)
+
+
+async def audio_speech_handler(request: web.Request) -> web.Response:
+    """OpenAI 兼容的 TTS 端点，委托给 QwenClient.synthesize_tts。"""
+    state = get_state()
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return _error_response(400, "Invalid JSON body")
+    text = body.get("input", "")
+    if not text:
+        return _error_response(400, "Missing required field: input")
+    model = body.get("model") or state.model
+    session = await state.client.get_valid_session()
+    if not session:
+        return _error_response(503, "No valid Qwen session available")
+    local_path = await state.client.synthesize_tts(text, session.token, model=model)
+    if not local_path:
+        return _error_response(502, "TTS synthesis failed")
+    from pathlib import Path
+    audio_bytes = Path(local_path).read_bytes()
+    return web.Response(body=audio_bytes, content_type="audio/wav")
+
+
+async def images_generations_handler(request: web.Request) -> web.Response:
+    """OpenAI 兼容的图片生成端点（图生图/图生视频前置帧），委托给 QwenClient.generate_video。"""
+    state = get_state()
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return _error_response(400, "Invalid JSON body")
+    prompt = body.get("prompt", "")
+    image_url = body.get("image") or body.get("image_url", "")
+    if not prompt or not image_url:
+        return _error_response(400, "Missing required fields: prompt, image")
+    model = body.get("model") or state.model
+    size = body.get("size", "16:9")
+    session = await state.client.get_valid_session()
+    if not session:
+        return _error_response(503, "No valid Qwen session available")
+    result = await state.client.generate_video(
+        prompt, image_url, session.token, session.user_id, model=model, size=size,
+    )
+    if not result.get("success"):
+        return _error_response(502, result.get("error", "Generation failed"))
+    return _json_response({
+        "created": int(__import__("time").time()),
+        "data": [{"url": result.get("video_url", ""), "local_path": result.get("local_path", "")}],
+    })
+
+
 async def capabilities_handler(request: web.Request) -> web.Response:
     from server.formats import CAPABILITIES
     return _json_response({
@@ -249,21 +322,22 @@ def setup_routes(app: web.Application) -> None:
     from handlers.anthropic import anthropic_messages_handler
     from handlers.openai import openai_chat_handler
 
-    _count_tokens = lambda req: _json_response({"input_tokens": 0})
     routes = [
         ("GET", "/", health_handler),
         ("GET", "/health", health_handler),
         ("GET", "/v1/health", health_handler),
         ("GET", "/v1/models", list_models_handler),
         ("POST", "/v1/chat/completions", openai_chat_handler),
-        ("POST", "/v1/messages/count_tokens", _count_tokens),
+        ("POST", "/v1/messages/count_tokens", count_tokens_handler),
         ("GET", "/anthropic", anthropic_root_handler),
         ("POST", "/anthropic", anthropic_root_handler),
         ("POST", "/v1/messages", anthropic_messages_handler),
         ("POST", "/anthropic/v1/messages", anthropic_messages_handler),
         ("POST", "/anthropic/messages", anthropic_messages_handler),
         ("GET", "/anthropic/v1/models", anthropic_list_models_handler),
-        ("POST", "/anthropic/v1/messages/count_tokens", _count_tokens),
+        ("POST", "/anthropic/v1/messages/count_tokens", count_tokens_handler),
+        ("POST", "/v1/images/generations", images_generations_handler),
+        ("POST", "/v1/audio/speech", audio_speech_handler),
         ("POST", "/v1/admin/refresh_models", admin_refresh_models_handler),
         ("POST", "/v1/admin/switch_session", admin_switch_session_handler),
         ("GET", "/v1/admin/sessions", admin_sessions_handler),

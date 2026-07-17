@@ -375,7 +375,7 @@ class QwenClient(AuthMixin, UploadMixin, MediaMixin, VideoGenMixin, LogsMixin):
             account.token = ""
             self._rebuild_candidates()
             self._save_persist()
-            raise RuntimeError(f"token expired: {body[:200]}")
+        raise RuntimeError(f"token expired: {body[:200]}")
 
     async def stop_generation(self, chat_id: str, token: str) -> bool:
         return await self._chat_session.stop(chat_id, token)
