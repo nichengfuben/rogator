@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from .endpoints import (
+from .routes import (
     BASE_URL,
     CHAT_PATH,
     DELETE_CHAT_PATH,
@@ -27,7 +27,7 @@ from .endpoints import (
     USER_AGENT,
 )
 from ..crypto.crypto import build_headers, build_stop_headers
-from ..compat.payloads import build_new_chat_payload, build_payload, build_stop_payload
+from ..compat.payload import build_new_chat_payload, build_payload, build_stop_payload
 from ..storage.storage import save_image_file
 from .sse import parse_sse_event
 

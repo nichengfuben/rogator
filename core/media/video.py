@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 import aiohttp
 
-from ..transport.endpoints import (
+from ..transport.routes import (
     BASE_URL,
     CHAT_PATH,
     GENERATED_VIDEO_DIR,
@@ -24,7 +24,7 @@ from ..transport.endpoints import (
     VIDEO_TASK_POLL_INTERVAL,
 )
 from ..crypto.crypto import build_headers
-from ..compat.payloads import build_i2v_payload
+from ..compat.payload import build_i2v_payload
 from ..storage.storage import save_video_file
 
 logger = logging.getLogger(__name__)

@@ -13,9 +13,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from ..transport.endpoints import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
+from ..transport.routes import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
 from ..crypto.crypto import build_headers
-from ..compat.payloads import build_replace_content_payload, build_tts_payload
+from ..compat.payload import build_replace_content_payload, build_tts_payload
 from ..storage.storage import save_wav_file
 
 logger = logging.getLogger(__name__)

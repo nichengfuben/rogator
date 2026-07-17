@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
-from ..transport.endpoints import (
+from ..transport.routes import (
     BASE_URL,
     CAPS,
     MODELS,
