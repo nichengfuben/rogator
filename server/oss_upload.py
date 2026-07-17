@@ -141,7 +141,7 @@ def resolve_oss_hosts(bucket_host: str) -> list[tuple[str, str]]:
     if ip:
         candidates.append((ip, bucket_host))
         return candidates
-    logger.warning("DNS resolve failed for %s, trying fallbacks...", bucket_host)
+    logger.debug("DNS resolve failed for %s, trying fallbacks...", bucket_host)
     for known_ip in ["47.113.75.199"]:
         candidates.append((known_ip, bucket_host))
     if "oss-accelerate" in bucket_host:
