@@ -319,7 +319,7 @@ async def admin_sessions_handler(request: web.Request) -> web.Response:
 # ============================================================
 
 def setup_routes(app: web.Application) -> None:
-    from handlers.anthropic import anthropic_messages_handler
+    from handlers.anthro import anthropic_messages_handler
     from handlers.openai import openai_chat_handler
 
     routes = [

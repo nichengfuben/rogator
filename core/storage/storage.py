@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Final, Optional, Tuple
 
 if TYPE_CHECKING:
-    from ..compat.platform import ProxyState
+    from ..compat.adapter import ProxyState
 
 from accounts import Account
-from ..transport.endpoints import (
+from ..transport.routes import (
     COOKIE_REFRESH_INTERVAL,
     GENERATED_IMAGE_DIR,
     GENERATED_VIDEO_DIR,

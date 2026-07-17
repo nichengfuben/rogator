@@ -14,7 +14,7 @@ import aiohttp
 
 from accounts import ACCOUNTS, Account
 from core.crypto.crypto import build_headers, build_login_headers, hash_password
-from core.transport.endpoints import (
+from core.transport.routes import (
     AUTH_BASE_URL,
     BASE_URL,
     CHAT_PATH,
@@ -35,7 +35,7 @@ from server.session_store import (
     mark_invalid as mark_invalid_in,
     save_sessions,
 )
-from server.upload_mixin import UploadMixin
+from server.uploads import UploadMixin
 from server.formats import (
     DEFAULT_MODELS,
     DEFAULT_USER_AGENT,
@@ -236,7 +236,7 @@ class QwenClient(UploadMixin):
         save_dir: Optional[str] = None,
     ) -> Optional[str]:
         """文本转语音：委托给 core.media.tts.TtsService，避免重复实现聊天/占位消息逻辑。"""
-        from core.transport.endpoints import TTS_DIR
+        from core.transport.routes import TTS_DIR
 
         async with aiohttp.ClientSession() as s:
             chat_session = ChatSession(s, lambda: None, lambda: {}, lambda: "")

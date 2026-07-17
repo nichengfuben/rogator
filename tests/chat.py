@@ -17,11 +17,11 @@ if __package__ in {None, ""}:
     root = Path(__file__).resolve().parents[1]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    from core.transport.endpoints import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
+    from core.transport.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
     from core.crypto.crypto import build_headers, build_login_headers, hash_password
     from core.transport.sse import parse_sse_event
 else:
-    from ..core.transport.endpoints import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
+    from ..core.transport.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
     from ..core.crypto.crypto import build_headers, build_login_headers, hash_password
     from ..core.transport.sse import parse_sse_event
 

@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..transport.endpoints import API_VERSION, USE_LOCAL_MODE
+from ..transport.routes import API_VERSION, USE_LOCAL_MODE
 from ..storage.storage import build_url_file_object
 
 DEFAULT_FEATURE_CONFIG: Dict[str, Any] = {

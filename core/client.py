@@ -27,14 +27,14 @@ except ModuleNotFoundError:
 from ..accounts import ACCOUNTS, Account
 from .crypto.auth import AuthMixin
 from .transport.chat_session import ChatSession, UploadMixin
-from .transport.endpoints import (
+from .transport.routes import (
     BASE_URL, CAPS, CHAT_PATH, COOKIE_REFRESH_INTERVAL, MODELS, MODELS_PATH,
     PROXY_SELECTOR_PERSIST_PATH, PERSIST_INTERVAL, SMART_PROXY_ENABLED,
     SSE_TIMEOUT, TASK_TIMERS_PATH, TTS_DIR,
 )
 from .crypto.crypto import WafBlockedError, build_headers, generate_cookies, generate_fingerprint
-from .compat.platform import LogsMixin, ProxyState, extract_model_ids
-from .compat.payloads import build_payload
+from .compat.adapter import LogsMixin, ProxyState, extract_model_ids
+from .compat.payload import build_payload
 from .storage.storage import load_persist, load_task_timers, save_persist, save_task_timers
 from .transport.sse import StreamHandler
 from .media.tts import MediaMixin, TtsService

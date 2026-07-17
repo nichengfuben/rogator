@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from core.transport.endpoints import BASE_URL, GENERATED_IMAGE_DIR, GENERATED_VIDEO_DIR, USER_AGENT
+from core.transport.routes import BASE_URL, GENERATED_IMAGE_DIR, GENERATED_VIDEO_DIR, USER_AGENT
 from core.crypto.crypto import build_headers
 from core.storage.storage import (
     DATA_URI_EXT_MAP,
