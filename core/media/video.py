@@ -76,21 +76,23 @@ class VideoService:
             chat_id = await self._create_chat(token, model, "i2v")
         except Exception as exc:
             return {"success": False, "error": f"create i2v chat failed: {exc}"}
+        task_id = ""
         try:
             submission = await self._submit_task(prompt, chat_id, model, image_url, image_name, size, token)
             if not submission.get("success"):
                 return submission
-            task_result = await self._poll_task_status(submission["task_id"], token, chat_id)
+            task_id = submission["task_id"]
+            task_result = await self._poll_task_status(task_id, token, chat_id)
             video_url = task_result.get("content") or build_cdn_video_url(
                 user_id=user_id,
                 video_type="i2v",
                 message_id=submission["message_id"],
-                task_id=submission["task_id"],
+                task_id=task_id,
                 token=token,
             )
             result: Dict[str, Any] = {
                 "success": True,
-                "task_id": submission["task_id"],
+                "task_id": task_id,
                 "message_id": submission["message_id"],
                 "chat_id": chat_id,
                 "video_url": video_url,
@@ -102,7 +104,7 @@ class VideoService:
                     result["local_path"] = local_path
             return result
         except Exception as exc:
-            return {"success": False, "error": str(exc)}
+            return {"success": False, "task_id": task_id, "error": str(exc)}
         finally:
             asyncio.ensure_future(self._cleanup_chat(chat_id, token))
 

@@ -241,6 +241,7 @@ async def main_async(
     state.client._clean_expired()
 
     await _prelogin_accounts(state, prelogin_count)
+    state.start_background_tasks()
     _print_startup_info(state, port, prelogin_count)
     await _run_server(app, state, port)
 

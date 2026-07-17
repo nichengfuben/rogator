@@ -6,6 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Rogator v2.1.0 — Qwen AI adapter server. Python 3.14, aiohttp. Proxies Qwen (Alibaba LLM) through OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) compatible endpoints.
 
+This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
+
+## Core Priorities
+
+1. Performance first.
+2. Reliability first.
+3. Keep behavior predictable under load and during failures (stability assurance mechanism for long-lived connections and streaming services).
+
+If a tradeoff is required, choose correctness and robustness over short-term convenience.
+
+## Maintainability
+
+Long term maintainability is a core priority. If you add new functionality, first check if there is shared logic that can be extracted to a separate module. Duplicate logic across multiple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
+
+## Output Style
+
+- 回复语言默认简体中文，除非用户明确要求其他语言。
+- Length: match response length to task complexity; default to fewer than four lines for conversational replies.
+- Order: lead with the outcome; reasoning follows.
+- Markdown: use Markdown for code and structured data, not for prose chat.
+- Code comments: write comments only when the reason is non-obvious to a future reader.
+- Filler phrases: do not open with affirmations such as certainly, sure, of course, or absolutely.
+- End-of-turn note: write one concise past-tense summary at the end of each turn.
+- Tool-call labels: write a short past-tense label after each tool call completes; do not place a colon immediately before a tool call invocation.
+
 ## Running
 
 ```
@@ -53,3 +78,5 @@ python main.py [--port 8932] [--host 0.0.0.0] [--prelogin 1] [--log-level DEBUG]
 - **Compat fallback pattern** — `core/client.py` uses `try: from src.core.X` / `except ModuleNotFoundError: from .compat.runtime` for Candidate, ModelsCache, ProxySelector.
 - **TTS & Video** — `TtsService` and `VideoService` in `core/media/` for media generation.
 - **Default model** — `qwen3.7-max` (defined in `server/formats.py`).
+
+@AGENTS.md

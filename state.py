@@ -194,6 +194,16 @@ class AppState:
         except Exception as e:
             logger.warning("Refresh models failed: %s", e)
 
+    async def _models_refresh_loop(self, interval: float = 86400.0) -> None:
+        while not self.is_shutting_down:
+            try:
+                await asyncio.wait_for(self.shutdown_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                await self.refresh_models()
+
+    def start_background_tasks(self) -> None:
+        self._bg_tasks.append(asyncio.create_task(self._models_refresh_loop()))
+
     async def shutdown(self) -> None:
         if self._shutdown_requested:
             return

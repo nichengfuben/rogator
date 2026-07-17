@@ -82,11 +82,34 @@ curl -X POST http://localhost:8932/v1/messages \
 
 ## 支持的模型
 
-- `qwen3.7-max`（默认）
-- `qwen3.6-plus`
-- `qwen3.5-plus`
-- `qwen3-max`
-- `qwen3-235b-a22b`
+```python 
+DEFAULT_MODELS: List[str] = [
+    "qwen3.7-max",  #（默认）
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    "qwen3.5-397b-a17b",
+    "qwen3-max",
+    "qwen3-max-2026-01-23",
+    "qwen3-235b-a22b",
+    "qwen3-30b-a3b",
+    "qwen3-vl-30b-a3b",
+    "qwen3-vl-32b",
+    "qwen3-vl-plus",
+    "qwen3-coder-plus",
+    "qwen3-coder-30b-a3b-instruct",
+    "qwen3-omni-flash",
+    "qwen3-omni-flash-2025-12-01",
+    "qwen2.5-72b-instruct",
+    "qwen2.5-vl-32b-instruct",
+    "qwen2.5-omni-7b",
+    "qwen2.5-coder-32b-instruct",
+    "qwen-max-latest",
+    "qwen-plus-2025-07-28",
+    "qwen-plus-2025-09-11",
+    "qwen-plus-2025-01-25",
+    "qwen-turbo-2025-02-11",
+]
+```
 
 ## 环境变量
 
