@@ -21,8 +21,6 @@ from handlers import (
 from server.formats import (
     MAX_CHARS,
     MAX_QUEUE_SIZE,
-    MAX_REQUEST_RESTARTS,
-    RESTART_DELAY,
     TokenExpiredError,
     _error_response,
     _fix_tool_call_id,
@@ -59,6 +57,7 @@ def _parse_tool_calls(state: AppState, full_answer: str, tools: List[Dict]) -> T
     if not tools or not full_answer:
         return full_answer, []
     try:
+        # echotools>=2.3.x 的 protocol.parse 已内置 normalize_tool_calls
         clean_text, parsed_calls = state.protocol.parse(full_answer, tools)
         tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
         if tool_calls:
@@ -113,7 +112,7 @@ async def _prepare_stream(state, messages, model, tools, req_id):
 
 
 async def _run_prepare_once(state, messages, model, tools, req_id):
-    """单次准备，遇到异常先切号再抛出"""
+    """单次准备，失败后切号再向上抛出。"""
     try:
         return await _prepare_stream(state, messages, model, tools, req_id)
     except (TokenExpiredError, EmptyResponseError, ConnectionError) as e:
@@ -123,13 +122,13 @@ async def _run_prepare_once(state, messages, model, tools, req_id):
 
 
 async def _chat_once(state, messages, model, tools, req_id, files=None) -> AsyncGenerator[Dict[str, Any], None]:
-    """单次聊天，遇到 TokenExpiredError 先切号再抛出"""
+    """单次聊天，TokenExpiredError 切号后原样抛给上层。"""
+    session, final_messages, uploaded_files, chat_id = await _run_prepare_once(
+        state, messages, model, tools, req_id
+    )
+    if files is not None:
+        uploaded_files = files
     try:
-        session, final_messages, uploaded_files, chat_id = await _run_prepare_once(
-            state, messages, model, tools, req_id
-        )
-        if files is not None:
-            uploaded_files = files
         async for event in state.client.chat_completion(
             session, chat_id, final_messages, model, uploaded_files
         ):
@@ -163,6 +162,13 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools):
 # ============================================================
 # 流式辅助函数
 # ============================================================
+
+async def _write_openai_stream_error(
+    resp, message: str, disconnected: list, *, error_type: str = "server_error", code: int = 500,
+) -> None:
+    payload = {"error": {"message": message, "type": error_type, "code": code}}
+    await _safe_write(resp, f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected)
+
 
 async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
     if disconnected[0]:
@@ -289,11 +295,11 @@ async def _handle_stream(request, state, messages, model, req_id, tools):
         return resp
     except TokenExpiredError as e:
         logger.warning("OpenAI stream token expired: %s", e)
-        await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
+        await _write_openai_stream_error(resp, str(e), disconnected, error_type="rate_limited", code=429)
         return resp
     except Exception as e:
         logger.error("OpenAI stream error: %s", e, exc_info=True)
-        await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
+        await _write_openai_stream_error(resp, str(e), disconnected)
         return resp
     if disconnected[0]:
         logger.info("Client disconnected during stream %s", req_id)

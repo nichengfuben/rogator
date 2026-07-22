@@ -81,16 +81,39 @@ def load_sessions() -> List[QwenSession]:
         return []
 
 
-def save_sessions(sessions: List[QwenSession]) -> None:
-    """原子写入 session 到磁盘（临时文件 + os.replace）。"""
+def is_session_fatal_error(text: str) -> bool:
+    """判断 API 错误是否表示当前 session 不可再用（过期、鉴权失败、限流）。"""
+    lower = text.lower()
+    if "ratelimited" in lower or "daily usage" in lower:
+        return True
+    if "unauthorized" in lower:
+        return True
+    if "expired" in lower and "token" in lower:
+        return True
+    if "log in" in lower:
+        return True
+    return False
+
+
+def save_sessions(sessions: List[QwenSession]) -> List[str]:
+    """清理过期/失效 session 后原子写入磁盘，原地更新列表并返回被移除的 username。"""
+    cleaned, removed = clean_expired(sessions)
+    sessions[:] = cleaned
+    if removed:
+        logger.info("Cleanup: removed %d expired/invalid session(s)", len(removed))
     try:
         Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-        data = {"sessions": [s.to_dict() for s in sessions]}
+        data = {
+            "sessions": [s.to_dict() for s in sessions],
+            "updated_at": int(time.time()),
+            "count": len(sessions),
+        }
         tmp_path = f"{SESSIONS_FILE}.tmp"
         Path(tmp_path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp_path, SESSIONS_FILE)
     except Exception as e:
         logger.warning("Failed to save sessions: %s", e)
+    return removed
 
 
 async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_url: str) -> str:
