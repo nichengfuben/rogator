@@ -7,43 +7,12 @@ from typing import Any, Dict, List, Optional
 
 from aiohttp import web
 
-from echotools.fncall import inject_fncall
 from echotools.logger import get_logger
-from echotools.protocol.base import ToolProtocol
 
-from server.formats import _error_response, _json_response, extract_last_user_content
+from server.formats import _error_response, _json_response
 from state import AppState
 
 logger = get_logger("rogator")
-
-# 工具调用指令（当有 tools 时拼接到 user_content 前）
-TOOL_INSTRUCTION = """
-<ultra_system_reminder>
-## Function Definitions
-
-All functions are defined inside a `<functions>` wrapper block. Each function is a `<tool>` tag containing `description`, `name`, and `parameters`. Each parameter is a `<parameter>` tag with `name`, `type`, `required`, and `<description>`.
-
-**Function Invocation Syntax:**
-
-When calling tools, respond with ONLY the following XML block format:
-
-<entml:function_calls>
-<entml:invoke name="tool_name">
-<entml:parameters>
-<param_name>value</param_name>
-</entml:parameters>
-</entml:invoke>
-</entml:function_calls>
-
-Multiple invocations can be stacked inside one `<entml:function_calls>` block for parallel execution.
-
-## Function Call Instructions
-
-Use parameter names exactly as defined. Put each parameter value directly between its opening and closing tags. Do not wrap values in quotes. Do not use JSON inside `<entml:parameters>`.
-
-If you intend to call multiple tools and there are no dependencies between the calls, make all independent calls in the same function_calls block. Otherwise, wait for previous calls to finish to determine dependent values.
-</ultra_system_reminder>
-"""
 
 
 class EmptyResponseError(Exception):
@@ -91,33 +60,6 @@ def fold_system_into_user(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             return merged
     merged.insert(0, {"role": "user", "content": sys_text})
     return merged
-
-
-
-
-# ============================================================
-# 猴子补丁：inject_fncall 没工具时也返回 prompt
-# ============================================================
-
-_original_inject_fncall = inject_fncall
-
-
-def _patched_inject_fncall(
-    messages: List[Dict[str, Any]],
-    tools: List[Dict[str, Any]],
-    protocol: ToolProtocol,
-    lang: str = "en",
-    **kwargs: Any,
-) -> List[Dict[str, Any]]:
-    """补丁：没工具时也构建 prompt，返回单条 user 消息。"""
-    if not tools:
-        current_user_message = extract_last_user_content(messages)
-        prompt = f"<current_user_message>\n{current_user_message}\n</current_user_message>"
-        return [{"role": "user", "content": prompt}]
-    return _original_inject_fncall(messages, tools, protocol, lang=lang, **kwargs)
-
-
-inject_fncall = _patched_inject_fncall
 
 
 # ============================================================

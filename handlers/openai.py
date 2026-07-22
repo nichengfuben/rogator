@@ -8,16 +8,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from aiohttp import web
 
-from echotools.fncall import FncallStreamParser
+from echotools.fncall import FncallStreamParser, inject_fncall
 from echotools.logger import get_logger
 
-from handlers import (
-    TOOL_INSTRUCTION,
-    EmptyResponseError,
-    _patched_inject_fncall as inject_fncall,
-    fold_system_into_user,
-    get_state,
-)
+from handlers import EmptyResponseError, fold_system_into_user, get_state
 from server.formats import (
     MAX_CHARS,
     MAX_QUEUE_SIZE,
@@ -33,6 +27,22 @@ from server.formats import (
 from state import AppState, QueueFullError
 
 logger = get_logger("rogator")
+
+_ENTML_USER_MARKER = "<current_user_message>"
+
+
+def _entml_prompt_header(prompt: str) -> str:
+    """提取 inject_fncall 产出的 entml 工具说明头（echotools 2.3+ render_prompt）。"""
+    idx = prompt.find(_ENTML_USER_MARKER)
+    return prompt[:idx] if idx > 0 else ""
+
+
+def _ensure_entml_prompt_header(prompt: str, send_text: str) -> str:
+    """长文本尾部截断后补回工具说明头，避免重复拼接过时指令。"""
+    header = _entml_prompt_header(prompt)
+    if header and not send_text.startswith(header):
+        return header + send_text
+    return send_text
 
 
 def convert_tools_to_openai(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -99,12 +109,10 @@ async def _prepare_stream(state, messages, model, tools, req_id):
             _, file_obj = await state.client.upload_file(session, file_bytes, filename)
             files.append(file_obj)
             if tools:
-                send_text = TOOL_INSTRUCTION + send_text
+                send_text = _ensure_entml_prompt_header(full_content, send_text)
         except Exception as e:
             logger.warning("Upload failed: %s, truncating to max chars", e)
             send_text = full_content[:MAX_CHARS]
-            if tools:
-                send_text = TOOL_INSTRUCTION + send_text
             files = []
     final_messages[0]["content"] = send_text
     chat_id = await state.client.create_chat(session, model)
