@@ -6,8 +6,8 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
+from echotools.fncall import ToolProtocol, get_protocol
 from echotools.logger import get_logger
-from echotools.protocol.base import ToolProtocol
 
 from server.formats import (
     MAX_CHARS,
@@ -21,7 +21,6 @@ from server.formats import (
     TokenExpiredError,
 )
 from server.session_store import CLEANUP_INTERVAL, QwenSession
-from echotools import get_protocol
 from server.qwen_client import QwenClient
 
 logger = get_logger("rogator")
