@@ -172,7 +172,8 @@ async def _stream_anthropic(resp, state, messages, model, tools, req_id, disconn
         return block_idx, block_type, full_answer, True
     except TokenExpiredError as e:
         logger.warning("Anthropic stream token expired: %s", e)
-        await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
+        error_msg = json.dumps({"type": "error", "error": {"message": str(e), "type": "rate_limited"}})
+        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode(), disconnected)
         return block_idx, block_type, full_answer, True
     except Exception as e:
         logger.error("Anthropic stream error: %s", e, exc_info=True)

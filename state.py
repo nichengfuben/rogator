@@ -20,8 +20,9 @@ from server.formats import (
     DEFAULT_MODEL,
     TokenExpiredError,
 )
+from server.session_store import CLEANUP_INTERVAL, QwenSession
 from echotools import get_protocol
-from server.qwen_client import QwenClient, QwenSession
+from server.qwen_client import QwenClient
 
 logger = get_logger("rogator")
 
@@ -201,7 +202,18 @@ class AppState:
             except asyncio.TimeoutError:
                 await self.refresh_models()
 
+    async def _session_cleanup_loop(self, interval: float = CLEANUP_INTERVAL) -> None:
+        """后台定时清理过期/失效 session 并落盘。"""
+        while not self.is_shutting_down:
+            try:
+                self.client.cleanup_expired_sessions()
+                await asyncio.wait_for(self.shutdown_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                continue
+
     def start_background_tasks(self) -> None:
+        self.client.cleanup_expired_sessions()
+        self._bg_tasks.append(asyncio.create_task(self._session_cleanup_loop()))
         self._bg_tasks.append(asyncio.create_task(self._models_refresh_loop()))
 
     async def shutdown(self) -> None:
@@ -219,3 +231,4 @@ class AppState:
         if cancelled:
             await asyncio.sleep(SHUTDOWN_CANCEL_GRACE)
         await self.scheduler.wait_idle(timeout=SHUTDOWN_WAIT_IDLE_TIMEOUT)
+        self.client._persist_sessions()

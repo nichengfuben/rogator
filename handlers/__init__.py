@@ -187,6 +187,18 @@ async def anthropic_root_handler(request: web.Request) -> web.Response:
     )
 
 
+def _message_content_char_count(content: object) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if not isinstance(content, list):
+        return 0
+    total = 0
+    for part in content:
+        if isinstance(part, dict) and part.get("type") in ("text", "input_text"):
+            total += len(part.get("text", ""))
+    return total
+
+
 async def count_tokens_handler(request: web.Request) -> web.Response:
     """估算请求消息的 token 数量（OpenAI / Anthropic 兼容）。"""
     try:
@@ -197,13 +209,7 @@ async def count_tokens_handler(request: web.Request) -> web.Response:
     system = body.get("system", "")
     total_chars = len(system) if isinstance(system, str) else 0
     for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            total_chars += len(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") in ("text", "input_text"):
-                    total_chars += len(part.get("text", ""))
+        total_chars += _message_content_char_count(msg.get("content", ""))
     return _json_response({"input_tokens": _estimate_tokens_from_chars(total_chars)})
 
 

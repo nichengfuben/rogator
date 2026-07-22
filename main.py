@@ -32,6 +32,7 @@ logger = get_logger("rogator")
 # 从模块导入
 # ============================================================
 from handlers import get_state, setup_routes
+from server.session_store import CLEANUP_INTERVAL
 from state import AppState
 
 # ============================================================
@@ -153,6 +154,7 @@ def _print_startup_info(state: AppState, port: int, prelogin_count: int) -> None
     logger.info("  Protocol    : %s", state.protocol.id)
     logger.info("  Sessions    : %d (max 12h)", state.client.session_count)
     logger.info("  Models      : %d", len(state._models))
+    logger.info("  Cleanup     : startup + background (%ds)", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
 
@@ -237,8 +239,10 @@ async def main_async(
     setup_routes(app)
     state = get_state()
 
-    # 清理过期 session
-    await state.client._ensure_cleanup()
+    # 启动时立即清理过期/失效 session 并落盘
+    removed = state.client.cleanup_expired_sessions()
+    if removed:
+        logger.info("Startup cleanup: removed %d expired/invalid session(s)", len(removed))
 
     await _prelogin_accounts(state, prelogin_count)
     state.start_background_tasks()

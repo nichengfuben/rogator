@@ -7,7 +7,6 @@ import json
 import logging
 import random
 import time
-import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -22,7 +21,7 @@ from core.transport.routes import (
     NEW_CHAT_PATH,
 )
 from core.transport.chat_session import ChatSession
-from core.transport.sse import parse_sse_event
+from server.chat_sse import handle_chat_error, iter_sse_events
 from core.media.tts import TtsService
 from core.media.video import VideoService
 from server.session_store import (
@@ -31,8 +30,10 @@ from server.session_store import (
     clean_expired,
     describe_sessions,
     fetch_user_id,
+    is_session_fatal_error,
     load_sessions,
     mark_invalid as mark_invalid_in,
+    replace_or_append,
     save_sessions,
 )
 from server.uploads import UploadMixin
@@ -63,23 +64,76 @@ class QwenClient(UploadMixin):
         self._models_cache_ttl: float = 300
         self._last_cleanup: float = 0.0
 
+    def _fix_current_index(self, previous_username: Optional[str] = None) -> None:
+        """session 被移除后修正 current_index。"""
+        username = previous_username
+        if username is None and self._sessions and self._current_index < len(self._sessions):
+            username = self._sessions[self._current_index].username
+        if username and not any(s.username == username for s in self._sessions):
+            valid_indices = [
+                i for i, s in enumerate(self._sessions)
+                if s.is_valid and not s.is_expired()
+            ]
+            self._current_index = random.choice(valid_indices) if valid_indices else 0
+        elif self._current_index >= len(self._sessions):
+            self._current_index = 0
+
+    def _session_username_at_current(self) -> Optional[str]:
+        if self._sessions and self._current_index < len(self._sessions):
+            return self._sessions[self._current_index].username
+        return None
+
+    def prune_expired_sessions(self) -> List[str]:
+        """按 login_time 即时剔除过期/失效 session（内存）。"""
+        previous_username = self._session_username_at_current()
+        self._sessions, removed = clean_expired(self._sessions)
+        if removed:
+            self._fix_current_index(previous_username)
+        return removed
+
+    def cleanup_expired_sessions(self) -> List[str]:
+        """清理过期/失效 session 并落盘（后台任务用，无节流）。"""
+        previous_username = self._session_username_at_current()
+        removed = save_sessions(self._sessions)
+        if removed:
+            self._fix_current_index(previous_username)
+            logger.info("Session cleanup: removed %d expired/invalid session(s)", len(removed))
+        return removed
+
+    def _persist_sessions(self) -> List[str]:
+        """清理并持久化 session 池，同步修正 current_index。"""
+        previous_username = self._session_username_at_current()
+        removed = save_sessions(self._sessions)
+        self._fix_current_index(previous_username)
+        return removed
+
+    def _invalidate_session(self, session: QwenSession) -> None:
+        """标记 session 失效并立即清理落盘。"""
+        session.is_valid = False
+        self._persist_sessions()
+
     async def _ensure_cleanup(self) -> None:
-        """按 CLEANUP_INTERVAL 节流批量清理过期/失效 session。"""
+        """按 CLEANUP_INTERVAL 节流落盘清理（热路径避免频繁写盘）。"""
         now = time.time()
         if now - self._last_cleanup < CLEANUP_INTERVAL:
             return
         self._last_cleanup = now
-        self._sessions, removed = clean_expired(self._sessions)
-        if removed:
-            if self._current_index >= len(self._sessions):
-                self._current_index = 0
-            save_sessions(self._sessions)
+        self.cleanup_expired_sessions()
+
+    @property
+    def current_session(self) -> Optional[QwenSession]:
+        if not self._sessions or self._current_index >= len(self._sessions):
+            return None
+        session = self._sessions[self._current_index]
+        if not session.is_valid or session.is_expired():
+            return None
+        return session
 
     def mark_invalid(self, username: str) -> bool:
         """按 username 精确标记单个 session 失效并立即持久化。"""
         found = mark_invalid_in(self._sessions, username)
         if found:
-            save_sessions(self._sessions)
+            self._persist_sessions()
         return found
 
     def mark_invalid_current(self) -> None:
@@ -92,16 +146,17 @@ class QwenClient(UploadMixin):
         return describe_sessions(self._sessions)
 
     @property
-    def current_session(self) -> Optional[QwenSession]:
-        if not self._sessions or self._current_index >= len(self._sessions):
-            return None
-        return self._sessions[self._current_index]
-
-    @property
     def session_count(self) -> int:
         return len(self._sessions)
 
+    def _index_of_username(self, username: str) -> Optional[int]:
+        for i, s in enumerate(self._sessions):
+            if s.username == username:
+                return i
+        return None
+
     async def login_account(self, account: Account) -> Optional[QwenSession]:
+        await self._ensure_cleanup()
         try:
             async with aiohttp.ClientSession() as session:
                 payload = {"email": account.username, "password": hash_password(account.password), "remember_me": True}
@@ -123,7 +178,9 @@ class QwenClient(UploadMixin):
                         return None
                     user_id = await fetch_user_id(session, token, AUTH_BASE_URL)
                     qs = QwenSession(account=account, token=token, user_id=user_id or account.username[:12])
-                    logger.info("Logged in: %s", account.username[:6])
+                    replace_or_append(self._sessions, qs)
+                    self._persist_sessions()
+                    logger.info("Logged in: %s (total: %d)", account.username[:6], len(self._sessions))
                     return qs
         except asyncio.TimeoutError:
             logger.warning("Login %s timed out", account.username[:6])
@@ -153,33 +210,19 @@ class QwenClient(UploadMixin):
             else:
                 logger.warning("Account %s failed, skipping", account.username[:6])
         if new_sessions:
-            self._sessions.extend(new_sessions)
             self._current_index = 0
-            save_sessions(self._sessions)
             logger.info("Prelogin done: %d new, %d total ready", len(new_sessions), len(self._sessions))
         elif not self._sessions:
             logger.error("All %d login attempts failed", count)
 
     async def switch_to_next(self) -> Optional[QwenSession]:
         async with self._lock:
-            if not self._sessions:
-                for account in ACCOUNTS:
-                    qs = await self.login_account(account)
-                    if qs:
-                        self._sessions.append(qs)
-                        self._current_index = 0
-                        save_sessions(self._sessions)
-                        return qs
-                return None
-
-            if self._current_index < len(self._sessions):
-                self._sessions[self._current_index].is_valid = False
-
-            valid = [i for i, s in enumerate(self._sessions) if s.is_valid]
+            self.prune_expired_sessions()
+            await self._ensure_cleanup()
+            valid = [i for i, s in enumerate(self._sessions) if s.is_valid and not s.is_expired()]
             if valid:
                 idx = random.choice(valid)
                 self._current_index = idx
-                save_sessions(self._sessions)
                 return self._sessions[idx]
 
             tried_usernames = {s.account.username for s in self._sessions}
@@ -188,24 +231,31 @@ class QwenClient(UploadMixin):
                     continue
                 qs = await self.login_account(account)
                 if qs:
-                    self._sessions[self._current_index] = qs
-                    save_sessions(self._sessions)
+                    idx = self._index_of_username(qs.username)
+                    self._current_index = idx if idx is not None else 0
                     return qs
 
-            current_account = self._sessions[self._current_index].account
-            qs = await self.login_account(current_account)
-            if qs:
-                self._sessions[self._current_index] = qs
-                save_sessions(self._sessions)
-                return qs
-
+            for account in ACCOUNTS:
+                qs = await self.login_account(account)
+                if qs:
+                    idx = self._index_of_username(qs.username)
+                    self._current_index = idx if idx is not None else 0
+                    return qs
             return None
 
     async def get_valid_session(self) -> Optional[QwenSession]:
+        self.prune_expired_sessions()
         await self._ensure_cleanup()
         session = self.current_session
-        if session and session.is_valid:
+        if session:
             return session
+        valid = [s for s in self._sessions if s.is_valid and not s.is_expired()]
+        if valid:
+            selected = random.choice(valid)
+            idx = self._index_of_username(selected.username)
+            if idx is not None:
+                self._current_index = idx
+            return selected
         return await self.switch_to_next()
 
     async def generate_video(
@@ -247,6 +297,7 @@ class QwenClient(UploadMixin):
             return await tts_service.synthesize(text, token, model=model, save_dir=save_dir or TTS_DIR)
 
     async def fetch_models(self, use_cache: bool = True) -> List[str]:
+        await self._ensure_cleanup()
         now = time.time()
         if use_cache and self._models and (now - self._models_fetch_time) < self._models_cache_ttl:
             return self._models
@@ -291,11 +342,10 @@ class QwenClient(UploadMixin):
         data_obj = data.get("data") or {}
         if not isinstance(data_obj, dict):
             raise RuntimeError(f"Create chat failed: {data}")
-        code = str(data_obj.get("code", "")).lower()
-        details = str(data_obj.get("details", "")).lower()
-        if code == "unauthorized" or "token" in details or "expired" in details or "log in" in details:
-            session.is_valid = False
-            raise TokenExpiredError(f"Token expired: {data_obj.get('details', '')}")
+        details = str(data_obj.get("details", ""))
+        if is_session_fatal_error(f"{data_obj.get('code', '')} {details}"):
+            self._invalidate_session(session)
+            raise TokenExpiredError(f"Token expired: {details}")
         raise RuntimeError(f"Create chat failed: {data}")
 
     async def create_chat(self, session: QwenSession, model: str) -> str:
@@ -311,7 +361,7 @@ class QwenClient(UploadMixin):
             ) as resp:
                 if resp.status != 200:
                     if resp.status in (401, 403):
-                        session.is_valid = False
+                        self._invalidate_session(session)
                         raise TokenExpiredError(f"Token expired: HTTP {resp.status}")
                     raise RuntimeError(f"Create chat HTTP {resp.status}")
                 data = await resp.json()
@@ -345,46 +395,6 @@ class QwenClient(UploadMixin):
                 timeout=aiohttp.ClientTimeout(total=REQUEST_TOTAL_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
-                    await _handle_chat_error(resp, session)
-                async for event in _iter_sse_events(resp, session):
+                    await handle_chat_error(self, resp, session)
+                async for event in iter_sse_events(self, resp, session):
                     yield event
-
-
-async def _handle_chat_error(resp, session):
-    if resp.status in (401, 403):
-        session.is_valid = False
-        raise TokenExpiredError(f"Token expired: HTTP {resp.status}")
-    body = await resp.text()
-    if "RateLimited" in body or "daily usage" in body:
-        session.is_valid = False
-        logger.warning("Session %s rate limited", session.username[:6])
-        raise TokenExpiredError(f"Rate limited: {body[:200]}")
-    logger.error("Chat HTTP %d: %s", resp.status, body[:500])
-    raise RuntimeError(f"Chat HTTP {resp.status}: {body[:200]}")
-
-
-def _check_error_line(line: str, session) -> None:
-    if not (line.startswith("{") and "success" in line):
-        return
-    err = json.loads(line)
-    if err.get("success", True):
-        return
-    msg = json.dumps(err, ensure_ascii=False)
-    if "RateLimited" in msg or "daily usage" in msg:
-        session.is_valid = False
-        raise TokenExpiredError(f"Rate limited: {msg}")
-    raise RuntimeError(f"Qwen API error: {msg}")
-
-
-async def _iter_sse_events(resp, session):
-    async for raw in resp.content:
-        line = raw.decode("utf-8", errors="replace").strip()
-        if not line.startswith("data:"):
-            _check_error_line(line, session)
-            continue
-        data_str = line[5:].strip()
-        if not data_str or data_str == "[DONE]":
-            continue
-        event = parse_sse_event(data_str)
-        if event:
-            yield event
