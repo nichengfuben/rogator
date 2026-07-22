@@ -48,7 +48,7 @@ python main.py [--port 8932] [--host 0.0.0.0] [--prelogin 1] [--log-level DEBUG]
 - `mvp/` — Standalone smoke-test scripts (chat.py, test_upload_analysis.py)
 - `achecker.py` — Project compliance checker (dir children, file lines, function length, nesting depth)
 - `amerger.py` — File content merge utility (all text files → single document)
-- Data directory: `data/qwen/` (models cache, state persistence)
+- Data directory: `persist/qwen/` (models cache, state persistence)
 
 ## Dependencies
 
