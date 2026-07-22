@@ -38,7 +38,7 @@ env/
 htmlcov/
 .tox/
 # Project specific
-data/qwen/
+persist/qwen/
 abnormis.txt
 *.log
 accounts.py
