@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
-from server.config import AppConfig, load_config
+from server.config import AppConfig, _loads_toml, load_config
 from server.model_thinking import load_model_entml_map, resolve_qwen_thinking, uses_entml_thinking
 from server.session_retry import parse_rate_limit_block_seconds, run_with_session_retry
 from server.session_store import QwenSession, save_sessions, load_session_store
@@ -31,6 +31,11 @@ class TestConfig(unittest.TestCase):
             cfg = load_config(p)
             self.assertEqual(cfg.prelogin, 5)
             self.assertEqual(cfg.max_retry_on_error, 2)
+
+    def test_loads_toml_parses_sections(self) -> None:
+        data = _loads_toml('[server]\nport = 9000\nhost = "127.0.0.1"\n')
+        self.assertEqual(data["server"]["port"], 9000)
+        self.assertEqual(data["server"]["host"], "127.0.0.1")
 
 
 class TestModelThinking(unittest.TestCase):

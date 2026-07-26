@@ -4,6 +4,9 @@ Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 An
 
 默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.30`。
 
+**平台**：macOS / Linux / Windows  
+**Python**：3.8 – 3.14
+
 ## 功能特性
 
 - **OpenAI 兼容**：`/v1/chat/completions`、模型列表、TTS、图片/视频生成
@@ -34,7 +37,18 @@ user@example.com,your-password,optional-label
 pip install -r requirements.txt
 ```
 
-主要依赖：`aiohttp>=3.9.0`、`echotools>=2.3.30`。
+开发与测试额外安装：
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+| 包 | 用途 |
+|----|------|
+| `aiohttp>=3.9.0` | HTTP 服务端与 Qwen 上游请求 |
+| `echotools>=2.3.30` | entml 工具调用、日志、thinking 协议 |
+| `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
+| `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
 
 ### 3. 配置（可选）
 
@@ -231,6 +245,7 @@ python scripts/build_prompt_preview.py
 ## 测试
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest tests/ -q
 ```
 
