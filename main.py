@@ -46,7 +46,7 @@ PRELOGIN_ACCOUNT_COUNT: int = CONFIG.prelogin
 PRELOGIN_TIMEOUT: float = CONFIG.prelogin_timeout
 
 APP_NAME: str = "Rogator"
-APP_VERSION: str = "2.1.0"
+APP_VERSION: str = "2.2.0"
 APP_DESCRIPTION: str = "Qwen 长文本处理适配服务器"
 SHUTDOWN_CANCEL_GRACE: float = 0.3
 SHUTDOWN_WAIT_IDLE_TIMEOUT: float = 10.0
