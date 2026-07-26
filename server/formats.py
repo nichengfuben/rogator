@@ -300,16 +300,18 @@ def build_openai_response(
 
     if tool_calls:
         message["content"] = None
-        message["tool_calls"] = []
-        for tc in tool_calls:
-            message["tool_calls"].append({
+        message["tool_calls"] = [
+            {
+                "index": i,
                 "id": tc.get("id"),
                 "type": tc.get("type", "function"),
                 "function": {
                     "name": tc.get("function", {}).get("name", ""),
                     "arguments": tc.get("function", {}).get("arguments", "{}"),
-                }
-            })
+                },
+            }
+            for i, tc in enumerate(tool_calls)
+        ]
     else:
         message["content"] = content
 

@@ -50,13 +50,14 @@ async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
 
 
 async def _close_block(resp, idx: int, disconnected: list) -> int:
+    """关闭 content block。返回已关闭的 index（不自增，避免与下一块 start 的 +=1 双跳）。"""
     if idx >= 0:
         await _safe_write(
             resp,
             f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': idx})}\n\n".encode(),
             disconnected,
         )
-    return idx + 1
+    return idx
 
 
 async def _send_anthropic_finish(resp, tool_calls, disconnected):
@@ -132,8 +133,7 @@ async def _send_thinking_delta(resp, content, block_idx, block_type, disconnecte
     if block_type != "thinking":
         if block_type is not None:
             block_idx = await _close_block(resp, block_idx, disconnected)
-        else:
-            block_idx += 1
+        block_idx += 1
         block_start = {
             "type": "content_block_start",
             "index": block_idx,

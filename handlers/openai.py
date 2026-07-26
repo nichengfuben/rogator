@@ -33,6 +33,36 @@ logger = get_logger("rogator")
 _ENTML_USER_MARKER = "<current_user_message>"
 
 
+# OpenAI / kimi-code 等 effort 档位：entml 仅 off|on|auto，档位一律映射为 on
+_EFFORT_ON_ALIASES = frozenset({
+    "low", "medium", "high", "xhigh", "minimal", "max", "default",
+})
+
+
+def _map_reasoning_effort(raw: Any) -> Optional[str]:
+    """映射 reasoning_effort / effort 值为 entml thinking_mode。
+
+    - none/off/false → off
+    - on/true/enabled → on
+    - low/medium/high/xhigh/... → on（档位仅表示开启强度，协议侧无分级）
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return "on" if raw else "off"
+    if isinstance(raw, (int, float)):
+        return "off" if raw == 0 else "on"
+    key = str(raw).strip().lower()
+    if not key:
+        return None
+    mode = normalize_thinking_mode(key)
+    if mode is not None:
+        return mode
+    if key in _EFFORT_ON_ALIASES:
+        return "on"
+    return None
+
+
 def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """从请求体提取 thinking 设置并构建 protocol_options。
 
@@ -40,6 +70,8 @@ def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     - thinking: true/false/"on"/"auto"/"off"
     - thinking: {type: enabled|disabled, budget_tokens|max_tokens|max_thinking_length}
     - 顶层 max_thinking_length / thinking_mode
+    - reasoning_effort: none|low|medium|high|xhigh|on|...（OpenAI / kimi-code）
+    - reasoning: {effort|mode|enabled|type, ...}
     """
     from echotools.exec.fncall.protocols.entml_thinking import parse_max_thinking_length
 
@@ -62,6 +94,8 @@ def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 mode = normalize_thinking_mode(t)
         if mode is None and "enabled" in raw:
             mode = "on" if raw.get("enabled") else "off"
+        if mode is None and "effort" in raw:
+            mode = _map_reasoning_effort(raw.get("effort"))
         for key in ("budget_tokens", "max_tokens", "max_thinking_length"):
             if key in raw:
                 max_len = parse_max_thinking_length(raw.get(key))
@@ -72,6 +106,31 @@ def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     if mode is None:
         mode = normalize_thinking_mode(body.get("thinking_mode"))
+
+    # OpenAI o-series / kimi-code：顶层 reasoning_effort
+    if mode is None and "reasoning_effort" in body:
+        mode = _map_reasoning_effort(body.get("reasoning_effort"))
+
+    # 部分客户端：reasoning: {effort: "high"} / {mode: "on"}
+    if mode is None:
+        reasoning = body.get("reasoning")
+        if isinstance(reasoning, dict):
+            if "effort" in reasoning:
+                mode = _map_reasoning_effort(reasoning.get("effort"))
+            if mode is None and "mode" in reasoning:
+                mode = normalize_thinking_mode(reasoning.get("mode"))
+            if mode is None and "enabled" in reasoning:
+                mode = "on" if reasoning.get("enabled") else "off"
+            if mode is None and "type" in reasoning:
+                mode = _map_reasoning_effort(reasoning.get("type"))
+            if max_len is None:
+                for key in ("budget_tokens", "max_tokens", "max_thinking_length"):
+                    if key in reasoning:
+                        max_len = parse_max_thinking_length(reasoning.get(key))
+                        if max_len is not None:
+                            break
+        elif reasoning is not None:
+            mode = _map_reasoning_effort(reasoning)
 
     if max_len is None:
         max_len = parse_max_thinking_length(body.get("max_thinking_length"))
