@@ -27,14 +27,17 @@ from core.media.video import VideoService
 from server.session_store import (
     CLEANUP_INTERVAL,
     QwenSession,
+    SessionStoreMeta,
     clean_expired,
     describe_sessions,
     fetch_user_id,
     is_session_fatal_error,
-    load_sessions,
+    load_session_store,
     mark_invalid as mark_invalid_in,
+    mask_username,
     replace_or_append,
     save_sessions,
+    valid_session_count,
 )
 from server.uploads import UploadMixin
 from server.formats import (
@@ -49,6 +52,7 @@ from server.formats import (
     build_qwen_message,
     extract_last_user_content,
 )
+from server.config import CONFIG
 
 logger = logging.getLogger("rogator")
 
@@ -56,13 +60,48 @@ logger = logging.getLogger("rogator")
 class QwenClient(UploadMixin):
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
-        self._sessions: List[QwenSession] = load_sessions()
-        self._current_index: int = 0
+        sessions, meta = load_session_store()
+        self._sessions: List[QwenSession] = sessions
+        self._current_index: int = meta.current_index
+        self._account_index: int = meta.account_index
+        self._blocked_accounts: Dict[str, float] = dict(meta.blocked_accounts)
         self._lock = asyncio.Lock()
         self._models: List[str] = list(DEFAULT_MODELS)
         self._models_fetch_time: float = 0
         self._models_cache_ttl: float = 300
         self._last_cleanup: float = 0.0
+        self._prelogin_target: int = CONFIG.prelogin
+
+    def _save_meta(self) -> List[str]:
+        return save_sessions(
+            self._sessions,
+            current_index=self._current_index,
+            account_index=self._account_index,
+            blocked_accounts=self._blocked_accounts,
+        )
+
+    def block_account(self, username: str, block_seconds: float) -> None:
+        """限流/耗尽账号：写入 blocked_accounts 并立即落盘。"""
+        until = time.time() + max(block_seconds, 60.0)
+        self._blocked_accounts[username] = until
+        self._save_meta()
+        logger.info(
+            "Blocked account %s for %.0fs",
+            mask_username(username), block_seconds,
+        )
+
+    def _is_account_blocked(self, username: str) -> bool:
+        until = self._blocked_accounts.get(username)
+        if until is None:
+            return False
+        if time.time() >= until:
+            self._blocked_accounts.pop(username, None)
+            return False
+        return True
+
+    @property
+    def current_session_username(self) -> Optional[str]:
+        return self._session_username_at_current()
 
     def _fix_current_index(self, previous_username: Optional[str] = None) -> None:
         """session 被移除后修正 current_index。"""
@@ -94,7 +133,7 @@ class QwenClient(UploadMixin):
     def cleanup_expired_sessions(self) -> List[str]:
         """按 JWT exp-30s 清理过期/失效 session 并落盘（后台任务用，无节流）。"""
         previous_username = self._session_username_at_current()
-        removed = save_sessions(self._sessions)
+        removed = self._save_meta()
         if removed:
             self._fix_current_index(previous_username)
             logger.info("Session cleanup: removed %d expired/invalid session(s)", len(removed))
@@ -103,7 +142,7 @@ class QwenClient(UploadMixin):
     def _persist_sessions(self) -> List[str]:
         """清理并持久化 session 池，同步修正 current_index。"""
         previous_username = self._session_username_at_current()
-        removed = save_sessions(self._sessions)
+        removed = self._save_meta()
         self._fix_current_index(previous_username)
         return removed
 
@@ -189,63 +228,105 @@ class QwenClient(UploadMixin):
             logger.warning("Login exception for %s: %s", account.username[:6], e)
             return None
 
-    async def prelogin_accounts(self, count: int) -> None:
+    async def prelogin_accounts(self, count: Optional[int] = None) -> None:
+        """预登录至 count 个有效 session；count 默认取 config.prelogin。"""
+        target = self._prelogin_target if count is None else count
         await self._ensure_cleanup()
         if not ACCOUNTS:
             logger.warning("No accounts available")
             return
-        existing_usernames = {s.username for s in self._sessions}
-        shuffled = [a for a in ACCOUNTS if a.username not in existing_usernames]
-        random.shuffle(shuffled)
-        new_sessions: List[QwenSession] = []
-        need = max(0, count - len(self._sessions))
-        for i, account in enumerate(shuffled):
-            if len(new_sessions) >= need:
+        need = max(0, target - valid_session_count(self._sessions))
+        if need <= 0:
+            return
+        logged = 0
+        for _ in range(need):
+            account = self._pick_account_for_login()
+            if account is None:
                 break
-            logger.info("Trying account %d/%d (%s)...", i + 1, need, account.username[:6])
+            logger.info("Prelogin trying %s...", mask_username(account.username))
             qs = await self.login_account(account)
             if qs:
-                new_sessions.append(qs)
-                logger.info("Account %s OK", account.username[:6])
+                logged += 1
+                logger.info("Prelogin account %s OK", mask_username(account.username))
             else:
-                logger.warning("Account %s failed, skipping", account.username[:6])
-        if new_sessions:
-            self._current_index = 0
-            logger.info("Prelogin done: %d new, %d total ready", len(new_sessions), len(self._sessions))
-        elif not self._sessions:
-            logger.error("All %d login attempts failed", count)
+                logger.warning("Prelogin account %s failed", mask_username(account.username))
+        if logged:
+            logger.info(
+                "Prelogin done: %d new, %d total ready (target=%d)",
+                logged, valid_session_count(self._sessions), target,
+            )
+        elif valid_session_count(self._sessions) == 0:
+            logger.error("All prelogin attempts failed (target=%d)", target)
 
-    async def switch_to_next(self) -> Optional[QwenSession]:
+    async def ensure_prelogin(self) -> None:
+        """sessions 少于 prelogin 时立即补登。"""
+        await self.prelogin_accounts(self._prelogin_target)
+
+    def _pick_account_for_login(self, *, skip: Optional[set[str]] = None) -> Optional[Account]:
+        if not ACCOUNTS:
+            return None
+        skip = skip or set()
+        active = {s.username for s in self._sessions if s.is_valid and not s.is_expired()}
+        n = len(ACCOUNTS)
+        for offset in range(n):
+            idx = (self._account_index + offset) % n
+            account = ACCOUNTS[idx]
+            if account.username in skip:
+                continue
+            if account.username in active:
+                continue
+            if self._is_account_blocked(account.username):
+                continue
+            self._account_index = (idx + 1) % n
+            return account
+        return None
+
+    async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[QwenSession]:
         async with self._lock:
             self.prune_expired_sessions()
             await self._ensure_cleanup()
-            valid = [i for i, s in enumerate(self._sessions) if s.is_valid and not s.is_expired()]
-            if valid:
-                idx = random.choice(valid)
+
+            valid_indices = [
+                i for i, s in enumerate(self._sessions)
+                if s.is_valid and not s.is_expired()
+                and (exclude_username is None or s.username != exclude_username)
+            ]
+            if valid_indices:
+                idx = random.choice(valid_indices)
                 self._current_index = idx
+                self._save_meta()
                 return self._sessions[idx]
 
-            tried_usernames = {s.account.username for s in self._sessions}
-            for account in ACCOUNTS:
-                if account.username in tried_usernames:
-                    continue
+            skip = {exclude_username} if exclude_username else set()
+            for _ in range(len(ACCOUNTS)):
+                account = self._pick_account_for_login(skip=skip)
+                if account is None:
+                    break
                 qs = await self.login_account(account)
-                if qs:
+                if qs and qs.username != exclude_username:
                     idx = self._index_of_username(qs.username)
                     self._current_index = idx if idx is not None else 0
                     return qs
+                skip.add(account.username)
 
-            for account in ACCOUNTS:
-                qs = await self.login_account(account)
-                if qs:
-                    idx = self._index_of_username(qs.username)
-                    self._current_index = idx if idx is not None else 0
-                    return qs
+            await self.ensure_prelogin()
+            valid_indices = [
+                i for i, s in enumerate(self._sessions)
+                if s.is_valid and not s.is_expired()
+                and (exclude_username is None or s.username != exclude_username)
+            ]
+            if valid_indices:
+                idx = random.choice(valid_indices)
+                self._current_index = idx
+                self._save_meta()
+                return self._sessions[idx]
             return None
 
     async def get_valid_session(self) -> Optional[QwenSession]:
         self.prune_expired_sessions()
         await self._ensure_cleanup()
+        if valid_session_count(self._sessions) < self._prelogin_target:
+            await self.ensure_prelogin()
         session = self.current_session
         if session:
             return session
@@ -255,6 +336,7 @@ class QwenClient(UploadMixin):
             idx = self._index_of_username(selected.username)
             if idx is not None:
                 self._current_index = idx
+                self._save_meta()
             return selected
         return await self.switch_to_next()
 
@@ -379,13 +461,20 @@ class QwenClient(UploadMixin):
         messages: List[Dict[str, Any]],
         model: str = "qwen3.7-max",
         files: Optional[List[Dict[str, Any]]] = None,
+        *,
+        qwen_thinking_enabled: bool = False,
+        qwen_thinking_mode: str = "NoThinking",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if not messages:
             raise ValueError("messages cannot be empty")
         user_content = messages[0].get("content", "")
         if not user_content:
             user_content = extract_last_user_content(messages)
-        qwen_message = build_qwen_message(user_content, model, files)
+        qwen_message = build_qwen_message(
+            user_content, model, files,
+            thinking_enabled=qwen_thinking_enabled,
+            thinking_mode=qwen_thinking_mode,
+        )
         payload = build_chat_payload(chat_id, model, qwen_message)
         headers = build_headers(session.token, chat_id=chat_id, include_sse=True)
         async with aiohttp.ClientSession() as s:

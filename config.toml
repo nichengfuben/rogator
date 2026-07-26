@@ -1,0 +1,20 @@
+# Rogator 服务配置
+
+[server]
+port = 8932
+host = "0.0.0.0"
+prelogin = 3
+
+[retry]
+# 换号重试次数（不含首次尝试）
+max_retry_on_error = 3
+
+[limits]
+max_concurrent = 8
+max_queue_size = 1000
+max_chars = 1024000
+
+[timeout]
+request_total = 600.0
+login = 30.0
+prelogin = 120.0

@@ -88,21 +88,44 @@ class QwenSession:
         )
 
 
-def load_sessions() -> List[QwenSession]:
-    """启动时从磁盘恢复登录状态。"""
+@dataclass
+class SessionStoreMeta:
+    """sessions.json 元数据（索引、封禁账号）。"""
+
+    current_index: int = 0
+    account_index: int = 0
+    blocked_accounts: Dict[str, float] = field(default_factory=dict)
+
+
+def load_session_store() -> tuple[List[QwenSession], SessionStoreMeta]:
+    """启动时从磁盘恢复 session 池与元数据。"""
+    meta = SessionStoreMeta()
     try:
         p = Path(SESSIONS_FILE)
         if not p.exists():
-            return []
+            return [], meta
         data = json.loads(p.read_text(encoding="utf-8"))
+        meta.current_index = int(data.get("current_index", 0))
+        meta.account_index = int(data.get("account_index", 0))
+        raw_blocked = data.get("blocked_accounts") or {}
+        if isinstance(raw_blocked, dict):
+            meta.blocked_accounts = {
+                str(k): float(v) for k, v in raw_blocked.items()
+            }
         sessions = [QwenSession.from_dict(item) for item in data.get("sessions", [])]
         restored = [s for s in sessions if not s.is_expired() and s.is_valid]
         if restored:
             logger.info("Restored %d session(s) from disk", len(restored))
-        return restored
+        return restored, meta
     except Exception as e:
         logger.warning("Failed to load sessions: %s", e)
-        return []
+        return [], meta
+
+
+def load_sessions() -> List[QwenSession]:
+    """兼容旧接口：仅返回 session 列表。"""
+    sessions, _ = load_session_store()
+    return sessions
 
 
 def is_session_fatal_error(text: str) -> bool:
@@ -119,17 +142,33 @@ def is_session_fatal_error(text: str) -> bool:
     return False
 
 
-def save_sessions(sessions: List[QwenSession]) -> List[str]:
+def save_sessions(
+    sessions: List[QwenSession],
+    *,
+    current_index: int = 0,
+    account_index: int = 0,
+    blocked_accounts: Optional[Dict[str, float]] = None,
+) -> List[str]:
     """清理过期/失效 session 后原子写入磁盘，原地更新列表并返回被移除的 username。"""
     cleaned, removed = clean_expired(sessions)
     sessions[:] = cleaned
     if removed:
         logger.info("Cleanup: removed %d expired/invalid session(s)", len(removed))
+    now = time.time()
+    blocked = {
+        k: v for k, v in (blocked_accounts or {}).items()
+        if v > now
+    }
+    if current_index >= len(sessions):
+        current_index = 0
     try:
         Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
         data = {
             "sessions": [s.to_dict() for s in sessions],
-            "updated_at": int(time.time()),
+            "current_index": current_index,
+            "account_index": account_index,
+            "blocked_accounts": blocked,
+            "updated_at": int(now),
             "count": len(sessions),
         }
         tmp_path = f"{SESSIONS_FILE}.tmp"

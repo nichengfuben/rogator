@@ -30,6 +30,9 @@ from handlers.openai import (
     _chat_once,
     convert_tools_to_openai,
 )
+from server.message_history import merge_anthropic_assistant_blocks
+from server.model_thinking import resolve_qwen_thinking
+from server.session_retry import stream_with_session_retry
 
 logger = get_logger("rogator")
 
@@ -182,9 +185,13 @@ async def _stream_anthropic(
     last_thinking_len = 0
     pending_tc_count = 0  # 已流式发送的 tool_use 数量
     try:
-        async for event in _chat_once(
-            state, messages, model, tools, req_id, protocol_options=protocol_options,
-        ):
+        async def _make_chat_stream():
+            async for event in _chat_once(
+                state, messages, model, tools, req_id, protocol_options=protocol_options,
+            ):
+                yield event
+
+        async for event in stream_with_session_retry(req_id, state, _make_chat_stream):
             if disconnected[0]:
                 break
             etype = event.get("type")
@@ -370,8 +377,9 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
             if btype == "text" or "text" in block and btype is None:
                 text_parts.append(str(block.get("text") or ""))
             elif btype == "thinking":
-                # 历史思考链不回灌到可见文本
-                continue
+                text_parts.append(str(block.get("thinking") or block.get("data") or ""))
+            elif btype == "reasoning":
+                text_parts.append(str(block.get("text") or block.get("reasoning") or ""))
             elif btype == "tool_use":
                 tool_calls.append({
                     "id": block.get("id") or "",
@@ -396,17 +404,23 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
                     text_parts.append(str(block.get("text") or ""))
 
         if role == "assistant" and tool_calls:
+            merged = merge_anthropic_assistant_blocks(content) if isinstance(content, list) else "\n".join(text_parts)
             out.append({
                 "role": "assistant",
-                "content": "\n".join(p for p in text_parts if p) or None,
+                "content": merged or "\n".join(p for p in text_parts if p) or None,
                 "tool_calls": tool_calls,
             })
         elif role == "tool":
             # 已在上面 tool_result 分支写出
             continue
         else:
-            # 纯 tool_result 消息可能没有 text；跳过空 user
-            joined = "\n".join(p for p in text_parts if p)
+            if isinstance(content, list) and any(
+                isinstance(b, dict) and b.get("type") in ("thinking", "reasoning")
+                for b in content
+            ):
+                joined = merge_anthropic_assistant_blocks(content)
+            else:
+                joined = "\n".join(p for p in text_parts if p)
             # 若本条只有 tool_result 已 push，则不要再 push 空 user
             only_tool_results = all(
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in content
@@ -439,10 +453,12 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     if not messages:
         return _error_response(400, "messages is required")
     protocol_options = _build_protocol_options(body)
+    req_mode = (protocol_options or {}).get("thinking_mode", "off")
+    _, _, use_entml = resolve_qwen_thinking(model, req_mode)
+    qwen_thinking = not use_entml and req_mode not in (None, "off")
     logger.info(
-        "Anthropic: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s",
-        len(messages), model, stream, len(tools),
-        (protocol_options or {}).get("thinking_mode", "off"),
+        "Anthropic: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s, qwen_thinking=%s",
+        len(messages), model, stream, len(tools), req_mode, qwen_thinking,
     )
     req_id = _gen_request_id()
     if not stream:

@@ -1,0 +1,63 @@
+{
+  "model": "qwen3.7-max",
+  "thinking": "on",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "查询指定城市当前天气",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string", "description": "城市名"}
+          },
+          "required": ["city"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_write",
+        "description": "写入待办事项",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content": {"type": "string"},
+            "priority": {"type": "string", "enum": ["low", "medium", "high"]}
+          },
+          "required": ["content"]
+        }
+      }
+    }
+  ],
+  "messages": [
+    {"role": "system", "content": "你是编程助手，回答简洁。"},
+    {"role": "user", "content": "帮我查一下北京天气"},
+    {
+      "role": "assistant",
+      "reasoning": "用户要查天气，应先调用 get_weather 工具。",
+      "content": "我来查一下北京当前的天气。",
+      "tool_calls": [{
+        "id": "call_weather_001",
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "arguments": "{\"city\": \"北京\"}"
+        }
+      }]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_weather_001",
+      "content": "{\"city\": \"北京\", \"temp\": 28, \"condition\": \"晴\"}"
+    },
+    {
+      "role": "assistant",
+      "reasoning": "工具返回 28°C 晴，可以直接总结。",
+      "content": "北京现在 28°C，晴。"
+    },
+    {"role": "user", "content": "那上海呢？顺便 todo 加一条：提醒我带伞。"}
+  ]
+}
