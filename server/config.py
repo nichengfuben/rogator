@@ -2,12 +2,24 @@ from __future__ import annotations
 
 """从 config.toml 加载运行时配置。"""
 
-import tomllib
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
+if sys.version_info >= (3, 11):
+    import tomllib as _toml_loader
+else:
+    import tomli as _toml_loader
+
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
+
+
+def _loads_toml(text: str) -> Dict[str, Any]:
+    """解析 TOML 文本；3.11+ 用 stdlib tomllib，否则 tomli。"""
+    if sys.version_info >= (3, 11):
+        return _toml_loader.loads(text)
+    return _toml_loader.loads(text.encode("utf-8"))
 
 
 @dataclass(frozen=True)
@@ -37,7 +49,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     cfg_path = path or _CONFIG_PATH
     raw: Dict[str, Any] = {}
     if cfg_path.exists():
-        raw = tomllib.loads(cfg_path.read_text(encoding="utf-8"))
+        raw = _loads_toml(cfg_path.read_text(encoding="utf-8"))
 
     return AppConfig(
         port=int(_deep_get(raw, "server", "port", default=8932)),
