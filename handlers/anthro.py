@@ -19,6 +19,8 @@ from server.formats import (
     convert_to_anthropic,
 )
 from state import AppState, QueueFullError
+from echotools.fncall import FncallStreamParser
+
 from handlers import get_state
 from handlers.openai import (
     _process_openai_non_stream,
@@ -152,6 +154,8 @@ async def _stream_anthropic(resp, state, messages, model, tools, req_id, disconn
     block_idx = -1
     block_type: Optional[str] = None
     full_answer = ""
+    parser = FncallStreamParser(protocol=state.protocol, tools=tools)
+    last_safe_len = 0
     try:
         async for event in _chat_once(state, messages, model, tools, req_id):
             if disconnected[0]:
@@ -159,6 +163,9 @@ async def _stream_anthropic(resp, state, messages, model, tools, req_id, disconn
             etype = event.get("type")
             content = event.get("content", "")
             if etype == "thinking":
+                if block_type == "text":
+                    block_idx = await _close_block(resp, block_idx, disconnected)
+                    block_type = None
                 block_idx, block_type, ok = await _send_thinking_delta(
                     resp, content, block_idx, block_type, disconnected
                 )
@@ -166,6 +173,40 @@ async def _stream_anthropic(resp, state, messages, model, tools, req_id, disconn
                     break
             elif etype == "answer":
                 full_answer += content
+                parser.feed(content)
+                safe_text = parser.partial_text
+                if len(safe_text) > last_safe_len:
+                    new_text = safe_text[last_safe_len:]
+                    last_safe_len = len(safe_text)
+                    if new_text:
+                        if block_type != "text":
+                            if block_type == "thinking":
+                                block_idx = await _close_block(resp, block_idx, disconnected)
+                                block_type = None
+                            block_idx += 1
+                            block_start = {
+                                "type": "content_block_start",
+                                "index": block_idx,
+                                "content_block": {"type": "text", "text": ""},
+                            }
+                            if not await _safe_write(
+                                resp,
+                                f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n".encode(),
+                                disconnected,
+                            ):
+                                break
+                            block_type = "text"
+                        block_delta = {
+                            "type": "content_block_delta",
+                            "index": block_idx,
+                            "delta": {"type": "text_delta", "text": new_text},
+                        }
+                        if not await _safe_write(
+                            resp,
+                            f"event: content_block_delta\ndata: {json.dumps(block_delta)}\n\n".encode(),
+                            disconnected,
+                        ):
+                            break
     except asyncio.CancelledError:
         logger.info("Stream cancelled %s", req_id)
         await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
@@ -184,15 +225,11 @@ async def _stream_anthropic(resp, state, messages, model, tools, req_id, disconn
 
 
 async def _send_post_stream(resp, state, full_answer, block_type, block_idx, tools, disconnected):
-    if block_type == "thinking":
+    # 关闭正在开着的块（文本已实时推出，thinking 块可能未关）
+    if block_type is not None:
         block_idx = await _close_block(resp, block_idx, disconnected)
         block_type = None
-    clean_text, tool_calls = _parse_tool_calls(state, full_answer, tools)
-    if clean_text and clean_text.strip():
-        if block_type is not None:
-            block_idx = await _close_block(resp, block_idx, disconnected)
-        block_idx = await _send_text_block(resp, clean_text, block_idx, disconnected)
-        block_type = None
+    _, tool_calls = _parse_tool_calls(state, full_answer, tools)
     block_idx = await _send_tool_use_blocks(resp, tool_calls, block_idx, disconnected)
     await _send_anthropic_finish(resp, tool_calls, disconnected)
 

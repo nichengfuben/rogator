@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import time
+import base64
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,12 +19,29 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from accounts import Account
-from server.formats import DATA_DIR, DEFAULT_USER_AGENT, TOKEN_EXPIRE_SECONDS
+from server.formats import DATA_DIR, DEFAULT_USER_AGENT
 
 logger = logging.getLogger("rogator")
 
 SESSIONS_FILE: str = f"{DATA_DIR}/sessions.json"
 CLEANUP_INTERVAL: float = 60.0
+
+
+def _jwt_exp(token: str) -> Optional[float]:
+    """解析 JWT payload 中的 exp 字段，返回过期时间戳（Unix 秒）。"""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        payload_b64 = parts[1]
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        exp = payload.get("exp")
+        return float(exp) if exp is not None else None
+    except Exception:
+        return None
 
 
 @dataclass
@@ -39,8 +57,14 @@ class QwenSession:
         return self.account.username
 
     def is_expired(self) -> bool:
-        """检查 token 是否超过 12 小时"""
-        return time.time() - self.login_time > TOKEN_EXPIRE_SECONDS
+        """通过 JWT exp 字段判断 token 是否过期（提前 30 秒清理）。"""
+        if not self.token:
+            return True
+        exp = _jwt_exp(self.token)
+        if exp is not None:
+            return time.time() >= exp - 30
+        # JWT 解析失败则视为已过期，强制重新登录
+        return True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
