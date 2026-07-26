@@ -1,5 +1,5 @@
 # Rogator runtime — Python 3.8–3.14, macOS / Linux / Windows
 aiohttp>=3.9.0
-echotools>=2.3.30
+echotools>=2.3.31
 typing-extensions>=4.7.0
 tomli>=2.0.0; python_version < "3.11"
