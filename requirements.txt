@@ -1,2 +1,2 @@
 aiohttp>=3.9.0
-echotools>=2.3.24
+echotools>=2.3.27

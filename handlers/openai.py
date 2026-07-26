@@ -10,6 +10,7 @@ from aiohttp import web
 
 from echotools.fncall import FncallStreamParser, inject_fncall
 from echotools.logger import get_logger
+from echotools.exec.fncall.protocols.entml_thinking import normalize_thinking_mode
 
 from handlers import EmptyResponseError, fold_system_into_user, get_state
 from server.formats import (
@@ -29,6 +30,23 @@ from state import AppState, QueueFullError
 logger = get_logger("rogator")
 
 _ENTML_USER_MARKER = "<current_user_message>"
+
+
+def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """从请求体提取 thinking 设置并构建 protocol_options。"""
+    raw = body.get("thinking")
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        mode = "on" if raw else "off"
+    elif isinstance(raw, dict):
+        t = raw.get("type", "")
+        mode = "on" if t == "enabled" else "off"
+    else:
+        mode = normalize_thinking_mode(raw) or "off"
+    if mode == "off":
+        return None
+    return {"thinking_mode": mode}
 
 
 def _entml_prompt_header(prompt: str) -> str:
@@ -78,7 +96,7 @@ def _parse_tool_calls(state: AppState, full_answer: str, tools: List[Dict]) -> T
         return full_answer, []
 
 
-async def _prepare_stream(state, messages, model, tools, req_id):
+async def _prepare_stream(state, messages, model, tools, req_id, protocol_options=None):
     """准备工作（获取session、构建消息、上传文件、创建chat），单次尝试"""
     session = await state.client.get_valid_session()
     if not session:
@@ -87,7 +105,8 @@ async def _prepare_stream(state, messages, model, tools, req_id):
     image_urls = state.client.extract_image_urls(messages)
     messages = fold_system_into_user(messages)
     openai_tools = convert_tools_to_openai(tools)
-    injected = inject_fncall(messages, openai_tools, state.protocol, lang="zh")
+    injected = inject_fncall(messages, openai_tools, state.protocol, lang="zh",
+                             protocol_options=protocol_options)
     full_content = injected[0]["content"]
     final_messages = injected
     send_text, filename, file_bytes = state.splitter.split(full_content)
@@ -119,20 +138,20 @@ async def _prepare_stream(state, messages, model, tools, req_id):
     return session, final_messages, files, chat_id
 
 
-async def _run_prepare_once(state, messages, model, tools, req_id):
+async def _run_prepare_once(state, messages, model, tools, req_id, protocol_options=None):
     """单次准备，失败后切号再向上抛出。"""
     try:
-        return await _prepare_stream(state, messages, model, tools, req_id)
+        return await _prepare_stream(state, messages, model, tools, req_id, protocol_options)
     except (TokenExpiredError, EmptyResponseError, ConnectionError) as e:
         logger.warning("Prepare failed with %s: %s, switching session", type(e).__name__, e)
         await state.client.switch_to_next()
         raise
 
 
-async def _chat_once(state, messages, model, tools, req_id, files=None) -> AsyncGenerator[Dict[str, Any], None]:
+async def _chat_once(state, messages, model, tools, req_id, files=None, protocol_options=None) -> AsyncGenerator[Dict[str, Any], None]:
     """单次聊天，TokenExpiredError 切号后原样抛给上层。"""
     session, final_messages, uploaded_files, chat_id = await _run_prepare_once(
-        state, messages, model, tools, req_id
+        state, messages, model, tools, req_id, protocol_options
     )
     if files is not None:
         uploaded_files = files
@@ -147,12 +166,12 @@ async def _chat_once(state, messages, model, tools, req_id, files=None) -> Async
         raise
 
 
-async def _process_openai_non_stream(state, messages, model, req_id, tools):
+async def _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options=None):
     """非流式处理 - 单次尝试"""
     response_parts = []
     think_parts = []
     event_count = 0
-    async for event in _chat_once(state, messages, model, tools, req_id):
+    async for event in _chat_once(state, messages, model, tools, req_id, protocol_options=protocol_options):
         event_count += 1
         if event.get("type") == "answer":
             response_parts.append(event.get("content", ""))
@@ -189,28 +208,38 @@ async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
         return False
 
 
-async def _process_stream_event(resp, event, parser, model, chunk_id, last_safe_len, disconnected):
-    """处理单个流式事件，返回 (answer_chunk, thinking_chunk, last_safe_len, ok)。"""
-    etype = event.get("type")
-    content = event.get("content", "")
-    if etype == "thinking":
-        if not content:
-            return "", content, last_safe_len, True
-        chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=content)
-        ok = await _safe_write(resp, f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected)
-        return "", content, last_safe_len, ok
-    if etype == "answer":
-        parser.feed(content)
-        safe_text = parser.partial_text
-        if len(safe_text) > last_safe_len:
-            new_text = safe_text[last_safe_len:]
-            last_safe_len = len(safe_text)
-            if new_text:
-                chunk = build_openai_chunk(model, chunk_id=chunk_id, content=new_text)
-                ok = await _safe_write(resp, f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected)
-                return content, "", last_safe_len, ok
-        return content, "", last_safe_len, True
-    return "", "", last_safe_len, True
+async def _emit_chunk(resp, chunk: Dict[str, Any], disconnected: list) -> bool:
+    return await _safe_write(
+        resp,
+        f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"),
+        disconnected,
+    )
+
+
+async def _send_stream_chunks(
+    resp, state, full_answer, tools, model, chunk_id, disconnected,
+    already_sent_tc_count: int = 0,
+):
+    """发送尚未流式发送的 tool_calls 及结束块。"""
+    _, all_tool_calls = _parse_tool_calls(state, full_answer, tools)
+    remaining = all_tool_calls[already_sent_tc_count:]
+    for i, tc in enumerate(remaining):
+        openai_tc = [{
+            "index": already_sent_tc_count + i,
+            "id": tc.get("id"),
+            "type": "function",
+            "function": {
+                "name": tc.get("function", {}).get("name"),
+                "arguments": tc.get("function", {}).get("arguments", ""),
+            },
+        }]
+        chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
+        if not await _emit_chunk(resp, chunk, disconnected):
+            break
+    finish_reason = "tool_calls" if all_tool_calls else "stop"
+    chunk = build_openai_chunk(model, chunk_id=chunk_id, finish_reason=finish_reason)
+    await _emit_chunk(resp, chunk, disconnected)
+    await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
 
 
 # ============================================================
@@ -230,18 +259,20 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     tools = body.get("tools", [])
     if not messages:
         return _error_response(400, "messages is required")
-    logger.info("OpenAI: %d messages, model=%s, stream=%s, tools=%d",
-                len(messages), model, stream, len(tools))
+    protocol_options = _build_protocol_options(body)
+    logger.info("OpenAI: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s",
+                len(messages), model, stream, len(tools),
+                (protocol_options or {}).get("thinking_mode", "off"))
     req_id = _gen_request_id()
     if not stream:
-        return await _handle_non_stream(state, messages, model, req_id, tools)
-    return await _handle_stream(request, state, messages, model, req_id, tools)
+        return await _handle_non_stream(state, messages, model, req_id, tools, protocol_options)
+    return await _handle_stream(request, state, messages, model, req_id, tools, protocol_options)
 
 
-async def _handle_non_stream(state, messages, model, req_id, tools):
+async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
     try:
         result = await state.scheduler.submit(
-            lambda: _process_openai_non_stream(state, messages, model, req_id, tools))
+            lambda: _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options))
         return _json_response(result)
     except QueueFullError as e:
         return web.Response(status=503, text=str(e))
@@ -255,26 +286,7 @@ async def _handle_non_stream(state, messages, model, req_id, tools):
         return _error_response(500, str(e))
 
 
-async def _send_stream_chunks(resp, state, full_answer, tools, model, chunk_id, disconnected):
-    """发送工具调用块和结束块"""
-    _, tool_calls = _parse_tool_calls(state, full_answer, tools)
-    if tool_calls:
-        for i, tc in enumerate(tool_calls):
-            openai_tc = [{
-                "index": i, "id": tc.get("id"), "type": "function",
-                "function": {"name": tc.get("function", {}).get("name"),
-                             "arguments": tc.get("function", {}).get("arguments", "")},
-            }]
-            chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
-            if not await _safe_write(resp, f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected):
-                break
-    finish_reason = "tool_calls" if tool_calls else "stop"
-    chunk = build_openai_chunk(model, chunk_id=chunk_id, finish_reason=finish_reason)
-    await _safe_write(resp, f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected)
-    await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
-
-
-async def _handle_stream(request, state, messages, model, req_id, tools):
+async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None):
     resp = web.StreamResponse(
         status=200,
         headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
@@ -287,17 +299,67 @@ async def _handle_stream(request, state, messages, model, req_id, tools):
     full_thinking = ""
     parser = FncallStreamParser(protocol=state.protocol, tools=tools)
     last_safe_len = 0
+    last_thinking_len = 0
+    pending_tc_index = 0  # 已流式发送的 tool call 数量
     try:
-        async for event in _chat_once(state, messages, model, tools, req_id):
+        async for event in _chat_once(state, messages, model, tools, req_id,
+                                      protocol_options=protocol_options):
             if disconnected[0]:
                 break
-            answer_chunk, think_chunk, last_safe_len, ok = await _process_stream_event(
-                resp, event, parser, model, chunk_id, last_safe_len, disconnected
-            )
-            full_answer += answer_chunk
-            full_thinking += think_chunk
-            if not ok:
-                break
+            etype = event.get("type")
+            content = event.get("content", "")
+
+            if etype == "thinking":
+                # 上游原生 thinking 事件
+                full_thinking += content
+                if content:
+                    chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=content)
+                    if not await _emit_chunk(resp, chunk, disconnected):
+                        break
+                continue
+
+            if etype != "answer":
+                continue
+
+            full_answer += content
+            parser.feed(content)
+
+            # 发送 <entml:thinking> 块中新产生的思考内容
+            pt = parser.partial_thinking
+            if len(pt) > last_thinking_len:
+                new_thinking = pt[last_thinking_len:]
+                last_thinking_len = len(pt)
+                full_thinking += new_thinking
+                chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=new_thinking)
+                if not await _emit_chunk(resp, chunk, disconnected):
+                    break
+
+            # 发送新产生的可见文本
+            safe_text = parser.partial_text
+            if len(safe_text) > last_safe_len:
+                new_text = safe_text[last_safe_len:]
+                last_safe_len = len(safe_text)
+                chunk = build_openai_chunk(model, chunk_id=chunk_id, content=new_text)
+                if not await _emit_chunk(resp, chunk, disconnected):
+                    break
+
+            # 增量发送已完整解析的 tool calls
+            for tc in parser.get_ready_tool_calls():
+                tc = _fix_tool_call_id(tc)
+                openai_tc = [{
+                    "index": pending_tc_index,
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tc["function"]["name"],
+                        "arguments": tc["function"]["arguments"],
+                    },
+                }]
+                chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
+                if not await _emit_chunk(resp, chunk, disconnected):
+                    break
+                pending_tc_index += 1
+
     except asyncio.CancelledError:
         await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
         return resp
@@ -312,5 +374,6 @@ async def _handle_stream(request, state, messages, model, req_id, tools):
     if disconnected[0]:
         logger.info("Client disconnected during stream %s", req_id)
         return resp
-    await _send_stream_chunks(resp, state, full_answer, tools, model, chunk_id, disconnected)
+    await _send_stream_chunks(resp, state, full_answer, tools, model, chunk_id, disconnected,
+                              already_sent_tc_count=pending_tc_index)
     return resp
