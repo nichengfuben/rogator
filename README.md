@@ -2,7 +2,7 @@
 
 Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 Anthropic 兼容 API 暴露给上游客户端。
 
-默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.30`。
+默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.31`。
 
 **平台**：macOS / Linux / Windows  
 **Python**：3.8 – 3.14
@@ -46,7 +46,7 @@ pip install -r requirements-dev.txt
 | 包 | 用途 |
 |----|------|
 | `aiohttp>=3.9.0` | HTTP 服务端与 Qwen 上游请求 |
-| `echotools>=2.3.30` | entml 工具调用、日志、thinking 协议 |
+| `echotools>=2.3.31` | entml 工具调用、日志、thinking 协议 |
 | `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
 | `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
 
