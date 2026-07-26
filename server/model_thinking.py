@@ -51,7 +51,7 @@ _MODEL_ENTML_MAP: Dict[str, bool] = load_model_entml_map()
 
 
 def uses_entml_thinking(model: str) -> bool:
-    """True=用 entml 传 thinking（上游 NoThinking）；False=上游原生思考。"""
+    """True=用 entml 传 thinking（上游 Fast）；False=上游原生思考。"""
     return _MODEL_ENTML_MAP.get(model, _DEFAULT_ENTML)
 
 
@@ -61,17 +61,17 @@ def resolve_qwen_thinking(
 ) -> Tuple[bool, str, bool]:
     """返回 (qwen_thinking_enabled, qwen_thinking_mode, use_entml_protocol)。
 
-    - entml 模型：上游永远 NoThinking，thinking 由 entml 解析。
-    - 非 entml 模型：请求非 off 时上游开思考（含 auto）；显式 off 时 NoThinking。
+    - entml 模型：上游永远 Fast，thinking 由 entml 解析。
+    - 非 entml 模型：请求非 off 时上游开思考（含 auto）；显式 off 时 Fast。
     """
     mode = normalize_thinking_mode(request_thinking_mode)
     if uses_entml_thinking(model):
-        return False, "Thinking", True
+        return False, "Fast", True
 
     if mode is None or mode == "auto":
         return True, "Thinking", False
     if mode == "on":
         return True, "Thinking", False
     if mode == "off":
-        return False, "Thinking", False
-    return False, "Thinking", False
+        return False, "Fast", False
+    return False, "Fast", False

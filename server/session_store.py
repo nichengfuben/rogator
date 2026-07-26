@@ -19,12 +19,27 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from accounts import Account
-from server.formats import DATA_DIR, DEFAULT_USER_AGENT
+from server.formats import DEFAULT_USER_AGENT
 
 logger = logging.getLogger("rogator")
 
-SESSIONS_FILE: str = f"{DATA_DIR}/sessions.json"
+SESSIONS_FILE: str = "persist/sessions.json"
+LEGACY_SESSIONS_FILE: str = "persist/qwen/sessions.json"
 CLEANUP_INTERVAL: float = 60.0
+
+
+def _migrate_legacy_sessions_file() -> None:
+    """启动时将旧路径 persist/qwen/sessions.json 迁移到 persist/sessions.json。"""
+    new_path = Path(SESSIONS_FILE)
+    old_path = Path(LEGACY_SESSIONS_FILE)
+    if new_path.exists() or not old_path.exists():
+        return
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(str(old_path), str(new_path))
+        logger.info("Migrated sessions file: %s -> %s", old_path, new_path)
+    except Exception as e:
+        logger.warning("Failed to migrate sessions file from %s: %s", old_path, e)
 
 
 def _jwt_exp(token: str) -> Optional[float]:
@@ -99,6 +114,7 @@ class SessionStoreMeta:
 
 def load_session_store() -> tuple[List[QwenSession], SessionStoreMeta]:
     """启动时从磁盘恢复 session 池与元数据。"""
+    _migrate_legacy_sessions_file()
     meta = SessionStoreMeta()
     try:
         p = Path(SESSIONS_FILE)
@@ -162,7 +178,7 @@ def save_sessions(
     if current_index >= len(sessions):
         current_index = 0
     try:
-        Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+        Path(SESSIONS_FILE).parent.mkdir(parents=True, exist_ok=True)
         data = {
             "sessions": [s.to_dict() for s in sessions],
             "current_index": current_index,
