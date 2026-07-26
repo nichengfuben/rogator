@@ -463,7 +463,7 @@ class QwenClient(UploadMixin):
         files: Optional[List[Dict[str, Any]]] = None,
         *,
         qwen_thinking_enabled: bool = False,
-        qwen_thinking_mode: str = "NoThinking",
+        qwen_thinking_mode: str = "Fast",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if not messages:
             raise ValueError("messages cannot be empty")

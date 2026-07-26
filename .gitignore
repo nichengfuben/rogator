@@ -39,6 +39,7 @@ htmlcov/
 .tox/
 # Project specific
 persist/qwen/
+persist/sessions.json
 abnormis.txt
 *.log
 accounts.py

@@ -185,7 +185,7 @@ def build_qwen_message(
     files: Optional[List[Dict[str, Any]]] = None,
     *,
     thinking_enabled: bool = False,
-    thinking_mode: str = "NoThinking",
+    thinking_mode: str = "Fast",
     auto_thinking: bool = False,
 ) -> Dict[str, Any]:
     return {

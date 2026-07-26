@@ -45,7 +45,7 @@ class TestModelThinking(unittest.TestCase):
     def test_resolve_entml_model(self) -> None:
         enabled, mode, use_entml = resolve_qwen_thinking("qwen3.7-max", "on")
         self.assertFalse(enabled)
-        self.assertEqual(mode, "NoThinking")
+        self.assertEqual(mode, "Fast")
         self.assertTrue(use_entml)
 
     def test_resolve_native_model_on(self) -> None:
@@ -57,7 +57,7 @@ class TestModelThinking(unittest.TestCase):
     def test_resolve_native_model_off(self) -> None:
         enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "off")
         self.assertFalse(enabled)
-        self.assertEqual(mode, "NoThinking")
+        self.assertEqual(mode, "Fast")
         self.assertFalse(use_entml)
 
     def test_resolve_native_auto(self) -> None:
@@ -89,8 +89,7 @@ class TestSessionStoreMeta(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             sessions_file = Path(tmp) / "sessions.json"
-            with patch("server.session_store.SESSIONS_FILE", str(sessions_file)), \
-                 patch("server.session_store.DATA_DIR", str(tmp)):
+            with patch("server.session_store.SESSIONS_FILE", str(sessions_file)):
                 acc = Account(username="a@test.com", password="pw")
                 s = QwenSession(
                     account=acc, token=_make_jwt(time.time() + 3600),
@@ -105,6 +104,36 @@ class TestSessionStoreMeta(unittest.TestCase):
                 self.assertEqual(meta.current_index, 0)
                 self.assertEqual(meta.account_index, 1)
                 self.assertIn("a@test.com", meta.blocked_accounts)
+
+    def test_migrate_legacy_sessions_file(self) -> None:
+        from tests.test_session_cleanup import _make_jwt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "qwen" / "sessions.json"
+            target = Path(tmp) / "sessions.json"
+            legacy.parent.mkdir(parents=True)
+            acc = Account(username="legacy@test.com", password="pw")
+            s = QwenSession(
+                account=acc, token=_make_jwt(time.time() + 3600),
+                user_id="u1", login_time=time.time(),
+            )
+            legacy.write_text(
+                json.dumps({
+                    "sessions": [s.to_dict()],
+                    "current_index": 2,
+                    "account_index": 3,
+                    "blocked_accounts": {},
+                }),
+                encoding="utf-8",
+            )
+            with patch("server.session_store.SESSIONS_FILE", str(target)), \
+                 patch("server.session_store.LEGACY_SESSIONS_FILE", str(legacy)):
+                loaded, meta = load_session_store()
+                self.assertTrue(target.exists())
+                self.assertFalse(legacy.exists())
+                self.assertEqual(len(loaded), 1)
+                self.assertEqual(meta.current_index, 2)
+                self.assertEqual(meta.account_index, 3)
 
 
 class TestSessionRetry(unittest.TestCase):
