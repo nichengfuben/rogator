@@ -38,6 +38,7 @@ DEFAULT_USER_AGENT: str = (
     "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 )
 DEFAULT_MODELS: List[str] = [
+    "qwen3.8-max-preview",
     "qwen3.7-max",
     "qwen3.6-plus",
     "qwen3.5-plus",
@@ -188,8 +189,8 @@ def build_qwen_message(
         "role": "user", "content": user_content, "user_action": "chat",
         "files": files or [], "timestamp": int(time.time() * 1000), "models": [model],
         "chat_type": "t2t", "feature_config": {
-            "thinking_enabled": True, "output_schema": "phase", "research_mode": "normal",
-            "auto_thinking": False, "thinking_mode": "Thinking", "thinking_format": "raw",
+            "thinking_enabled": False, "output_schema": "phase", "research_mode": "normal",
+            "auto_thinking": False, "thinking_mode": "NoThinking", "thinking_format": "raw",
             "auto_search": False,
         }, "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t",
     }
