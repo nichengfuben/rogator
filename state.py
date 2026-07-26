@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from echotools.fncall import ToolProtocol, get_protocol
 from echotools.logger import get_logger
 
+from server.config import CONFIG
 from server.formats import (
     MAX_CHARS,
     MAX_CONCURRENT,
@@ -35,9 +36,10 @@ class QueueFullError(Exception):
     pass
 
 
-# ============================================================
-# 长文本分割器
-# ============================================================
+# 启动时从 config.toml 覆盖部分常量
+MAX_CONCURRENT = CONFIG.max_concurrent
+MAX_QUEUE_SIZE = CONFIG.max_queue_size
+MAX_CHARS = CONFIG.max_chars
 
 class LongTextSplitter:
     def __init__(self, max_chars: int = MAX_CHARS):

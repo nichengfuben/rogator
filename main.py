@@ -32,6 +32,7 @@ logger = get_logger("rogator")
 # 从模块导入
 # ============================================================
 from handlers import get_state, setup_routes
+from server.config import CONFIG, load_config
 from server.session_store import CLEANUP_INTERVAL
 from state import AppState
 
@@ -39,16 +40,14 @@ from state import AppState
 # 全局常量
 # ============================================================
 
+PORT: int = CONFIG.port
+HOST: str = CONFIG.host
+PRELOGIN_ACCOUNT_COUNT: int = CONFIG.prelogin
+PRELOGIN_TIMEOUT: float = CONFIG.prelogin_timeout
+
 APP_NAME: str = "Rogator"
 APP_VERSION: str = "2.1.0"
 APP_DESCRIPTION: str = "Qwen 长文本处理适配服务器"
-
-PORT: int = 8932
-HOST: str = "0.0.0.0"
-PRELOGIN_ACCOUNT_COUNT: int = 3
-PRELOGIN_TIMEOUT: float = 120.0
-
-# 关机参数
 SHUTDOWN_CANCEL_GRACE: float = 0.3
 SHUTDOWN_WAIT_IDLE_TIMEOUT: float = 10.0
 SHUTDOWN_TOTAL_TIMEOUT: float = 15.0
@@ -226,9 +225,12 @@ async def _run_server(app: web.Application, state: AppState, port: int) -> None:
 async def main_async(
     port: int = PORT,
     host: str = HOST,
-    prelogin_count: int = PRELOGIN_ACCOUNT_COUNT,
+    prelogin_count: int | None = None,
 ) -> None:
     """服务器异步主入口。"""
+    cfg = load_config()
+    if prelogin_count is None:
+        prelogin_count = cfg.prelogin
     _validate_config(port, prelogin_count)
 
     if _check_port_in_use(port):
@@ -238,6 +240,7 @@ async def main_async(
     app = web.Application()
     setup_routes(app)
     state = get_state()
+    state.client._prelogin_target = prelogin_count
 
     # 启动时立即清理过期/失效 session 并落盘
     removed = state.client.cleanup_expired_sessions()

@@ -6,10 +6,10 @@ import base64
 import json
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
-from server.session_store import QwenSession, clean_expired
+from server.session_store import QwenSession, clean_expired, SessionStoreMeta
 from server.qwen_client import QwenClient
 
 
@@ -75,12 +75,17 @@ class TestSessionExpiry(unittest.TestCase):
         self.assertEqual(len(removed), 2)
 
     def test_prune_expired_on_get_valid_session(self) -> None:
-        client = QwenClient(MagicMock())
+        empty_meta = SessionStoreMeta()
+        with patch("server.qwen_client.load_session_store", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
         client._sessions = [
             _session(-5, name="old@test.com"),
             _session(3600, name="ok@test.com"),
         ]
         client._current_index = 0
+        client._prelogin_target = 0
+        client.ensure_prelogin = AsyncMock()
+        client._ensure_cleanup = AsyncMock()
 
         import asyncio
         session = asyncio.run(client.get_valid_session())

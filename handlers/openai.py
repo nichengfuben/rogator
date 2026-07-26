@@ -14,6 +14,9 @@ from echotools.exec.fncall.protocols.entml_thinking import normalize_thinking_mo
 from echotools.exec.fncall.protocols.entml_thinking_parse import split_entml_thinking
 
 from handlers import EmptyResponseError, fold_system_into_user, get_state
+from server.message_history import embed_reasoning_in_messages
+from server.model_thinking import resolve_qwen_thinking
+from server.session_retry import run_with_session_retry, stream_with_session_retry
 from server.formats import (
     MAX_CHARS,
     MAX_QUEUE_SIZE,
@@ -136,6 +139,8 @@ def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         max_len = parse_max_thinking_length(body.get("max_thinking_length"))
 
     if mode == "off" or (mode is None and max_len is None):
+        if mode == "off":
+            return {"thinking_mode": "off"}
         return None
 
     opts: Dict[str, Any] = {}
@@ -195,15 +200,21 @@ def _parse_tool_calls(state: AppState, full_answer: str, tools: List[Dict]) -> T
 
 async def _prepare_stream(state, messages, model, tools, req_id, protocol_options=None):
     """准备工作（获取session、构建消息、上传文件、创建chat），单次尝试"""
+    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
+        model, (protocol_options or {}).get("thinking_mode"),
+    )
+    entml_options = protocol_options if use_entml else None
+
     session = await state.client.get_valid_session()
     if not session:
         raise TokenExpiredError("No valid session available")
     image_uris = state.client.extract_base64_images(messages)
     image_urls = state.client.extract_image_urls(messages)
+    messages = embed_reasoning_in_messages(messages)
     messages = fold_system_into_user(messages)
     openai_tools = convert_tools_to_openai(tools)
     injected = inject_fncall(messages, openai_tools, state.protocol, lang="zh",
-                             protocol_options=protocol_options)
+                             protocol_options=entml_options)
     full_content = injected[0]["content"]
     final_messages = injected
     send_text, filename, file_bytes = state.splitter.split(full_content)
@@ -232,59 +243,53 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
             files = []
     final_messages[0]["content"] = send_text
     chat_id = await state.client.create_chat(session, model)
-    return session, final_messages, files, chat_id
+    return session, final_messages, files, chat_id, qwen_enabled, qwen_mode
 
 
 async def _run_prepare_once(state, messages, model, tools, req_id, protocol_options=None):
-    """单次准备，失败后切号再向上抛出。"""
-    try:
-        return await _prepare_stream(state, messages, model, tools, req_id, protocol_options)
-    except (TokenExpiredError, EmptyResponseError, ConnectionError) as e:
-        logger.warning("Prepare failed with %s: %s, switching session", type(e).__name__, e)
-        await state.client.switch_to_next()
-        raise
+    """单次准备，失败向上抛出 TokenExpiredError。"""
+    return await _prepare_stream(state, messages, model, tools, req_id, protocol_options)
 
 
 async def _chat_once(state, messages, model, tools, req_id, files=None, protocol_options=None) -> AsyncGenerator[Dict[str, Any], None]:
-    """单次聊天，TokenExpiredError 切号后原样抛给上层。"""
-    session, final_messages, uploaded_files, chat_id = await _run_prepare_once(
+    """单次聊天（不含换号重试，由 session_retry 包装）。"""
+    session, final_messages, uploaded_files, chat_id, qwen_enabled, qwen_mode = await _run_prepare_once(
         state, messages, model, tools, req_id, protocol_options
     )
     if files is not None:
         uploaded_files = files
-    try:
-        async for event in state.client.chat_completion(
-            session, chat_id, final_messages, model, uploaded_files
-        ):
-            yield event
-    except TokenExpiredError as e:
-        logger.warning("Chat failed with TokenExpiredError: %s, switching session", e)
-        await state.client.switch_to_next()
-        raise
+    async for event in state.client.chat_completion(
+        session, chat_id, final_messages, model, uploaded_files,
+        qwen_thinking_enabled=qwen_enabled,
+        qwen_thinking_mode=qwen_mode,
+    ):
+        yield event
 
 
 async def _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options=None):
-    """非流式处理 - 单次尝试"""
-    response_parts = []
-    think_parts = []
-    event_count = 0
-    async for event in _chat_once(state, messages, model, tools, req_id, protocol_options=protocol_options):
-        event_count += 1
-        if event.get("type") == "answer":
-            response_parts.append(event.get("content", ""))
-        elif event.get("type") == "thinking":
-            think_parts.append(event.get("content", ""))
-    if event_count == 0:
-        logger.warning("No events received from qwen for req %s", req_id)
-        raise EmptyResponseError(f"No events received from qwen for {req_id}")
-    full_text = "".join(response_parts)
-    reasoning = "".join(think_parts)
-    display_text, tool_calls = _parse_tool_calls(state, full_text, tools)
-    # 上游 NoThinking 时模型可能把思考写在 <entml:thinking> 里
-    display_text, entml_thinking = split_entml_thinking(display_text)
-    if entml_thinking:
-        reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
-    return build_openai_response(model, display_text, reasoning=reasoning, tool_calls=tool_calls)
+    """非流式处理 - 含换号重试"""
+    async def _run():
+        response_parts = []
+        think_parts = []
+        event_count = 0
+        async for event in _chat_once(state, messages, model, tools, req_id, protocol_options=protocol_options):
+            event_count += 1
+            if event.get("type") == "answer":
+                response_parts.append(event.get("content", ""))
+            elif event.get("type") == "thinking":
+                think_parts.append(event.get("content", ""))
+        if event_count == 0:
+            logger.warning("No events received from qwen for req %s", req_id)
+            raise EmptyResponseError(f"No events received from qwen for {req_id}")
+        full_text = "".join(response_parts)
+        reasoning = "".join(think_parts)
+        display_text, tool_calls = _parse_tool_calls(state, full_text, tools)
+        display_text, entml_thinking = split_entml_thinking(display_text)
+        if entml_thinking:
+            reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
+        return build_openai_response(model, display_text, reasoning=reasoning, tool_calls=tool_calls)
+
+    return await run_with_session_retry(req_id, state, _run)
 
 
 # ============================================================
@@ -361,9 +366,13 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     if not messages:
         return _error_response(400, "messages is required")
     protocol_options = _build_protocol_options(body)
-    logger.info("OpenAI: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s",
-                len(messages), model, stream, len(tools),
-                (protocol_options or {}).get("thinking_mode", "off"))
+    req_mode = (protocol_options or {}).get("thinking_mode", "off")
+    _, _, use_entml = resolve_qwen_thinking(model, req_mode)
+    qwen_thinking = not use_entml and req_mode not in (None, "off")
+    logger.info(
+        "OpenAI: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s, qwen_thinking=%s",
+        len(messages), model, stream, len(tools), req_mode, qwen_thinking,
+    )
     req_id = _gen_request_id()
     if not stream:
         return await _handle_non_stream(state, messages, model, req_id, tools, protocol_options)
@@ -403,8 +412,13 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     last_thinking_len = 0
     pending_tc_index = 0  # 已流式发送的 tool call 数量
     try:
-        async for event in _chat_once(state, messages, model, tools, req_id,
-                                      protocol_options=protocol_options):
+        async def _make_stream():
+            async for event in _chat_once(
+                state, messages, model, tools, req_id, protocol_options=protocol_options,
+            ):
+                yield event
+
+        async for event in stream_with_session_retry(req_id, state, _make_stream):
             if disconnected[0]:
                 break
             etype = event.get("type")

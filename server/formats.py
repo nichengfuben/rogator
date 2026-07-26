@@ -183,14 +183,21 @@ class LongTextSplitter:
 def build_qwen_message(
     user_content: str, model: str,
     files: Optional[List[Dict[str, Any]]] = None,
+    *,
+    thinking_enabled: bool = False,
+    thinking_mode: str = "NoThinking",
+    auto_thinking: bool = False,
 ) -> Dict[str, Any]:
     return {
         "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
         "role": "user", "content": user_content, "user_action": "chat",
         "files": files or [], "timestamp": int(time.time() * 1000), "models": [model],
         "chat_type": "t2t", "feature_config": {
-            "thinking_enabled": False, "output_schema": "phase", "research_mode": "normal",
-            "auto_thinking": False, "thinking_mode": "NoThinking", "thinking_format": "raw",
+            "thinking_enabled": thinking_enabled,
+            "output_schema": "phase", "research_mode": "normal",
+            "auto_thinking": auto_thinking,
+            "thinking_mode": thinking_mode,
+            "thinking_format": "raw",
             "auto_search": False,
         }, "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t",
     }
