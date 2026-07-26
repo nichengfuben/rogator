@@ -31,9 +31,8 @@ from echotools.fncall import get_protocol, inject_fncall
 
 from handlers import fold_system_into_user
 from handlers.anthro import _normalize_anthropic_messages, _normalize_anthropic_tools
-from handlers.openai import _build_protocol_options, convert_tools_to_openai
+from handlers.openai import _build_protocol_options, _inject_protocol_options, convert_tools_to_openai
 from server.formats import build_qwen_message
-from server.message_history import embed_reasoning_in_messages
 from server.model_thinking import resolve_qwen_thinking
 
 
@@ -179,14 +178,13 @@ def build_prompt(
     qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
         model, (protocol_options or {}).get("thinking_mode"),
     )
-    entml_options = protocol_options if use_entml else None
+    inject_options = _inject_protocol_options(protocol_options, use_entml)
 
-    prepared = embed_reasoning_in_messages(messages)
-    prepared = fold_system_into_user(prepared)
+    prepared = fold_system_into_user(messages)
     openai_tools = convert_tools_to_openai(tools)
     protocol = get_protocol("entml")
     injected = inject_fncall(
-        prepared, openai_tools, protocol, lang="zh", protocol_options=entml_options,
+        prepared, openai_tools, protocol, lang="zh", protocol_options=inject_options,
     )
     prompt = injected[0]["content"]
     qwen_msg = build_qwen_message(

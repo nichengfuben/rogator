@@ -25,12 +25,12 @@ from echotools.fncall import FncallStreamParser
 from handlers import get_state
 from handlers.openai import (
     _build_protocol_options,
+    _inject_protocol_options,
     _process_openai_non_stream,
     _parse_tool_calls,
     _chat_once,
     convert_tools_to_openai,
 )
-from server.message_history import merge_anthropic_assistant_blocks
 from server.model_thinking import resolve_qwen_thinking
 from server.session_retry import stream_with_session_retry
 
@@ -368,6 +368,7 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
             continue
 
         text_parts: List[str] = []
+        thinking_parts: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         for block in content:
             if not isinstance(block, dict):
@@ -376,10 +377,14 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
             btype = block.get("type")
             if btype == "text" or "text" in block and btype is None:
                 text_parts.append(str(block.get("text") or ""))
-            elif btype == "thinking":
-                text_parts.append(str(block.get("thinking") or block.get("data") or ""))
+            elif btype in ("thinking", "redacted_thinking"):
+                t = str(block.get("thinking") or block.get("data") or "")
+                if t:
+                    thinking_parts.append(t)
             elif btype == "reasoning":
-                text_parts.append(str(block.get("text") or block.get("reasoning") or ""))
+                t = str(block.get("text") or block.get("reasoning") or "")
+                if t:
+                    thinking_parts.append(t)
             elif btype == "tool_use":
                 tool_calls.append({
                     "id": block.get("id") or "",
@@ -403,25 +408,19 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
                 if "text" in block:
                     text_parts.append(str(block.get("text") or ""))
 
-        if role == "assistant" and tool_calls:
-            merged = merge_anthropic_assistant_blocks(content) if isinstance(content, list) else "\n".join(text_parts)
-            out.append({
-                "role": "assistant",
-                "content": merged or "\n".join(p for p in text_parts if p) or None,
-                "tool_calls": tool_calls,
-            })
+        if role == "assistant":
+            joined = "\n".join(p for p in text_parts if p) or None
+            msg: Dict[str, Any] = {"role": "assistant", "content": joined}
+            if thinking_parts:
+                msg["reasoning"] = "\n".join(thinking_parts)
+            if tool_calls:
+                msg["tool_calls"] = tool_calls
+            out.append(msg)
         elif role == "tool":
             # 已在上面 tool_result 分支写出
             continue
         else:
-            if isinstance(content, list) and any(
-                isinstance(b, dict) and b.get("type") in ("thinking", "reasoning")
-                for b in content
-            ):
-                joined = merge_anthropic_assistant_blocks(content)
-            else:
-                joined = "\n".join(p for p in text_parts if p)
-            # 若本条只有 tool_result 已 push，则不要再 push 空 user
+            joined = "\n".join(p for p in text_parts if p)
             only_tool_results = all(
                 isinstance(b, dict) and b.get("type") == "tool_result" for b in content
             ) if content else False

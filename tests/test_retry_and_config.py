@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""config / model_thinking / message_history / session_retry 单元测试。"""
+"""config / model_thinking / session_retry 单元测试。"""
 
 import json
 import tempfile
@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
 from server.config import AppConfig, load_config
-from server.message_history import embed_reasoning_in_messages, merge_anthropic_assistant_blocks
 from server.model_thinking import load_model_entml_map, resolve_qwen_thinking, uses_entml_thinking
 from server.session_retry import parse_rate_limit_block_seconds, run_with_session_retry
 from server.session_store import QwenSession, save_sessions, load_session_store
@@ -68,27 +67,20 @@ class TestModelThinking(unittest.TestCase):
 
 
 class TestMessageHistory(unittest.TestCase):
-    def test_embed_openai_reasoning(self) -> None:
+    def test_inject_renders_reasoning_in_history(self) -> None:
+        from echotools.fncall import get_protocol, inject_fncall
+        from handlers.openai import _build_protocol_options, _inject_protocol_options
+
         msgs = [{
             "role": "assistant",
-            "content": "answer text",
             "reasoning": "step one",
-        }]
-        out = embed_reasoning_in_messages(msgs)
-        content = out[0]["content"]
-        self.assertIn("<entml:thinking>", content)
-        self.assertIn("step one", content)
-        self.assertIn("answer text", content)
-        self.assertNotIn("reasoning", out[0])
-
-    def test_merge_anthropic_thinking(self) -> None:
-        merged = merge_anthropic_assistant_blocks([
-            {"type": "thinking", "thinking": "plan A"},
-            {"type": "text", "text": "hello"},
-        ])
-        self.assertIn("<entml:thinking>", merged)
-        self.assertIn("plan A", merged)
-        self.assertIn("hello", merged)
+            "content": "answer text",
+        }, {"role": "user", "content": "follow up"}]
+        opts = _inject_protocol_options(_build_protocol_options({"thinking": "on"}), True)
+        prompt = inject_fncall(msgs, [], get_protocol("entml"), protocol_options=opts)[0]["content"]
+        self.assertIn("<entml:thinking>", prompt)
+        self.assertIn("step one", prompt)
+        self.assertIn("answer text", prompt)
 
 
 class TestSessionStoreMeta(unittest.TestCase):

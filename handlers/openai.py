@@ -14,7 +14,6 @@ from echotools.exec.fncall.protocols.entml_thinking import normalize_thinking_mo
 from echotools.exec.fncall.protocols.entml_thinking_parse import split_entml_thinking
 
 from handlers import EmptyResponseError, fold_system_into_user, get_state
-from server.message_history import embed_reasoning_in_messages
 from server.model_thinking import resolve_qwen_thinking
 from server.session_retry import run_with_session_retry, stream_with_session_retry
 from server.formats import (
@@ -138,17 +137,28 @@ def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if max_len is None:
         max_len = parse_max_thinking_length(body.get("max_thinking_length"))
 
+    opts: Dict[str, Any] = {"include_thinking_in_history": True}
+
     if mode == "off" or (mode is None and max_len is None):
         if mode == "off":
-            return {"thinking_mode": "off"}
-        return None
+            opts["thinking_mode"] = "off"
+        return opts
 
-    opts: Dict[str, Any] = {}
     if mode is not None:
         opts["thinking_mode"] = mode
     if max_len is not None:
         opts["max_thinking_length"] = max_len
-    return opts or None
+    return opts
+
+
+def _inject_protocol_options(protocol_options: Optional[Dict[str, Any]], use_entml: bool) -> Dict[str, Any]:
+    """合并 inject_fncall 选项：历史 thinking 始终交给 echotools 渲染。"""
+    opts = dict(protocol_options or {})
+    opts.setdefault("include_thinking_in_history", True)
+    if not use_entml:
+        opts.pop("thinking_mode", None)
+        opts.pop("max_thinking_length", None)
+    return opts
 
 
 def _entml_prompt_header(prompt: str) -> str:
@@ -203,18 +213,17 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
     qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
         model, (protocol_options or {}).get("thinking_mode"),
     )
-    entml_options = protocol_options if use_entml else None
+    inject_options = _inject_protocol_options(protocol_options, use_entml)
 
     session = await state.client.get_valid_session()
     if not session:
         raise TokenExpiredError("No valid session available")
     image_uris = state.client.extract_base64_images(messages)
     image_urls = state.client.extract_image_urls(messages)
-    messages = embed_reasoning_in_messages(messages)
     messages = fold_system_into_user(messages)
     openai_tools = convert_tools_to_openai(tools)
     injected = inject_fncall(messages, openai_tools, state.protocol, lang="zh",
-                             protocol_options=entml_options)
+                             protocol_options=inject_options)
     full_content = injected[0]["content"]
     final_messages = injected
     send_text, filename, file_bytes = state.splitter.split(full_content)

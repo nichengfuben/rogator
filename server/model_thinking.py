@@ -66,12 +66,12 @@ def resolve_qwen_thinking(
     """
     mode = normalize_thinking_mode(request_thinking_mode)
     if uses_entml_thinking(model):
-        return False, "NoThinking", True
+        return False, "Thinking", True
 
     if mode is None or mode == "auto":
         return True, "Thinking", False
     if mode == "on":
         return True, "Thinking", False
     if mode == "off":
-        return False, "NoThinking", False
-    return False, "NoThinking", False
+        return False, "Thinking", False
+    return False, "Thinking", False
