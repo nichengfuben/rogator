@@ -84,7 +84,7 @@ class QwenClient(UploadMixin):
         return None
 
     def prune_expired_sessions(self) -> List[str]:
-        """按 login_time 即时剔除过期/失效 session（内存）。"""
+        """按 JWT exp-30s 即时剔除过期/失效 session（内存）。"""
         previous_username = self._session_username_at_current()
         self._sessions, removed = clean_expired(self._sessions)
         if removed:
@@ -92,7 +92,7 @@ class QwenClient(UploadMixin):
         return removed
 
     def cleanup_expired_sessions(self) -> List[str]:
-        """清理过期/失效 session 并落盘（后台任务用，无节流）。"""
+        """按 JWT exp-30s 清理过期/失效 session 并落盘（后台任务用，无节流）。"""
         previous_username = self._session_username_at_current()
         removed = save_sessions(self._sessions)
         if removed:

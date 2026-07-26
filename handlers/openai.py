@@ -11,6 +11,7 @@ from aiohttp import web
 from echotools.fncall import FncallStreamParser, inject_fncall
 from echotools.logger import get_logger
 from echotools.exec.fncall.protocols.entml_thinking import normalize_thinking_mode
+from echotools.exec.fncall.protocols.entml_thinking_parse import split_entml_thinking
 
 from handlers import EmptyResponseError, fold_system_into_user, get_state
 from server.formats import (
@@ -33,20 +34,57 @@ _ENTML_USER_MARKER = "<current_user_message>"
 
 
 def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """从请求体提取 thinking 设置并构建 protocol_options。"""
+    """从请求体提取 thinking 设置并构建 protocol_options。
+
+    兼容：
+    - thinking: true/false/"on"/"auto"/"off"
+    - thinking: {type: enabled|disabled, budget_tokens|max_tokens|max_thinking_length}
+    - 顶层 max_thinking_length / thinking_mode
+    """
+    from echotools.exec.fncall.protocols.entml_thinking import parse_max_thinking_length
+
     raw = body.get("thinking")
-    if raw is None:
-        return None
+    mode: Optional[str] = None
+    max_len: Optional[int] = None
+
     if isinstance(raw, bool):
         mode = "on" if raw else "off"
     elif isinstance(raw, dict):
-        t = raw.get("type", "")
-        mode = "on" if t == "enabled" else "off"
-    else:
-        mode = normalize_thinking_mode(raw) or "off"
-    if mode == "off":
+        if "mode" in raw:
+            mode = normalize_thinking_mode(raw.get("mode"))
+        if mode is None and "type" in raw:
+            t = str(raw.get("type") or "").strip().lower()
+            if t in ("enabled", "on", "true"):
+                mode = "on"
+            elif t in ("disabled", "off", "false"):
+                mode = "off"
+            else:
+                mode = normalize_thinking_mode(t)
+        if mode is None and "enabled" in raw:
+            mode = "on" if raw.get("enabled") else "off"
+        for key in ("budget_tokens", "max_tokens", "max_thinking_length"):
+            if key in raw:
+                max_len = parse_max_thinking_length(raw.get(key))
+                if max_len is not None:
+                    break
+    elif raw is not None:
+        mode = normalize_thinking_mode(raw)
+
+    if mode is None:
+        mode = normalize_thinking_mode(body.get("thinking_mode"))
+
+    if max_len is None:
+        max_len = parse_max_thinking_length(body.get("max_thinking_length"))
+
+    if mode == "off" or (mode is None and max_len is None):
         return None
-    return {"thinking_mode": mode}
+
+    opts: Dict[str, Any] = {}
+    if mode is not None:
+        opts["thinking_mode"] = mode
+    if max_len is not None:
+        opts["max_thinking_length"] = max_len
+    return opts or None
 
 
 def _entml_prompt_header(prompt: str) -> str:
@@ -183,6 +221,10 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
     full_text = "".join(response_parts)
     reasoning = "".join(think_parts)
     display_text, tool_calls = _parse_tool_calls(state, full_text, tools)
+    # 上游 NoThinking 时模型可能把思考写在 <entml:thinking> 里
+    display_text, entml_thinking = split_entml_thinking(display_text)
+    if entml_thinking:
+        reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
     return build_openai_response(model, display_text, reasoning=reasoning, tool_calls=tool_calls)
 
 
@@ -374,6 +416,50 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     if disconnected[0]:
         logger.info("Client disconnected during stream %s", req_id)
         return resp
+
+    # 刷 parser 尾部：holdback / thinking 块 / 未闭合 invoke
+    try:
+        final_text, _ = parser.finalize()
+    except Exception as e:
+        logger.warning("stream parser.finalize failed: %s", e)
+        final_text = parser.partial_text
+
+    if not disconnected[0]:
+        pt = parser.partial_thinking
+        if len(pt) > last_thinking_len:
+            new_thinking = pt[last_thinking_len:]
+            last_thinking_len = len(pt)
+            full_thinking += new_thinking
+            chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=new_thinking)
+            await _emit_chunk(resp, chunk, disconnected)
+
+    if not disconnected[0]:
+        # finalize 后 partial_text 已与剥离结果对齐；无 tool 时也可用 final_text
+        safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
+        if len(safe_text) > last_safe_len:
+            new_text = safe_text[last_safe_len:]
+            last_safe_len = len(safe_text)
+            if new_text:
+                chunk = build_openai_chunk(model, chunk_id=chunk_id, content=new_text)
+                await _emit_chunk(resp, chunk, disconnected)
+
+    if not disconnected[0]:
+        for tc in parser.get_ready_tool_calls():
+            tc = _fix_tool_call_id(tc)
+            openai_tc = [{
+                "index": pending_tc_index,
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["function"]["name"],
+                    "arguments": tc["function"]["arguments"],
+                },
+            }]
+            chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
+            if not await _emit_chunk(resp, chunk, disconnected):
+                break
+            pending_tc_index += 1
+
     await _send_stream_chunks(resp, state, full_answer, tools, model, chunk_id, disconnected,
                               already_sent_tc_count=pending_tc_index)
     return resp

@@ -161,7 +161,7 @@ def clean_expired(sessions: List[QwenSession]) -> tuple[List[QwenSession], List[
     valid_sessions = []
     for s in sessions:
         if s.is_expired():
-            logger.debug("Session %s expired (login_time: %s), removing", s.username[:6], s.login_time)
+            logger.debug("Session %s expired (jwt exp-30s), removing", s.username[:6])
             removed.append(s.username)
         elif not s.is_valid:
             logger.debug("Session %s invalid, removing", s.username[:6])
