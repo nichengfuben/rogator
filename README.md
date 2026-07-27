@@ -2,7 +2,7 @@
 
 Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 Anthropic 兼容 API 暴露给上游客户端。
 
-默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.42`。
+默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.43`。
 
 **平台**：macOS / Linux / Windows  
 **Python**：3.8 – 3.14
@@ -46,7 +46,7 @@ pip install -r requirements-dev.txt
 | 包 | 用途 |
 |----|------|
 | `aiohttp>=3.9.0` | HTTP 服务端与 Qwen 上游请求 |
-| `echotools>=2.3.42` | entml 工具调用、日志、thinking_level / thinking_behavior（thinking 块置于 prompt 末尾） |
+| `echotools>=2.3.43` | entml 工具调用、日志、thinking_level / thinking_behavior（thinking 块置于 prompt 末尾） |
 | `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
 | `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
 
@@ -153,7 +153,7 @@ curl -X POST http://localhost:8932/v1/messages \
 
 | 模型 ID | 默认 | entml 思考 |
 |---------|:----:|:----------:|
-| `qwen3.8-max-preview` | | 否（原生 Thinking） |
+| `qwen3.8-max-preview` | | 否（原生 Thinking，**永远开启**，忽略 off/none） |
 | `qwen3.7-max` | **是** | 是 |
 | `qwen3.6-plus` | | 是 |
 | `qwen3.5-plus` | | 是 |
@@ -190,7 +190,11 @@ Rogator 根据 `persist/model_entml_thinking.jsonl` 判断模型是否走 entml 
 | `true` | 上游 `Fast` + entml 解析 thinking（默认多数 Qwen3 模型） |
 | `false` | 上游原生 `Thinking`（如 `qwen3.8-max-preview`） |
 
-请求侧 `thinking` / `reasoning_effort` / `thinking_level` 会归一化为 echotools 挡位：`none` | `low` | `medium` | `high` | `xhigh` | `max` | `auto`。其中 `low`–`max` 注入 `<entml:thinking_mode>on</entml:thinking_mode>` 与对应默认 `max_thinking_length`；`auto` 注入 `auto` 模式；`none` 不注入任何思考相关内容。指引文案位于 `<thinking_behavior>` 块。历史 assistant 的 `reasoning` 由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染。
+请求侧 `thinking` / `reasoning_effort` / `thinking_level` 会归一化为 echotools 挡位：`none` | `low` | `medium` | `high` | `xhigh` | `max` | `auto`。`off`、`none`、`thinking: false` 等均视为关闭思考（`none`，**不注入**任何 `<entml:thinking_mode>` / `<thinking_behavior>` / `max_thinking_length`）。其中 `low`–`max` 注入 `<entml:thinking_mode>` 为挡位名（如 `medium`）与对应默认 `max_thinking_length`（12800 / 25600 / 64000 / 102400 / 134736）；仅 legacy `thinking_mode: on` 时注入 `on`；`auto` 注入 `auto` 模式且无默认长度。指引文案位于 `<thinking_behavior>` 块。历史 assistant 的 `reasoning` 由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染。
+
+`GET /v1/models` 对支持思考的模型附带 `think_efforts`（`valid_efforts`、`default_effort`、`off_effort: none`），供 Kimi Code 等客户端刷新模型元数据。
+
+**Kimi Code 手写 `[models."alias"]` 别名**不会自动从网关合并挡位，仍需在别名上配置 `support_efforts` / `default_effort`（以及 `off_effort = "none"` 以便选 Off 时发 `reasoning_effort: none`）；仅 catalog 导入或托管刷新才会用 `/v1/models` 里的 `think_efforts` 覆盖。
 
 本地调试 prompt 注入结果：
 

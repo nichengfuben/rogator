@@ -33,7 +33,7 @@ from handlers.openai import (
     protocol_thinking_level,
     thinking_level_is_active,
 )
-from server.model_thinking import resolve_qwen_thinking
+from server.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.session_retry import stream_with_session_retry
 
 logger = get_logger("rogator")
@@ -456,7 +456,7 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     protocol_options = _build_protocol_options(body)
     req_level = protocol_thinking_level(protocol_options)
     _, _, use_entml = resolve_qwen_thinking(model, req_level)
-    qwen_thinking = not use_entml and thinking_level_is_active(req_level)
+    qwen_thinking = not use_entml and (always_qwen_thinking(model) or thinking_level_is_active(req_level))
     logger.info(
         "Anthropic: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
         len(messages), model, stream, len(tools), req_level, qwen_thinking,
