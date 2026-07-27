@@ -96,6 +96,10 @@ def _gen_tool_id() -> str:
 # 自定义异常
 # ============================================================
 
+class PayloadTooLargeError(RuntimeError):
+    """上游 Qwen 拒绝请求体过大（HTTP 413）。"""
+
+
 class TokenExpiredError(Exception):
     """Token 过期，需要切换 session"""
     pass

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
 import aiohttp
 
 from core.transport.sse import parse_sse_event
-from server.formats import TokenExpiredError
+from server.formats import TokenExpiredError, PayloadTooLargeError
 from server.session_store import QwenSession, is_session_fatal_error
 
 if TYPE_CHECKING:
@@ -23,6 +23,8 @@ async def handle_chat_error(client: QwenClient, resp: aiohttp.ClientResponse, se
         client._invalidate_session(session)
         raise TokenExpiredError(f"Token expired: HTTP {resp.status}")
     body = await resp.text()
+    if resp.status == 413:
+        raise PayloadTooLargeError(f"Payload too large: {body[:200]}")
     if is_session_fatal_error(body):
         client._invalidate_session(session)
         if "RateLimited" in body or "daily usage" in body:

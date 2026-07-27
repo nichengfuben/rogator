@@ -40,12 +40,15 @@ class QueueFullError(Exception):
 MAX_CONCURRENT = CONFIG.max_concurrent
 MAX_QUEUE_SIZE = CONFIG.max_queue_size
 MAX_CHARS = CONFIG.max_chars
+QWEN_SEND_MAX_CHARS = CONFIG.qwen_send_max_chars
+
 
 class LongTextSplitter:
-    def __init__(self, max_chars: int = MAX_CHARS):
+    def __init__(self, max_chars: int = QWEN_SEND_MAX_CHARS):
         self.max_chars = max_chars
 
     def split(self, text: str):
+        """Inject 后整段 prompt 超限：尾部 max_chars → send，剩余前缀 → 附件。"""
         if len(text) <= self.max_chars:
             return text, None, None
         send_text = text[-self.max_chars:]

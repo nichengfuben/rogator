@@ -31,6 +31,7 @@ class AppConfig:
     max_concurrent: int = 8
     max_queue_size: int = 1000
     max_chars: int = 1024000
+    qwen_send_max_chars: int = 21750000
     request_total_timeout: float = 600.0
     login_timeout: float = 30.0
     prelogin_timeout: float = 120.0
@@ -59,6 +60,7 @@ def load_config(path: Path | None = None) -> AppConfig:
         max_concurrent=int(_deep_get(raw, "limits", "max_concurrent", default=8)),
         max_queue_size=int(_deep_get(raw, "limits", "max_queue_size", default=1000)),
         max_chars=int(_deep_get(raw, "limits", "max_chars", default=1024000)),
+        qwen_send_max_chars=int(_deep_get(raw, "limits", "qwen_send_max_chars", default=21750000)),
         request_total_timeout=float(_deep_get(raw, "timeout", "request_total", default=600.0)),
         login_timeout=float(_deep_get(raw, "timeout", "login", default=30.0)),
         prelogin_timeout=float(_deep_get(raw, "timeout", "prelogin", default=120.0)),
