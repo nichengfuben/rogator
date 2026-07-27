@@ -42,8 +42,7 @@ persist/qwen/
 persist/sessions.json
 abnormis.txt
 *.log
-accounts.py
-accounts.py.example
+# accounts.csv holds credentials (ignored below); accounts.py is the public loader
 # Claude Code
 CLAUDE.local.md
 # OS

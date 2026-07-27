@@ -90,13 +90,12 @@ async def health_handler(request: web.Request) -> web.Response:
 
 
 async def list_models_handler(request: web.Request) -> web.Response:
+    from server.model_catalog import build_openai_models_list
+
     state = get_state()
     return _json_response({
         "object": "list",
-        "data": [
-            {"id": m, "object": "model", "created": 1700000000, "owned_by": "qwen"}
-            for m in state._models
-        ],
+        "data": build_openai_models_list(state._models),
     })
 
 

@@ -53,10 +53,18 @@ def load_model_entml_map(path: Path | None = None) -> Dict[str, bool]:
 
 _MODEL_ENTML_MAP: Dict[str, bool] = load_model_entml_map()
 
+# 上游原生思考且无法关闭（如 qwen3.8-max-preview）
+_ALWAYS_QWEN_THINKING_MODELS = frozenset({"qwen3.8-max-preview"})
+
 
 def uses_entml_thinking(model: str) -> bool:
     """True=用 entml 传 thinking（上游 Fast）；False=上游原生思考。"""
     return _MODEL_ENTML_MAP.get(model, _DEFAULT_ENTML)
+
+
+def always_qwen_thinking(model: str) -> bool:
+    """True=上游永远 Thinking，忽略请求侧 off/none。"""
+    return model in _ALWAYS_QWEN_THINKING_MODELS
 
 
 def resolve_qwen_thinking(
@@ -66,7 +74,8 @@ def resolve_qwen_thinking(
     """返回 (qwen_thinking_enabled, qwen_thinking_mode, use_entml_protocol)。
 
     - entml 模型：上游永远 Fast，thinking 由 echotools `<thinking_behavior>` 注入。
-    - 非 entml 模型：thinking_level 非 none 时上游开思考；none 时 Fast。
+    - always_qwen_thinking 模型：上游永远 Thinking，与请求挡位无关。
+    - 其它非 entml 模型：thinking_level 非 none 时上游开思考；none 时 Fast。
     """
     level = normalize_thinking_level(request_thinking_level)
     if level is None and request_thinking_level is not None:
@@ -80,6 +89,9 @@ def resolve_qwen_thinking(
     level = level or "none"
     if uses_entml_thinking(model):
         return False, "Fast", True
+
+    if always_qwen_thinking(model):
+        return True, "Thinking", False
 
     if level == "none" or resolve_thinking_injection({"thinking_level": level}) is None:
         return False, "Fast", False

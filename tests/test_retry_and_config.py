@@ -61,8 +61,8 @@ class TestModelThinking(unittest.TestCase):
 
     def test_resolve_native_model_off(self) -> None:
         enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "off")
-        self.assertFalse(enabled)
-        self.assertEqual(mode, "Fast")
+        self.assertTrue(enabled)
+        self.assertEqual(mode, "Thinking")
         self.assertFalse(use_entml)
 
     def test_resolve_native_auto(self) -> None:
@@ -72,8 +72,8 @@ class TestModelThinking(unittest.TestCase):
 
     def test_resolve_native_none(self) -> None:
         enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "none")
-        self.assertFalse(enabled)
-        self.assertEqual(mode, "Fast")
+        self.assertTrue(enabled)
+        self.assertEqual(mode, "Thinking")
         self.assertFalse(use_entml)
 
 
@@ -86,12 +86,12 @@ class TestThinkingLevels(unittest.TestCase):
         )
 
         cases = {
-            "none": ("none", None),
-            "low": ("on", 6554),
-            "medium": ("on", 13108),
-            "high": ("on", 32768),
-            "xhigh": ("on", 52428),
-            "max": ("on", 62260),
+            "none": (None, None),
+            "low": ("low", 12800),
+            "medium": ("medium", 25600),
+            "high": ("high", 64000),
+            "xhigh": ("xhigh", 102400),
+            "max": ("max", 134736),
             "auto": ("auto", None),
         }
         for level, (mode, default_max) in cases.items():
@@ -113,6 +113,37 @@ class TestThinkingLevels(unittest.TestCase):
         self.assertEqual(protocol_thinking_level(opts), "high")
         self.assertEqual(opts.get("thinking_level"), "high")
 
+    def test_build_protocol_options_off_disables_thinking(self) -> None:
+        from handlers.openai import _build_protocol_options, protocol_thinking_level
+        from echotools.exec.fncall.protocols.entml_think.core import resolve_thinking_injection
+
+        for body in (
+            {"reasoning_effort": "off"},
+            {"reasoning_effort": "none"},
+            {"thinking": False},
+            {"thinking": "off"},
+            {"thinking_level": "off"},
+        ):
+            opts = _build_protocol_options(body) or {}
+            self.assertEqual(protocol_thinking_level(opts), "none", msg=str(body))
+            self.assertEqual(opts.get("thinking_level"), "none", msg=str(body))
+            self.assertIsNone(resolve_thinking_injection(opts), msg=str(body))
+
+    def test_models_list_think_efforts(self) -> None:
+        from server.model_catalog import build_openai_model_entry, model_supports_thinking
+
+        self.assertTrue(model_supports_thinking("qwen3.7-max"))
+        self.assertTrue(model_supports_thinking("qwen3.8-max-preview"))
+        entry = build_openai_model_entry("qwen3.7-max")
+        te = entry.get("think_efforts") or {}
+        self.assertTrue(te.get("support"))
+        self.assertNotIn("none", te.get("valid_efforts", []))
+        self.assertEqual(te.get("off_effort"), "none")
+        self.assertEqual(te.get("default_effort"), "medium")
+        entry38 = build_openai_model_entry("qwen3.8-max-preview")
+        self.assertTrue(entry38.get("always_thinking"))
+        self.assertNotIn("think_efforts", entry38)
+
     def test_inject_renders_thinking_behavior(self) -> None:
         from echotools.fncall import get_protocol, inject_fncall
         from handlers.openai import _build_protocol_options, _inject_protocol_options
@@ -127,8 +158,8 @@ class TestThinkingLevels(unittest.TestCase):
             protocol_options=opts,
         )[0]["content"]
         self.assertIn("<thinking_behavior>", prompt)
-        self.assertIn("<entml:thinking_mode>on</entml:thinking_mode>", prompt)
-        self.assertIn("<entml:max_thinking_length>13108</entml:max_thinking_length>", prompt)
+        self.assertIn("<entml:thinking_mode>medium</entml:thinking_mode>", prompt)
+        self.assertIn("<entml:max_thinking_length>25600</entml:max_thinking_length>", prompt)
 
 
 class TestMessageHistory(unittest.TestCase):
