@@ -10,13 +10,13 @@ from aiohttp import web
 
 from echotools.fncall import FncallStreamParser, inject_fncall
 from echotools.logger import get_logger
-from echotools.exec.fncall.protocols.entml_thinking import (
+from echotools.exec.fncall.protocols.entml_think.core import (
     normalize_thinking_level,
     normalize_thinking_mode,
     parse_max_thinking_length,
     resolve_thinking_injection,
 )
-from echotools.exec.fncall.protocols.entml_thinking_parse import split_entml_thinking
+from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking
 
 from handlers import EmptyResponseError, fold_system_into_user, get_state
 from server.model_thinking import resolve_qwen_thinking
@@ -36,8 +36,6 @@ from server.formats import (
 from state import AppState, QueueFullError
 
 logger = get_logger("rogator")
-
-_ENTML_USER_MARKER = "<current_user_message>"
 
 
 # effort 别名 → echotools thinking_level
@@ -191,20 +189,6 @@ def _inject_protocol_options(protocol_options: Optional[Dict[str, Any]], use_ent
     return opts
 
 
-def _entml_prompt_header(prompt: str) -> str:
-    """提取 inject_fncall 产出的 entml 工具说明头（echotools 2.3+ render_prompt）。"""
-    idx = prompt.find(_ENTML_USER_MARKER)
-    return prompt[:idx] if idx > 0 else ""
-
-
-def _ensure_entml_prompt_header(prompt: str, send_text: str) -> str:
-    """长文本尾部截断后补回工具说明头，避免重复拼接过时指令。"""
-    header = _entml_prompt_header(prompt)
-    if header and not send_text.startswith(header):
-        return header + send_text
-    return send_text
-
-
 def convert_tools_to_openai(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not tools:
         return tools
@@ -256,6 +240,7 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
                              protocol_options=inject_options)
     full_content = injected[0]["content"]
     final_messages = injected
+    # inject 后超限：尾部 max_chars → send_text，剩余前缀 → 附件（不再回拼 header）
     send_text, filename, file_bytes = state.splitter.split(full_content)
     files = []
     for uri in image_uris:
@@ -274,12 +259,9 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
         try:
             _, file_obj = await state.client.upload_file(session, file_bytes, filename)
             files.append(file_obj)
-            if tools:
-                send_text = _ensure_entml_prompt_header(full_content, send_text)
         except Exception as e:
-            logger.warning("Upload failed: %s, truncating to max chars", e)
-            send_text = full_content[:MAX_CHARS]
-            files = []
+            logger.warning("Upload failed: %s, sending truncated text without attachment", e)
+            # 上传失败：仍用尾部 send_text，仅丢弃附件
     final_messages[0]["content"] = send_text
     chat_id = await state.client.create_chat(session, model)
     return session, final_messages, files, chat_id, qwen_enabled, qwen_mode

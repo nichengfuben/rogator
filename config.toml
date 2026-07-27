@@ -13,6 +13,8 @@ max_retry_on_error = 3
 max_concurrent = 8
 max_queue_size = 1000
 max_chars = 1024000
+# chat.qwen.ai 网关硬限 ~21 MiB JSON body（实测 22_020_096 bytes）；留余量供 entml 包装开销
+qwen_send_max_chars = 21750000
 
 [timeout]
 request_total = 600.0

@@ -7,7 +7,7 @@ import re
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, TypeVar
 
 from server.config import CONFIG
-from server.formats import TokenExpiredError
+from server.formats import PayloadTooLargeError, TokenExpiredError
 from server.session_store import mask_username
 
 logger = logging.getLogger("rogator")
@@ -65,6 +65,17 @@ async def run_with_session_retry(
                 mask_username(old_name or ""), type(e).__name__,
                 mask_username(new_session.username),
             )
+        except PayloadTooLargeError as e:
+            if state.splitter.max_chars <= 50000:
+                raise
+            state.splitter.max_chars = max(50000, state.splitter.max_chars // 2)
+            retries += 1
+            if retries > 1:
+                raise
+            logger.warning(
+                "Payload too large for %s, reducing send limit to %d and retrying: %s",
+                req_id, state.splitter.max_chars, e,
+            )
         except Exception:
             raise
 
@@ -105,3 +116,16 @@ async def stream_with_session_retry(
                 mask_username(old_name or ""), type(e).__name__,
                 mask_username(new_session.username),
             )
+        except PayloadTooLargeError as e:
+            if state.splitter.max_chars <= 50000:
+                raise
+            state.splitter.max_chars = max(50000, state.splitter.max_chars // 2)
+            retries += 1
+            if retries > 1:
+                raise
+            logger.warning(
+                "Payload too large for %s, reducing send limit to %d and retrying: %s",
+                req_id, state.splitter.max_chars, e,
+            )
+        except Exception:
+            raise

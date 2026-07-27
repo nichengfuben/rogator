@@ -80,7 +80,7 @@ class TestModelThinking(unittest.TestCase):
 class TestThinkingLevels(unittest.TestCase):
     def test_build_protocol_options_levels(self) -> None:
         from handlers.openai import _build_protocol_options, protocol_thinking_level
-        from echotools.exec.fncall.protocols.entml_thinking import (
+        from echotools.exec.fncall.protocols.entml_think.core import (
             default_max_thinking_length_for_level,
             resolve_thinking_injection,
         )

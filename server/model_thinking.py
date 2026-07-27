@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from echotools.exec.fncall.protocols.entml_thinking import (
+from echotools.exec.fncall.protocols.entml_think.core import (
     normalize_thinking_level,
     normalize_thinking_mode,
     resolve_thinking_injection,
