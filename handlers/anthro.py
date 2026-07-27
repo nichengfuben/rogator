@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from aiohttp import web
 
 from echotools.logger import get_logger
+from echotools.exec.fncall.protocols.entml_think.core import (
+    normalize_thinking_level,
+    parse_max_thinking_length,
+)
 
 from server.formats import (
     TokenExpiredError,
@@ -24,8 +28,6 @@ from echotools.fncall import FncallStreamParser
 
 from handlers import get_state
 from handlers.openai import (
-    _build_protocol_options,
-    _inject_protocol_options,
     _process_openai_non_stream,
     _parse_tool_calls,
     _chat_once,
@@ -38,10 +40,153 @@ from server.session_retry import stream_with_session_retry
 
 logger = get_logger("rogator")
 
+_ANTHROPIC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def _parse_anthropic_effort(body: Dict[str, Any]) -> str:
+    """读取 output_config.effort；省略时官方默认为 high。"""
+    output_config = body.get("output_config")
+    if not isinstance(output_config, dict) or "effort" not in output_config:
+        return "high"
+    level = normalize_thinking_level(output_config["effort"])
+    if level not in _ANTHROPIC_EFFORT_LEVELS:
+        raise ValueError(f"invalid output_config.effort: {output_config['effort']!r}")
+    return level
+
+
+def _build_anthropic_protocol_options(body: Dict[str, Any]) -> Dict[str, Any]:
+    """按 Anthropic Messages API 解析 thinking 与 output_config.effort。
+
+    - effort：仅来自 ``output_config.effort``（默认 high）
+    - thinking.type：``disabled`` | ``enabled`` | ``adaptive``
+    - ``enabled`` 时 ``budget_tokens`` → ``max_thinking_length``
+    """
+    effort = _parse_anthropic_effort(body)
+    opts: Dict[str, Any] = {"include_thinking_in_history": True}
+
+    thinking = body.get("thinking")
+    if thinking is None:
+        opts["thinking_level"] = effort
+        return opts
+
+    if not isinstance(thinking, dict):
+        raise ValueError("thinking must be an object")
+
+    thinking_type = thinking.get("type")
+    if thinking_type is None:
+        raise ValueError("thinking.type is required when thinking is set")
+
+    mode = str(thinking_type).strip().lower()
+    if mode == "disabled":
+        opts["thinking_level"] = "none"
+        return opts
+
+    if mode == "adaptive":
+        opts["thinking_level"] = effort
+        return opts
+
+    if mode == "enabled":
+        opts["thinking_level"] = effort
+        if "budget_tokens" in thinking:
+            max_len = parse_max_thinking_length(thinking["budget_tokens"])
+            if max_len is None:
+                raise ValueError("thinking.budget_tokens must be a positive integer")
+            opts["max_thinking_length"] = max_len
+        return opts
+
+    raise ValueError(f"unsupported thinking.type: {thinking_type!r}")
+
 
 # ============================================================
-# 流式辅助函数
+# Anthropic SSE 流式事件（对齐 mock.py AnthropicBuilder）
 # ============================================================
+
+_STREAM_CHUNK_SIZE = 20
+
+
+def _tool_call_input_dict(tc: Dict[str, Any]) -> Dict[str, Any]:
+    args_str = tc.get("function", {}).get("arguments", "{}")
+    try:
+        args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
+        if not isinstance(args_dict, dict):
+            return {"value": args_dict}
+        return args_dict
+    except json.JSONDecodeError:
+        return {}
+
+
+def _message_start_event(model: str, msg_id: str) -> Dict[str, Any]:
+    return {
+        "type": "message_start",
+        "message": {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": model,
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    }
+
+
+def _content_block_stop_event(index: int) -> Dict[str, Any]:
+    return {"type": "content_block_stop", "index": index}
+
+
+def _message_delta_event(stop_reason: str) -> Dict[str, Any]:
+    return {
+        "type": "message_delta",
+        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+        "usage": {"output_tokens": 0},
+    }
+
+
+def _message_stop_event() -> Dict[str, Any]:
+    return {"type": "message_stop"}
+
+
+def _tool_use_block_events(
+    block_idx: int, tool_id: str, name: str, input_dict: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """单个 tool_use 块的 SSE 事件序列（与 mock.py _build_tool_events 一致）。"""
+    events: List[Dict[str, Any]] = [{
+        "type": "content_block_start",
+        "index": block_idx,
+        "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
+    }]
+    params_json = json.dumps(input_dict, ensure_ascii=False)
+    for i in range(0, len(params_json), _STREAM_CHUNK_SIZE):
+        events.append({
+            "type": "content_block_delta",
+            "index": block_idx,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": params_json[i : i + _STREAM_CHUNK_SIZE],
+            },
+        })
+    events.append(_content_block_stop_event(block_idx))
+    return events
+
+
+def _anthropic_event_bytes(event: Dict[str, Any]) -> bytes:
+    return (
+        f"event: {event['type']}\n"
+        f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+    ).encode("utf-8")
+
+
+async def _emit_anthropic_event(resp, event: Dict[str, Any], disconnected: list) -> bool:
+    return await _safe_write(resp, _anthropic_event_bytes(event), disconnected)
+
+
+async def _emit_anthropic_events(resp, events: List[Dict[str, Any]], disconnected: list) -> bool:
+    for event in events:
+        if not await _emit_anthropic_event(resp, event, disconnected):
+            return False
+    return True
+
 
 async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
     if disconnected[0]:
@@ -57,77 +202,46 @@ async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
 async def _close_block(resp, idx: int, disconnected: list) -> int:
     """关闭 content block。返回已关闭的 index（不自增，避免与下一块 start 的 +=1 双跳）。"""
     if idx >= 0:
-        await _safe_write(
-            resp,
-            f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': idx})}\n\n".encode(),
-            disconnected,
-        )
+        await _emit_anthropic_event(resp, _content_block_stop_event(idx), disconnected)
     return idx
 
 
 async def _send_anthropic_finish(resp, tool_calls, disconnected):
-    delta_msg = {
-        "type": "message_delta",
-        "delta": {
-            "stop_reason": "tool_use" if tool_calls else "end_turn",
-            "stop_sequence": None,
-        },
-        "usage": {"output_tokens": 0},
-    }
-    await _safe_write(resp, f"event: message_delta\ndata: {json.dumps(delta_msg)}\n\n".encode(), disconnected)
-    await _safe_write(resp, f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n".encode(), disconnected)
+    stop_reason = "tool_use" if tool_calls else "end_turn"
+    await _emit_anthropic_event(resp, _message_delta_event(stop_reason), disconnected)
+    await _emit_anthropic_event(resp, _message_stop_event(), disconnected)
 
 
 async def _send_text_block(resp, clean_text: str, block_idx: int, disconnected: list) -> int:
     block_idx += 1
-    block_start = {
+    events: List[Dict[str, Any]] = [{
         "type": "content_block_start",
         "index": block_idx,
         "content_block": {"type": "text", "text": ""},
-    }
-    await _safe_write(resp, f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n".encode(), disconnected)
-    chunk_size = 20
-    for i in range(0, len(clean_text), chunk_size):
-        block_delta = {
+    }]
+    for i in range(0, len(clean_text), _STREAM_CHUNK_SIZE):
+        events.append({
             "type": "content_block_delta",
             "index": block_idx,
-            "delta": {"type": "text_delta", "text": clean_text[i:i+chunk_size]},
-        }
-        if not await _safe_write(resp, f"event: content_block_delta\ndata: {json.dumps(block_delta)}\n\n".encode(), disconnected):
-            break
-    return await _close_block(resp, block_idx, disconnected)
+            "delta": {"type": "text_delta", "text": clean_text[i : i + _STREAM_CHUNK_SIZE]},
+        })
+    events.append(_content_block_stop_event(block_idx))
+    await _emit_anthropic_events(resp, events, disconnected)
+    return block_idx
 
 
-async def _send_tool_use_blocks(resp, tool_calls, block_idx: int, disconnected: list):
+async def _send_tool_use_blocks(resp, tool_calls, block_idx: int, disconnected: list) -> int:
     for tc in tool_calls:
-        args_str = tc.get("function", {}).get("arguments", "{}")
-        try:
-            args_dict = json.loads(args_str) if isinstance(args_str, str) else args_str
-            if not isinstance(args_dict, dict):
-                args_dict = {"value": args_dict}
-        except json.JSONDecodeError:
-            args_dict = {}
+        fixed = _fix_tool_call_id(tc)
         block_idx += 1
-        block_start = {
-            "type": "content_block_start",
-            "index": block_idx,
-            "content_block": {"type": "tool_use", "id": tc.get("id"),
-                              "name": tc.get("function", {}).get("name"), "input": {}},
-        }
-        if not await _safe_write(resp, f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n".encode(), disconnected):
+        events = _tool_use_block_events(
+            block_idx,
+            fixed["id"],
+            fixed.get("function", {}).get("name", ""),
+            _tool_call_input_dict(fixed),
+        )
+        if not await _emit_anthropic_events(resp, events, disconnected):
             break
-        params_json = json.dumps(args_dict, ensure_ascii=False)
-        chunk_size = 20
-        for i in range(0, len(params_json), chunk_size):
-            partial = params_json[i:i+chunk_size]
-            delta_event = {
-                "type": "content_block_delta",
-                "index": block_idx,
-                "delta": {"type": "input_json_delta", "partial_json": partial},
-            }
-            if not await _safe_write(resp, f"event: content_block_delta\ndata: {json.dumps(delta_event)}\n\n".encode(), disconnected):
-                break
-        block_idx = await _close_block(resp, block_idx, disconnected)
     return block_idx
 
 
@@ -139,30 +253,35 @@ async def _send_thinking_delta(resp, content, block_idx, block_type, disconnecte
         if block_type is not None:
             block_idx = await _close_block(resp, block_idx, disconnected)
         block_idx += 1
-        block_start = {
+        if not await _emit_anthropic_event(resp, {
             "type": "content_block_start",
             "index": block_idx,
             "content_block": {"type": "thinking", "thinking": ""},
-        }
-        if not await _safe_write(resp, f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n".encode(), disconnected):
+        }, disconnected):
             return block_idx, block_type, False
         block_type = "thinking"
     if content:
-        block_delta = {
+        if not await _emit_anthropic_event(resp, {
             "type": "content_block_delta",
             "index": block_idx,
             "delta": {"type": "thinking_delta", "thinking": content},
-        }
-        if not await _safe_write(resp, f"event: content_block_delta\ndata: {json.dumps(block_delta)}\n\n".encode(), disconnected):
+        }, disconnected):
             return block_idx, block_type, False
     return block_idx, block_type, True
 
 
 async def _emit_ready_tool_calls(
-    resp, parser, block_idx, block_type, disconnected, pending_tc_count: int,
+    resp,
+    parser,
+    block_idx,
+    block_type,
+    disconnected,
+    pending_tc_count: int,
+    ready: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[int, Optional[str], int, bool]:
     """增量发送 parser 中已完整闭合的 tool_use 块（对齐 mock.py input_json_delta）。"""
-    ready = parser.get_ready_tool_calls()
+    if ready is None:
+        ready = parser.get_ready_tool_calls()
     if not ready:
         return block_idx, block_type, pending_tc_count, True
     # tool_use 前关闭 thinking/text 块
@@ -178,10 +297,11 @@ async def _emit_ready_tool_calls(
 
 async def _stream_anthropic(
     resp, state, messages, model, tools, req_id, disconnected, protocol_options=None,
-):
+) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]]]:
     block_idx = -1
     block_type: Optional[str] = None
     full_answer = ""
+    all_tool_calls: List[Dict[str, Any]] = []
     parser = FncallStreamParser(protocol=state.protocol, tools=tools)
     last_safe_len = 0
     last_thinking_len = 0
@@ -211,7 +331,8 @@ async def _stream_anthropic(
                 continue
 
             full_answer += content
-            parser.feed(content)
+            # feed 已返回本轮就绪的 tool_calls（计数已前进），勿再 get_ready
+            ready_calls = parser.feed(content)
 
             pt = parser.partial_thinking
             if len(pt) > last_thinking_len:
@@ -234,56 +355,50 @@ async def _stream_anthropic(
                             block_idx = await _close_block(resp, block_idx, disconnected)
                             block_type = None
                         block_idx += 1
-                        block_start = {
+                        if not await _emit_anthropic_event(resp, {
                             "type": "content_block_start",
                             "index": block_idx,
                             "content_block": {"type": "text", "text": ""},
-                        }
-                        if not await _safe_write(
-                            resp,
-                            f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n".encode(),
-                            disconnected,
-                        ):
+                        }, disconnected):
                             break
                         block_type = "text"
-                    block_delta = {
+                    if not await _emit_anthropic_event(resp, {
                         "type": "content_block_delta",
                         "index": block_idx,
                         "delta": {"type": "text_delta", "text": new_text},
-                    }
-                    if not await _safe_write(
-                        resp,
-                        f"event: content_block_delta\ndata: {json.dumps(block_delta)}\n\n".encode(),
-                        disconnected,
-                    ):
+                    }, disconnected):
                         break
 
-            # 增量发送已完整闭合的 invoke → tool_use（对齐 mock 流形态）
-            block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
-                resp, parser, block_idx, block_type, disconnected, pending_tc_count,
-            )
-            if not ok:
-                break
+            # 增量发送本轮 feed 已解析完整的 invoke → tool_use
+            if ready_calls:
+                block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
+                    resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+                    ready=ready_calls,
+                )
+                if not ok:
+                    break
     except asyncio.CancelledError:
         logger.info("Stream cancelled %s", req_id)
-        await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
-        return block_idx, block_type, full_answer, True, pending_tc_count
+        return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
     except TokenExpiredError as e:
         logger.warning("Anthropic stream token expired: %s", e)
         error_msg = json.dumps({"type": "error", "error": {"message": str(e), "type": "rate_limited"}})
-        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode(), disconnected)
-        return block_idx, block_type, full_answer, True, pending_tc_count
+        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
+        return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
     except Exception as e:
         logger.error("Anthropic stream error: %s", e, exc_info=True)
         error_msg = json.dumps({"type": "error", "error": {"message": str(e)}})
-        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode(), disconnected)
-        return block_idx, block_type, full_answer, True, pending_tc_count
+        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
+        return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
 
     # 刷 parser 尾部：holdback / thinking / 未闭合 invoke
+    final_text = parser.partial_text
     try:
-        parser.finalize()
+        final_text, parsed_calls = parser.finalize()
+        all_tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
     except Exception as e:
         logger.warning("anthropic stream parser.finalize failed: %s", e)
+        final_text = parser.partial_text
 
     if not disconnected[0]:
         pt = parser.partial_thinking
@@ -295,10 +410,10 @@ async def _stream_anthropic(
                     resp, new_thinking, block_idx, block_type, disconnected
                 )
                 if not ok:
-                    return block_idx, block_type, full_answer, True, pending_tc_count
+                    return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
 
     if not disconnected[0]:
-        safe_text = parser.partial_text
+        safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
         if len(safe_text) > last_safe_len:
             new_text = safe_text[last_safe_len:]
             last_safe_len = len(safe_text)
@@ -308,50 +423,38 @@ async def _stream_anthropic(
                         block_idx = await _close_block(resp, block_idx, disconnected)
                         block_type = None
                     block_idx += 1
-                    block_start = {
+                    if await _emit_anthropic_event(resp, {
                         "type": "content_block_start",
                         "index": block_idx,
                         "content_block": {"type": "text", "text": ""},
-                    }
-                    if await _safe_write(
-                        resp,
-                        f"event: content_block_start\ndata: {json.dumps(block_start)}\n\n".encode(),
-                        disconnected,
-                    ):
+                    }, disconnected):
                         block_type = "text"
                 if block_type == "text":
-                    block_delta = {
+                    await _emit_anthropic_event(resp, {
                         "type": "content_block_delta",
                         "index": block_idx,
                         "delta": {"type": "text_delta", "text": new_text},
-                    }
-                    await _safe_write(
-                        resp,
-                        f"event: content_block_delta\ndata: {json.dumps(block_delta)}\n\n".encode(),
-                        disconnected,
-                    )
+                    }, disconnected)
 
     if not disconnected[0]:
         block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
             resp, parser, block_idx, block_type, disconnected, pending_tc_count,
         )
         if not ok:
-            return block_idx, block_type, full_answer, True, pending_tc_count
+            return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
 
-    return block_idx, block_type, full_answer, False, pending_tc_count
+    return block_idx, block_type, full_answer, False, pending_tc_count, all_tool_calls
 
 
 async def _send_post_stream(
-    resp, state, full_answer, block_type, block_idx, tools, disconnected,
+    resp, block_type, block_idx, all_tool_calls, disconnected,
     already_sent_tc_count: int = 0,
 ):
-    # 关闭正在开着的块（文本/thinking 已实时推出，可能仍未关）
     if block_type is not None:
         block_idx = await _close_block(resp, block_idx, disconnected)
-        block_type = None
-    _, all_tool_calls = _parse_tool_calls(state, full_answer, tools)
     remaining = all_tool_calls[already_sent_tc_count:]
-    block_idx = await _send_tool_use_blocks(resp, remaining, block_idx, disconnected)
+    if remaining:
+        await _send_tool_use_blocks(resp, remaining, block_idx, disconnected)
     await _send_anthropic_finish(resp, all_tool_calls, disconnected)
 
 
@@ -453,7 +556,10 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
         messages = [{"role": "system", "content": sys_text}, *messages]
     if not messages:
         return _error_response(400, "messages is required")
-    protocol_options = _build_protocol_options(body)
+    try:
+        protocol_options = _build_anthropic_protocol_options(body)
+    except ValueError as e:
+        return _error_response(400, str(e))
     req_level = protocol_thinking_level(protocol_options)
     _, _, use_entml = resolve_qwen_thinking(model, req_level)
     qwen_thinking = not use_entml and (always_qwen_thinking(model) or thinking_level_is_active(req_level))
@@ -499,20 +605,16 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     )
     await resp.prepare(request)
     disconnected = [False]
-    start_msg = {"type": "message_start", "message": {
-        "id": _gen_msg_id(), "type": "message", "role": "assistant",
-        "content": [], "model": model, "stop_reason": None,
-        "stop_sequence": None, "usage": {"input_tokens": 0, "output_tokens": 0},
-    }}
-    await _safe_write(resp, f"event: message_start\ndata: {json.dumps(start_msg)}\n\n".encode(), disconnected)
-    block_idx, block_type, full_answer, early_return, pending_tc_count = await _stream_anthropic(
+    msg_id = _gen_msg_id()
+    await _emit_anthropic_event(resp, _message_start_event(model, msg_id), disconnected)
+    block_idx, block_type, _full_answer, early_return, pending_tc_count, all_tool_calls = await _stream_anthropic(
         resp, state, messages, model, tools, req_id, disconnected, protocol_options,
     )
     if disconnected[0] or early_return:
         logger.info("Anthropic client disconnected or early return %s", req_id)
         return resp
     await _send_post_stream(
-        resp, state, full_answer, block_type, block_idx, tools, disconnected,
+        resp, block_type, block_idx, all_tool_calls, disconnected,
         already_sent_tc_count=pending_tc_count,
     )
     return resp

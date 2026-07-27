@@ -343,26 +343,60 @@ async def _emit_chunk(resp, chunk: Dict[str, Any], disconnected: list) -> bool:
     )
 
 
-async def _send_stream_chunks(
-    resp, state, full_answer, tools, model, chunk_id, disconnected,
-    already_sent_tc_count: int = 0,
-):
-    """发送尚未流式发送的 tool_calls 及结束块。"""
-    _, all_tool_calls = _parse_tool_calls(state, full_answer, tools)
-    remaining = all_tool_calls[already_sent_tc_count:]
-    for i, tc in enumerate(remaining):
-        openai_tc = [{
-            "index": already_sent_tc_count + i,
-            "id": tc.get("id"),
-            "type": "function",
-            "function": {
-                "name": tc.get("function", {}).get("name"),
-                "arguments": tc.get("function", {}).get("arguments", ""),
-            },
-        }]
-        chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
+def _openai_tool_call_entry(index: int, tc: Dict[str, Any]) -> Dict[str, Any]:
+    """单个 tool_calls delta 条目（对齐 mock.py OpenAIBuilder._build_tool_calls）。"""
+    fixed = _fix_tool_call_id(tc)
+    func = fixed.get("function", {})
+    args = func.get("arguments", "{}")
+    if not isinstance(args, str):
+        args = json.dumps(args, ensure_ascii=False)
+    return {
+        "index": index,
+        "id": fixed["id"],
+        "type": "function",
+        "function": {
+            "name": func.get("name", ""),
+            "arguments": args,
+        },
+    }
+
+
+async def _emit_tool_call_chunks(
+    resp,
+    model: str,
+    chunk_id: str,
+    tool_calls: List[Dict[str, Any]],
+    start_index: int,
+    disconnected: list,
+) -> int:
+    """按 mock 规范：每个 tool call 单独一个 chunk，delta.content=null。"""
+    index = start_index
+    for tc in tool_calls:
+        chunk = build_openai_chunk(
+            model,
+            chunk_id=chunk_id,
+            tool_calls=[_openai_tool_call_entry(index, tc)],
+        )
         if not await _emit_chunk(resp, chunk, disconnected):
             break
+        index += 1
+    return index
+
+
+async def _send_stream_finish(
+    resp,
+    model: str,
+    chunk_id: str,
+    all_tool_calls: List[Dict[str, Any]],
+    disconnected: list,
+    already_sent_tc_count: int = 0,
+) -> None:
+    """补发未流式送出的 tool_calls，然后 finish + [DONE]（对齐 mock 收尾）。"""
+    remaining = all_tool_calls[already_sent_tc_count:]
+    if remaining:
+        await _emit_tool_call_chunks(
+            resp, model, chunk_id, remaining, already_sent_tc_count, disconnected,
+        )
     finish_reason = "tool_calls" if all_tool_calls else "stop"
     chunk = build_openai_chunk(model, chunk_id=chunk_id, finish_reason=finish_reason)
     await _emit_chunk(resp, chunk, disconnected)
@@ -458,7 +492,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
                 continue
 
             full_answer += content
-            parser.feed(content)
+            ready_calls = parser.feed(content)
 
             # 发送 <entml:thinking> 块中新产生的思考内容
             pt = parser.partial_thinking
@@ -479,22 +513,10 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
                 if not await _emit_chunk(resp, chunk, disconnected):
                     break
 
-            # 增量发送已完整解析的 tool calls
-            for tc in parser.get_ready_tool_calls():
-                tc = _fix_tool_call_id(tc)
-                openai_tc = [{
-                    "index": pending_tc_index,
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tc["function"]["name"],
-                        "arguments": tc["function"]["arguments"],
-                    },
-                }]
-                chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
-                if not await _emit_chunk(resp, chunk, disconnected):
-                    break
-                pending_tc_index += 1
+            # 增量发送本轮 feed 已解析完整的 tool calls（勿再 get_ready，计数已前进）
+            pending_tc_index = await _emit_tool_call_chunks(
+                resp, model, chunk_id, ready_calls, pending_tc_index, disconnected,
+            )
 
     except asyncio.CancelledError:
         await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
@@ -512,11 +534,13 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
         return resp
 
     # 刷 parser 尾部：holdback / thinking 块 / 未闭合 invoke
+    all_tool_calls: List[Dict[str, Any]] = []
+    final_text = parser.partial_text
     try:
-        final_text, _ = parser.finalize()
+        final_text, parsed_calls = parser.finalize()
+        all_tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
     except Exception as e:
         logger.warning("stream parser.finalize failed: %s", e)
-        final_text = parser.partial_text
 
     if not disconnected[0]:
         pt = parser.partial_thinking
@@ -538,22 +562,12 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
                 await _emit_chunk(resp, chunk, disconnected)
 
     if not disconnected[0]:
-        for tc in parser.get_ready_tool_calls():
-            tc = _fix_tool_call_id(tc)
-            openai_tc = [{
-                "index": pending_tc_index,
-                "id": tc["id"],
-                "type": "function",
-                "function": {
-                    "name": tc["function"]["name"],
-                    "arguments": tc["function"]["arguments"],
-                },
-            }]
-            chunk = build_openai_chunk(model, chunk_id=chunk_id, tool_calls=openai_tc)
-            if not await _emit_chunk(resp, chunk, disconnected):
-                break
-            pending_tc_index += 1
+        pending_tc_index = await _emit_tool_call_chunks(
+            resp, model, chunk_id, parser.get_ready_tool_calls(), pending_tc_index, disconnected,
+        )
 
-    await _send_stream_chunks(resp, state, full_answer, tools, model, chunk_id, disconnected,
-                              already_sent_tc_count=pending_tc_index)
+    await _send_stream_finish(
+        resp, model, chunk_id, all_tool_calls, disconnected,
+        already_sent_tc_count=pending_tc_index,
+    )
     return resp

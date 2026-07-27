@@ -30,7 +30,11 @@ if str(ROOT) not in sys.path:
 from echotools.fncall import get_protocol, inject_fncall
 
 from handlers import fold_system_into_user
-from handlers.anthro import _normalize_anthropic_messages, _normalize_anthropic_tools
+from handlers.anthro import (
+    _build_anthropic_protocol_options,
+    _normalize_anthropic_messages,
+    _normalize_anthropic_tools,
+)
 from handlers.openai import (
     _build_protocol_options,
     _inject_protocol_options,
@@ -109,7 +113,8 @@ def demo_anthropic_body() -> Dict[str, Any]:
     return {
         "model": "qwen3.7-max",
         "system": "你是编程助手，回答简洁。",
-        "thinking": {"type": "enabled"},
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "medium"},
         "tools": [
             {
                 "name": "get_weather",
@@ -176,12 +181,14 @@ def build_prompt(
     tools: List[Dict[str, Any]],
     model: str,
     thinking_level: Optional[str] = "medium",
+    protocol_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """与 openai_chat_handler 相同的 prompt 构建链路。"""
-    body: Dict[str, Any] = (
-        {"thinking_level": thinking_level} if thinking_level else {}
-    )
-    protocol_options = _build_protocol_options(body)
+    if protocol_options is None:
+        body: Dict[str, Any] = (
+            {"thinking_level": thinking_level} if thinking_level else {}
+        )
+        protocol_options = _build_protocol_options(body) or {}
     req_level = protocol_thinking_level(protocol_options)
     qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(model, req_level)
     inject_options = _inject_protocol_options(protocol_options, use_entml)
@@ -219,9 +226,9 @@ def build_from_anthropic(body: Dict[str, Any]) -> Dict[str, Any]:
     if system:
         sys_text = system if isinstance(system, str) else json.dumps(system, ensure_ascii=False)
         messages = [{"role": "system", "content": sys_text}, *messages]
-    protocol_options = _build_protocol_options(body)
+    protocol_options = _build_anthropic_protocol_options(body)
     level = protocol_thinking_level(protocol_options)
-    return build_prompt(messages, tools, model, thinking_level=level)
+    return build_prompt(messages, tools, model, thinking_level=level, protocol_options=protocol_options)
 
 
 def load_request(path: Path) -> Dict[str, Any]:
