@@ -10,7 +10,12 @@ from aiohttp import web
 
 from echotools.fncall import FncallStreamParser, inject_fncall
 from echotools.logger import get_logger
-from echotools.exec.fncall.protocols.entml_thinking import normalize_thinking_mode
+from echotools.exec.fncall.protocols.entml_thinking import (
+    normalize_thinking_level,
+    normalize_thinking_mode,
+    parse_max_thinking_length,
+    resolve_thinking_injection,
+)
 from echotools.exec.fncall.protocols.entml_thinking_parse import split_entml_thinking
 
 from handlers import EmptyResponseError, fold_system_into_user, get_state
@@ -35,96 +40,114 @@ logger = get_logger("rogator")
 _ENTML_USER_MARKER = "<current_user_message>"
 
 
-# OpenAI / kimi-code 等 effort 档位：entml 仅 off|on|auto，档位一律映射为 on
-_EFFORT_ON_ALIASES = frozenset({
-    "low", "medium", "high", "xhigh", "minimal", "max", "default",
-})
+# effort 别名 → echotools thinking_level
+_EFFORT_LEVEL_ALIASES = {
+    "minimal": "low",
+    "default": "medium",
+}
 
 
-def _map_reasoning_effort(raw: Any) -> Optional[str]:
-    """映射 reasoning_effort / effort 值为 entml thinking_mode。
-
-    - none/off/false → off
-    - on/true/enabled → on
-    - low/medium/high/xhigh/... → on（档位仅表示开启强度，协议侧无分级）
-    """
+def _map_to_thinking_level(raw: Any) -> Optional[str]:
+    """映射请求侧 thinking / effort 值为 echotools thinking_level。"""
     if raw is None:
         return None
     if isinstance(raw, bool):
-        return "on" if raw else "off"
+        return "medium" if raw else "none"
     if isinstance(raw, (int, float)):
-        return "off" if raw == 0 else "on"
+        return "none" if raw == 0 else "medium"
     key = str(raw).strip().lower()
     if not key:
         return None
+    level = normalize_thinking_level(key)
+    if level is not None:
+        return level
+    if key in _EFFORT_LEVEL_ALIASES:
+        return _EFFORT_LEVEL_ALIASES[key]
     mode = normalize_thinking_mode(key)
-    if mode is not None:
-        return mode
-    if key in _EFFORT_ON_ALIASES:
-        return "on"
+    if mode == "off":
+        return "none"
+    if mode == "on":
+        return "medium"
+    if mode == "auto":
+        return "auto"
     return None
+
+
+def protocol_thinking_level(protocol_options: Optional[Dict[str, Any]]) -> str:
+    """从 protocol_options 读取 thinking_level；兼容旧 thinking_mode。"""
+    opts = protocol_options or {}
+    if opts.get("thinking_level") is not None:
+        normalized = normalize_thinking_level(opts.get("thinking_level"))
+        if normalized is not None:
+            return normalized
+    legacy = normalize_thinking_mode(opts.get("thinking_mode"))
+    if legacy == "off":
+        return "none"
+    if legacy == "on":
+        return "medium"
+    if legacy == "auto":
+        return "auto"
+    return "none"
+
+
+def thinking_level_is_active(level: str) -> bool:
+    return level not in ("none", "")
 
 
 def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """从请求体提取 thinking 设置并构建 protocol_options。
 
     兼容：
-    - thinking: true/false/"on"/"auto"/"off"
-    - thinking: {type: enabled|disabled, budget_tokens|max_tokens|max_thinking_length}
+    - thinking_level: none|low|medium|high|xhigh|max|auto
+    - thinking: true/false/"on"/"auto"/"off"/effort 档位
+    - thinking: {type, effort, mode, budget_tokens, max_thinking_length, ...}
     - 顶层 max_thinking_length / thinking_mode
-    - reasoning_effort: none|low|medium|high|xhigh|on|...（OpenAI / kimi-code）
-    - reasoning: {effort|mode|enabled|type, ...}
+    - reasoning_effort / reasoning（OpenAI / kimi-code）
     """
-    from echotools.exec.fncall.protocols.entml_thinking import parse_max_thinking_length
-
     raw = body.get("thinking")
-    mode: Optional[str] = None
+    level: Optional[str] = normalize_thinking_level(body.get("thinking_level"))
     max_len: Optional[int] = None
 
     if isinstance(raw, bool):
-        mode = "on" if raw else "off"
+        level = "medium" if raw else "none"
     elif isinstance(raw, dict):
-        if "mode" in raw:
-            mode = normalize_thinking_mode(raw.get("mode"))
-        if mode is None and "type" in raw:
-            t = str(raw.get("type") or "").strip().lower()
-            if t in ("enabled", "on", "true"):
-                mode = "on"
-            elif t in ("disabled", "off", "false"):
-                mode = "off"
-            else:
-                mode = normalize_thinking_mode(t)
-        if mode is None and "enabled" in raw:
-            mode = "on" if raw.get("enabled") else "off"
-        if mode is None and "effort" in raw:
-            mode = _map_reasoning_effort(raw.get("effort"))
+        if level is None and "level" in raw:
+            level = normalize_thinking_level(raw.get("level"))
+        if level is None and "mode" in raw:
+            level = _map_to_thinking_level(raw.get("mode"))
+        if level is None and "type" in raw:
+            level = _map_to_thinking_level(raw.get("type"))
+        if level is None and "enabled" in raw:
+            level = "medium" if raw.get("enabled") else "none"
+        if level is None and "effort" in raw:
+            level = _map_to_thinking_level(raw.get("effort"))
         for key in ("budget_tokens", "max_tokens", "max_thinking_length"):
             if key in raw:
                 max_len = parse_max_thinking_length(raw.get(key))
                 if max_len is not None:
                     break
-    elif raw is not None:
-        mode = normalize_thinking_mode(raw)
+    elif raw is not None and level is None:
+        level = _map_to_thinking_level(raw)
 
-    if mode is None:
-        mode = normalize_thinking_mode(body.get("thinking_mode"))
+    if level is None:
+        level = _map_to_thinking_level(body.get("thinking_mode"))
 
-    # OpenAI o-series / kimi-code：顶层 reasoning_effort
-    if mode is None and "reasoning_effort" in body:
-        mode = _map_reasoning_effort(body.get("reasoning_effort"))
+    if level is None and "reasoning_effort" in body:
+        level = _map_to_thinking_level(body.get("reasoning_effort"))
 
-    # 部分客户端：reasoning: {effort: "high"} / {mode: "on"}
-    if mode is None:
+    if level is None:
         reasoning = body.get("reasoning")
         if isinstance(reasoning, dict):
-            if "effort" in reasoning:
-                mode = _map_reasoning_effort(reasoning.get("effort"))
-            if mode is None and "mode" in reasoning:
-                mode = normalize_thinking_mode(reasoning.get("mode"))
-            if mode is None and "enabled" in reasoning:
-                mode = "on" if reasoning.get("enabled") else "off"
-            if mode is None and "type" in reasoning:
-                mode = _map_reasoning_effort(reasoning.get("type"))
+            if "level" in reasoning:
+                level = normalize_thinking_level(reasoning.get("level"))
+            if level is None and "effort" in reasoning:
+                level = _map_to_thinking_level(reasoning.get("effort"))
+            if level is None and "mode" in reasoning:
+                level = _map_to_thinking_level(reasoning.get("mode"))
+            if level is None and "enabled" in reasoning:
+                level = "medium" if reasoning.get("enabled") else "none"
+            if level is None and "type" in reasoning:
+                level = _map_to_thinking_level(reasoning.get("type"))
             if max_len is None:
                 for key in ("budget_tokens", "max_tokens", "max_thinking_length"):
                     if key in reasoning:
@@ -132,20 +155,26 @@ def _build_protocol_options(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                         if max_len is not None:
                             break
         elif reasoning is not None:
-            mode = _map_reasoning_effort(reasoning)
+            level = _map_to_thinking_level(reasoning)
 
     if max_len is None:
         max_len = parse_max_thinking_length(body.get("max_thinking_length"))
 
     opts: Dict[str, Any] = {"include_thinking_in_history": True}
 
-    if mode == "off" or (mode is None and max_len is None):
-        if mode == "off":
-            opts["thinking_mode"] = "off"
+    if level is None and max_len is None:
         return opts
 
-    if mode is not None:
-        opts["thinking_mode"] = mode
+    if level == "none" or (level is None and max_len is not None):
+        if level == "none":
+            opts["thinking_level"] = "none"
+        elif max_len is not None:
+            opts["thinking_level"] = "medium"
+            opts["max_thinking_length"] = max_len
+        return opts
+
+    if level is not None:
+        opts["thinking_level"] = level
     if max_len is not None:
         opts["max_thinking_length"] = max_len
     return opts
@@ -156,6 +185,7 @@ def _inject_protocol_options(protocol_options: Optional[Dict[str, Any]], use_ent
     opts = dict(protocol_options or {})
     opts.setdefault("include_thinking_in_history", True)
     if not use_entml:
+        opts.pop("thinking_level", None)
         opts.pop("thinking_mode", None)
         opts.pop("max_thinking_length", None)
     return opts
@@ -211,7 +241,7 @@ def _parse_tool_calls(state: AppState, full_answer: str, tools: List[Dict]) -> T
 async def _prepare_stream(state, messages, model, tools, req_id, protocol_options=None):
     """准备工作（获取session、构建消息、上传文件、创建chat），单次尝试"""
     qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
-        model, (protocol_options or {}).get("thinking_mode"),
+        model, protocol_thinking_level(protocol_options),
     )
     inject_options = _inject_protocol_options(protocol_options, use_entml)
 
@@ -375,12 +405,12 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     if not messages:
         return _error_response(400, "messages is required")
     protocol_options = _build_protocol_options(body)
-    req_mode = (protocol_options or {}).get("thinking_mode", "off")
-    _, _, use_entml = resolve_qwen_thinking(model, req_mode)
-    qwen_thinking = not use_entml and req_mode not in (None, "off")
+    req_level = protocol_thinking_level(protocol_options)
+    _, _, use_entml = resolve_qwen_thinking(model, req_level)
+    qwen_thinking = not use_entml and thinking_level_is_active(req_level)
     logger.info(
-        "OpenAI: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s, qwen_thinking=%s",
-        len(messages), model, stream, len(tools), req_mode, qwen_thinking,
+        "OpenAI: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
+        len(messages), model, stream, len(tools), req_level, qwen_thinking,
     )
     req_id = _gen_request_id()
     if not stream:

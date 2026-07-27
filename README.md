@@ -2,7 +2,7 @@
 
 Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 Anthropic 兼容 API 暴露给上游客户端。
 
-默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.31`。
+默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.38`。
 
 **平台**：macOS / Linux / Windows  
 **Python**：3.8 – 3.14
@@ -46,7 +46,7 @@ pip install -r requirements-dev.txt
 | 包 | 用途 |
 |----|------|
 | `aiohttp>=3.9.0` | HTTP 服务端与 Qwen 上游请求 |
-| `echotools>=2.3.31` | entml 工具调用、日志、thinking 协议 |
+| `echotools>=2.3.38` | entml 工具调用、日志、thinking_level / thinking_behavior |
 | `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
 | `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
 
@@ -189,7 +189,7 @@ Rogator 根据 `persist/model_entml_thinking.jsonl` 判断模型是否走 entml 
 | `true` | 上游 `Fast` + entml 解析 thinking（默认多数 Qwen3 模型） |
 | `false` | 上游原生 `Thinking`（如 `qwen3.8-max-preview`） |
 
-请求侧 `thinking` / `reasoning_effort` / `thinking_mode` 会归一化为 entml 的 `off` / `on` / `auto`。历史 assistant 的 `reasoning` 字段由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染，Rogator 不再手动拼接 XML。
+请求侧 `thinking` / `reasoning_effort` / `thinking_level` 会归一化为 echotools 挡位：`none` | `low` | `medium` | `high` | `xhigh` | `max` | `auto`。其中 `low`–`max` 注入 `<entml:thinking_mode>on</entml:thinking_mode>` 与对应默认 `max_thinking_length`；`auto` 注入 `auto` 模式；`none` 不注入任何思考相关内容。指引文案位于 `<thinking_behavior>` 块。历史 assistant 的 `reasoning` 由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染。
 
 本地调试 prompt 注入结果：
 

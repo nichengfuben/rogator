@@ -31,7 +31,12 @@ from echotools.fncall import get_protocol, inject_fncall
 
 from handlers import fold_system_into_user
 from handlers.anthro import _normalize_anthropic_messages, _normalize_anthropic_tools
-from handlers.openai import _build_protocol_options, _inject_protocol_options, convert_tools_to_openai
+from handlers.openai import (
+    _build_protocol_options,
+    _inject_protocol_options,
+    convert_tools_to_openai,
+    protocol_thinking_level,
+)
 from server.formats import build_qwen_message
 from server.model_thinking import resolve_qwen_thinking
 
@@ -170,14 +175,15 @@ def build_prompt(
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
     model: str,
-    thinking_mode: Optional[str] = "on",
+    thinking_level: Optional[str] = "medium",
 ) -> Dict[str, Any]:
     """与 openai_chat_handler 相同的 prompt 构建链路。"""
-    body: Dict[str, Any] = {"thinking": thinking_mode} if thinking_mode else {}
-    protocol_options = _build_protocol_options(body)
-    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
-        model, (protocol_options or {}).get("thinking_mode"),
+    body: Dict[str, Any] = (
+        {"thinking_level": thinking_level} if thinking_level else {}
     )
+    protocol_options = _build_protocol_options(body)
+    req_level = protocol_thinking_level(protocol_options)
+    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(model, req_level)
     inject_options = _inject_protocol_options(protocol_options, use_entml)
 
     prepared = fold_system_into_user(messages)
@@ -194,7 +200,7 @@ def build_prompt(
     )
     return {
         "model": model,
-        "thinking_mode_request": (protocol_options or {}).get("thinking_mode", "off"),
+        "thinking_level_request": req_level,
         "use_entml_thinking": use_entml,
         "qwen_thinking_enabled": qwen_enabled,
         "qwen_thinking_mode": qwen_mode,
@@ -214,8 +220,8 @@ def build_from_anthropic(body: Dict[str, Any]) -> Dict[str, Any]:
         sys_text = system if isinstance(system, str) else json.dumps(system, ensure_ascii=False)
         messages = [{"role": "system", "content": sys_text}, *messages]
     protocol_options = _build_protocol_options(body)
-    thinking = (protocol_options or {}).get("thinking_mode", "off")
-    return build_prompt(messages, tools, model, thinking_mode=thinking)
+    level = protocol_thinking_level(protocol_options)
+    return build_prompt(messages, tools, model, thinking_level=level)
 
 
 def load_request(path: Path) -> Dict[str, Any]:
@@ -230,7 +236,11 @@ def main() -> None:
     parser.add_argument("--input", type=Path, help="请求 JSON 文件（OpenAI chat 或 Anthropic messages 格式）")
     parser.add_argument("--format", choices=("openai", "anthropic"), default="openai")
     parser.add_argument("--model", default="qwen3.7-max")
-    parser.add_argument("--thinking", default="on", help="on|off|auto")
+    parser.add_argument(
+        "--thinking",
+        default="medium",
+        help="none|low|medium|high|xhigh|max|auto（或 on/off 兼容）",
+    )
     parser.add_argument("--output", type=Path, help="写入完整 prompt 到文件")
     parser.add_argument("--json", action="store_true", help="输出 JSON 而非纯文本")
     args = parser.parse_args()
@@ -247,13 +257,11 @@ def main() -> None:
             model = data.get("model", args.model)
             body_thinking = data.get("thinking")
             if body_thinking is not None:
-                result = build_prompt(messages, tools, model, thinking_mode=None)
-                # 用请求体自带的 thinking 解析
                 opts = _build_protocol_options(data)
-                mode = (opts or {}).get("thinking_mode", "off")
-                result = build_prompt(messages, tools, model, thinking_mode=mode)
+                level = protocol_thinking_level(opts)
+                result = build_prompt(messages, tools, model, thinking_level=level)
             else:
-                result = build_prompt(messages, tools, model, thinking_mode=args.thinking)
+                result = build_prompt(messages, tools, model, thinking_level=args.thinking)
     elif args.format == "anthropic":
         result = build_from_anthropic(demo_anthropic_body())
     else:
@@ -275,7 +283,7 @@ def main() -> None:
     print("Prompt 构建预览")
     print(sep)
     print(f"model                 : {result['model']}")
-    print(f"request thinking_mode : {result['thinking_mode_request']}")
+    print(f"request thinking_level: {result['thinking_level_request']}")
     print(f"use_entml_thinking    : {result['use_entml_thinking']}")
     print(f"qwen_thinking_enabled : {result['qwen_thinking_enabled']}")
     print(f"qwen_thinking_mode    : {result['qwen_thinking_mode']}")
