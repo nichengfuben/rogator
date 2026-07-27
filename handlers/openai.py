@@ -397,7 +397,9 @@ async def _send_stream_finish(
         await _emit_tool_call_chunks(
             resp, model, chunk_id, remaining, already_sent_tc_count, disconnected,
         )
-    finish_reason = "tool_calls" if all_tool_calls else "stop"
+    finish_reason = (
+        "tool_calls" if (all_tool_calls or already_sent_tc_count > 0) else "stop"
+    )
     chunk = build_openai_chunk(model, chunk_id=chunk_id, finish_reason=finish_reason)
     await _emit_chunk(resp, chunk, disconnected)
     await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
@@ -466,6 +468,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     last_safe_len = 0
     last_thinking_len = 0
     pending_tc_index = 0  # 已流式发送的 tool call 数量
+    streamed_tool_calls: List[Dict[str, Any]] = []
     try:
         async def _make_stream():
             async for event in _chat_once(
@@ -514,6 +517,8 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
                     break
 
             # 增量发送本轮 feed 已解析完整的 tool calls（勿再 get_ready，计数已前进）
+            if ready_calls:
+                streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in ready_calls)
             pending_tc_index = await _emit_tool_call_chunks(
                 resp, model, chunk_id, ready_calls, pending_tc_index, disconnected,
             )
@@ -562,9 +567,15 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
                 await _emit_chunk(resp, chunk, disconnected)
 
     if not disconnected[0]:
+        late_ready = parser.get_ready_tool_calls()
+        if late_ready:
+            streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in late_ready)
         pending_tc_index = await _emit_tool_call_chunks(
-            resp, model, chunk_id, parser.get_ready_tool_calls(), pending_tc_index, disconnected,
+            resp, model, chunk_id, late_ready, pending_tc_index, disconnected,
         )
+
+    if not all_tool_calls:
+        all_tool_calls = streamed_tool_calls
 
     await _send_stream_finish(
         resp, model, chunk_id, all_tool_calls, disconnected,

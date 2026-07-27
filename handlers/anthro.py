@@ -206,8 +206,11 @@ async def _close_block(resp, idx: int, disconnected: list) -> int:
     return idx
 
 
-async def _send_anthropic_finish(resp, tool_calls, disconnected):
-    stop_reason = "tool_use" if tool_calls else "end_turn"
+async def _send_anthropic_finish(
+    resp, tool_calls, disconnected, *, streamed_tool_count: int = 0,
+):
+    """message_delta + message_stop（对齐 mock.py _build_message_delta）。"""
+    stop_reason = "tool_use" if (tool_calls or streamed_tool_count > 0) else "end_turn"
     await _emit_anthropic_event(resp, _message_delta_event(stop_reason), disconnected)
     await _emit_anthropic_event(resp, _message_stop_event(), disconnected)
 
@@ -306,6 +309,7 @@ async def _stream_anthropic(
     last_safe_len = 0
     last_thinking_len = 0
     pending_tc_count = 0  # 已流式发送的 tool_use 数量
+    streamed_tool_calls: List[Dict[str, Any]] = []
     try:
         async def _make_chat_stream():
             async for event in _chat_once(
@@ -371,6 +375,7 @@ async def _stream_anthropic(
 
             # 增量发送本轮 feed 已解析完整的 invoke → tool_use
             if ready_calls:
+                streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in ready_calls)
                 block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
                     resp, parser, block_idx, block_type, disconnected, pending_tc_count,
                     ready=ready_calls,
@@ -379,17 +384,19 @@ async def _stream_anthropic(
                     break
     except asyncio.CancelledError:
         logger.info("Stream cancelled %s", req_id)
-        return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
+        return block_idx, block_type, full_answer, True, pending_tc_count, streamed_tool_calls or all_tool_calls
     except TokenExpiredError as e:
         logger.warning("Anthropic stream token expired: %s", e)
         error_msg = json.dumps({"type": "error", "error": {"message": str(e), "type": "rate_limited"}})
         await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
-        return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
+        merged = all_tool_calls or streamed_tool_calls
+        return block_idx, block_type, full_answer, True, pending_tc_count, merged
     except Exception as e:
         logger.error("Anthropic stream error: %s", e, exc_info=True)
         error_msg = json.dumps({"type": "error", "error": {"message": str(e)}})
         await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
-        return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
+        merged = all_tool_calls or streamed_tool_calls
+        return block_idx, block_type, full_answer, True, pending_tc_count, merged
 
     # 刷 parser 尾部：holdback / thinking / 未闭合 invoke
     final_text = parser.partial_text
@@ -410,7 +417,8 @@ async def _stream_anthropic(
                     resp, new_thinking, block_idx, block_type, disconnected
                 )
                 if not ok:
-                    return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
+                    merged = all_tool_calls or streamed_tool_calls
+                    return block_idx, block_type, full_answer, True, pending_tc_count, merged
 
     if not disconnected[0]:
         safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
@@ -437,11 +445,23 @@ async def _stream_anthropic(
                     }, disconnected)
 
     if not disconnected[0]:
-        block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
-            resp, parser, block_idx, block_type, disconnected, pending_tc_count,
-        )
+        late_ready = parser.get_ready_tool_calls()
+        if late_ready:
+            streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in late_ready)
+            block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
+                resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+                ready=late_ready,
+            )
+        else:
+            block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
+                resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+            )
         if not ok:
-            return block_idx, block_type, full_answer, True, pending_tc_count, all_tool_calls
+            merged = all_tool_calls or streamed_tool_calls
+            return block_idx, block_type, full_answer, True, pending_tc_count, merged
+
+    if not all_tool_calls:
+        all_tool_calls = streamed_tool_calls
 
     return block_idx, block_type, full_answer, False, pending_tc_count, all_tool_calls
 
@@ -455,7 +475,9 @@ async def _send_post_stream(
     remaining = all_tool_calls[already_sent_tc_count:]
     if remaining:
         await _send_tool_use_blocks(resp, remaining, block_idx, disconnected)
-    await _send_anthropic_finish(resp, all_tool_calls, disconnected)
+    await _send_anthropic_finish(
+        resp, all_tool_calls, disconnected, streamed_tool_count=already_sent_tc_count,
+    )
 
 
 # ============================================================

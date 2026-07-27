@@ -271,6 +271,27 @@ class TestAnthropicStreamFormat(unittest.TestCase):
         self.assertEqual(delta["delta"]["stop_sequence"], None)
         self.assertIn("output_tokens", delta["usage"])
 
+    def test_finish_stop_reason_when_only_streamed_count(self) -> None:
+        """已流式发出 tool_use 但 finalize 无列表时，仍应 tool_use（对齐 mock 收尾）。"""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from handlers.anthro import _send_anthropic_finish
+
+        resp = MagicMock()
+        resp.write = AsyncMock()
+        disconnected = [False]
+
+        async def run() -> None:
+            await _send_anthropic_finish(
+                resp, [], disconnected, streamed_tool_count=2,
+            )
+
+        asyncio.run(run())
+        written = b"".join(c.args[0] for c in resp.write.call_args_list)
+        self.assertIn(b'"stop_reason": "tool_use"', written)
+        self.assertIn(b"message_stop", written)
+
 
 if __name__ == "__main__":
     unittest.main()

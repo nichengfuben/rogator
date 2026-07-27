@@ -57,6 +57,27 @@ class TestOpenAIStreamFormat(unittest.TestCase):
         self.assertEqual(choice["delta"]["role"], "assistant")
         self.assertEqual(choice["delta"]["content"], "")
 
+    def test_finish_reason_when_streamed_only(self) -> None:
+        """mock 规范：只要已流式发出 tool_calls，finish 必须为 tool_calls。"""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from handlers.openai import _send_stream_finish
+
+        resp = MagicMock()
+        resp.write = AsyncMock()
+        disconnected = [False]
+
+        async def run() -> None:
+            await _send_stream_finish(
+                resp, "m", "gen-x", [], disconnected, already_sent_tc_count=3,
+            )
+
+        asyncio.run(run())
+        payload = b"".join(c.args[0] for c in resp.write.call_args_list).decode("utf-8")
+        self.assertIn('"finish_reason": "tool_calls"', payload)
+        self.assertIn("[DONE]", payload)
+
     def test_thinking_chunk_has_reasoning_details(self) -> None:
         chunk = build_openai_chunk("qwen3.7-max", chunk_id="gen-test", reasoning="plan")
         delta = chunk["choices"][0]["delta"]
