@@ -82,6 +82,24 @@ def extract_system_for_inject(
     return "\n\n".join(sys_parts), non_sys
 
 
+def prepend_anthropic_system(
+    messages: List[Dict[str, Any]],
+    system: Any,
+) -> List[Dict[str, Any]]:
+    """将 Anthropic ``system`` 字段规范为首条 system 消息（支持 str / block 数组）。"""
+    if system is None or system == "":
+        return messages
+    if isinstance(system, str):
+        sys_text = system.strip()
+    elif isinstance(system, list):
+        sys_text = normalize_message_content(system).strip()
+    else:
+        sys_text = json.dumps(system, ensure_ascii=False).strip()
+    if not sys_text:
+        return messages
+    return [{"role": "system", "content": sys_text}, *messages]
+
+
 def fold_system_into_user(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """[已弃用] 将 system 合并进 user；请改用 ``extract_system_for_inject`` + inject 参数。"""
     user_system_prompt, non_sys = extract_system_for_inject(messages)

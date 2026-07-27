@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
 
 from echotools.fncall import get_protocol, inject_fncall
 
-from handlers import extract_system_for_inject
+from handlers import extract_system_for_inject, prepend_anthropic_system
 from handlers.anthro import (
     _build_anthropic_protocol_options,
     _normalize_anthropic_messages,
@@ -213,6 +213,7 @@ def build_prompt(
         "use_entml_thinking": use_entml,
         "qwen_thinking_enabled": qwen_enabled,
         "qwen_thinking_mode": qwen_mode,
+        "user_system_prompt": user_system_prompt,
         "tool_count": len(openai_tools),
         "prompt": prompt,
         "qwen_feature_config": qwen_msg["feature_config"],
@@ -225,9 +226,7 @@ def build_from_anthropic(body: Dict[str, Any]) -> Dict[str, Any]:
     system = body.get("system")
     tools = _normalize_anthropic_tools(body.get("tools") or [])
     messages = _normalize_anthropic_messages(raw_messages)
-    if system:
-        sys_text = system if isinstance(system, str) else json.dumps(system, ensure_ascii=False)
-        messages = [{"role": "system", "content": sys_text}, *messages]
+    messages = prepend_anthropic_system(messages, system)
     protocol_options = _build_anthropic_protocol_options(body)
     level = protocol_thinking_level(protocol_options)
     return build_prompt(messages, tools, model, thinking_level=level, protocol_options=protocol_options)

@@ -31,6 +31,13 @@ def test_extract_system_only() -> None:
     assert rest == []
 
 
+def test_prepend_anthropic_system_blocks() -> None:
+    from handlers import prepend_anthropic_system
+
+    messages = prepend_anthropic_system([], [{"type": "text", "text": "block sys"}])
+    assert messages == [{"role": "system", "content": "block sys"}]
+
+
 def test_inject_renders_user_system_prompt_block() -> None:
     messages = [
         {"role": "system", "content": "你是助手"},
