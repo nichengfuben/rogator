@@ -3,7 +3,7 @@ from __future__ import annotations
 """HTTP request handlers — shared utilities, helpers and admin endpoints."""
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
 
@@ -37,28 +37,66 @@ def replace_last_user_content(
     return new_messages
 
 
-def fold_system_into_user(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """将 system 消息合并进最后一条 user 消息。"""
+def normalize_message_content(content: Any) -> str:
+    """将 message content（str / block 数组）规范为纯文本。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                text = str(block).strip()
+                if text:
+                    parts.append(text)
+                continue
+            btype = block.get("type")
+            if btype in ("text", "input_text") or (btype is None and "text" in block):
+                text = str(block.get("text") or "").strip()
+            elif btype in ("thinking", "redacted_thinking"):
+                text = str(block.get("thinking") or block.get("data") or "").strip()
+            elif "text" in block:
+                text = str(block.get("text") or "").strip()
+            else:
+                text = ""
+            if text:
+                parts.append(text)
+        return "\n".join(parts)
+    return str(content)
+
+
+def extract_system_for_inject(
+    messages: List[Dict[str, Any]],
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """提取 system 为 ``user_system_prompt``，返回 (prompt, 不含 system 的消息列表)。"""
     sys_parts: List[str] = []
     non_sys: List[Dict[str, Any]] = []
-    for msg in messages:
-        if msg.get("role") == "system":
-            content = msg.get("content", "")
-            if content:
-                sys_parts.append(content if isinstance(content, str) else str(content))
+    for msg in messages or []:
+        if (msg.get("role") or "user") == "system":
+            text = normalize_message_content(msg.get("content")).strip()
+            if text:
+                sys_parts.append(text)
         else:
             non_sys.append(msg)
-    if not sys_parts:
+    return "\n\n".join(sys_parts), non_sys
+
+
+def fold_system_into_user(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """[已弃用] 将 system 合并进 user；请改用 ``extract_system_for_inject`` + inject 参数。"""
+    user_system_prompt, non_sys = extract_system_for_inject(messages)
+    if not user_system_prompt:
         return messages
-    sys_text = "\n\n".join(sys_parts)
     merged = list(non_sys)
     for i in range(len(merged) - 1, -1, -1):
         if merged[i].get("role") == "user":
-            old = merged[i].get("content", "")
-            old_text = old if isinstance(old, str) else str(old)
-            merged[i] = {**merged[i], "content": sys_text + "\n\n" + old_text}
+            old_text = normalize_message_content(merged[i].get("content"))
+            merged[i] = {
+                **merged[i],
+                "content": user_system_prompt + "\n\n" + old_text if old_text else user_system_prompt,
+            }
             return merged
-    merged.insert(0, {"role": "user", "content": sys_text})
+    merged.insert(0, {"role": "user", "content": user_system_prompt})
     return merged
 
 

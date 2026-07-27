@@ -27,7 +27,7 @@ from server.formats import (
 from state import AppState, QueueFullError
 from echotools.fncall import FncallStreamParser
 
-from handlers import get_state
+from handlers import get_state, normalize_message_content
 from handlers.openai import (
     _process_openai_non_stream,
     _parse_tool_calls,
@@ -666,9 +666,16 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     stream = body.get("stream", False)
     tools = _normalize_anthropic_tools(body.get("tools", []) or [])
     messages = _normalize_anthropic_messages(raw_messages)
-    if system:
-        sys_text = system if isinstance(system, str) else json.dumps(system, ensure_ascii=False)
-        messages = [{"role": "system", "content": sys_text}, *messages]
+    if system is not None and system != "":
+        if isinstance(system, str):
+            sys_text = system
+        elif isinstance(system, list):
+            sys_text = normalize_message_content(system)
+        else:
+            sys_text = json.dumps(system, ensure_ascii=False)
+        sys_text = (sys_text or "").strip()
+        if sys_text:
+            messages = [{"role": "system", "content": sys_text}, *messages]
     if not messages:
         return _error_response(400, "messages is required")
     try:

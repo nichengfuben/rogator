@@ -18,7 +18,7 @@ from echotools.exec.fncall.protocols.entml_think.core import (
 )
 from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking
 
-from handlers import EmptyResponseError, fold_system_into_user, get_state
+from handlers import EmptyResponseError, extract_system_for_inject, get_state
 from server.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.session_retry import run_with_session_retry, stream_with_session_retry
 from server.formats import (
@@ -234,10 +234,13 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
         raise TokenExpiredError("No valid session available")
     image_uris = state.client.extract_base64_images(messages)
     image_urls = state.client.extract_image_urls(messages)
-    messages = fold_system_into_user(messages)
+    user_system_prompt, messages = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
-    injected = inject_fncall(messages, openai_tools, state.protocol, lang="zh",
-                             protocol_options=inject_options)
+    injected = inject_fncall(
+        messages, openai_tools, state.protocol, lang="zh",
+        user_system_prompt=user_system_prompt,
+        protocol_options=inject_options,
+    )
     full_content = injected[0]["content"]
     final_messages = injected
     # inject 后超限：尾部 max_chars → send_text，剩余前缀 → 附件（不再回拼 header）

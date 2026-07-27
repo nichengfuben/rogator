@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
 
 from echotools.fncall import get_protocol, inject_fncall
 
-from handlers import fold_system_into_user
+from handlers import extract_system_for_inject
 from handlers.anthro import (
     _build_anthropic_protocol_options,
     _normalize_anthropic_messages,
@@ -193,11 +193,13 @@ def build_prompt(
     qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(model, req_level)
     inject_options = _inject_protocol_options(protocol_options, use_entml)
 
-    prepared = fold_system_into_user(messages)
+    user_system_prompt, prepared = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
     protocol = get_protocol("entml")
     injected = inject_fncall(
-        prepared, openai_tools, protocol, lang="zh", protocol_options=inject_options,
+        prepared, openai_tools, protocol, lang="zh",
+        user_system_prompt=user_system_prompt,
+        protocol_options=inject_options,
     )
     prompt = injected[0]["content"]
     qwen_msg = build_qwen_message(

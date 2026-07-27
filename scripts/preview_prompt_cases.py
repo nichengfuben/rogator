@@ -27,7 +27,7 @@ if str(ROOT) not in sys.path:
 
 from echotools.fncall import get_protocol, inject_fncall
 
-from handlers import fold_system_into_user
+from handlers import extract_system_for_inject
 from handlers.openai import (
     _build_protocol_options,
     _inject_protocol_options,
@@ -147,13 +147,15 @@ def build_full_content(
     *,
     model: str,
 ) -> str:
-    folded = fold_system_into_user(messages)
+    user_system_prompt, prepared = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
     protocol_options = _build_protocol_options({"thinking_level": "medium"})
     _, _, use_entml = resolve_qwen_thinking(model, protocol_thinking_level(protocol_options))
     inject_options = _inject_protocol_options(protocol_options, use_entml)
     injected = inject_fncall(
-        folded, openai_tools, get_protocol("entml"), lang="zh", protocol_options=inject_options,
+        prepared, openai_tools, get_protocol("entml"), lang="zh",
+        user_system_prompt=user_system_prompt,
+        protocol_options=inject_options,
     )
     return injected[0]["content"]
 
