@@ -29,6 +29,7 @@ from server.formats import (
     _fix_tool_call_id,
     _gen_chatcmpl_id,
     _gen_request_id,
+    _gen_tool_id,
     _json_response,
     build_openai_chunk,
     build_openai_response,
@@ -36,6 +37,8 @@ from server.formats import (
 from state import AppState, QueueFullError
 
 logger = get_logger("rogator")
+
+_STREAM_CHUNK_SIZE = 20
 
 
 # effort 别名 → echotools thinking_level
@@ -386,6 +389,79 @@ async def _emit_tool_call_chunks(
     return index
 
 
+async def _emit_openai_streaming_tool_delta(
+    resp,
+    parser,
+    model: str,
+    chunk_id: str,
+    stream_tool: Optional[Dict[str, Any]],
+    tool_index: int,
+    disconnected: list,
+) -> Tuple[Optional[Dict[str, Any]], int, bool]:
+    """invoke 开标签就绪后，增量发送 tool_calls.function.arguments（无需等 </entml:invoke>）。"""
+    delta_info = parser.consume_stream_delta()
+    if not delta_info:
+        return stream_tool, tool_index, True
+    name, partial_json = delta_info
+    if not partial_json:
+        return stream_tool, tool_index, True
+    if stream_tool is None:
+        stream_tool = {
+            "index": tool_index,
+            "id": _gen_tool_id(),
+            "name": name,
+            "header_sent": False,
+        }
+    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
+        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+        if not stream_tool["header_sent"]:
+            entry: Dict[str, Any] = {
+                "index": tool_index,
+                "id": stream_tool["id"],
+                "type": "function",
+                "function": {"name": name, "arguments": piece},
+            }
+            stream_tool["header_sent"] = True
+        else:
+            entry = {
+                "index": stream_tool["index"],
+                "function": {"arguments": piece},
+            }
+        chunk = build_openai_chunk(
+            model,
+            chunk_id=chunk_id,
+            tool_calls=[entry],
+        )
+        if not await _emit_chunk(resp, chunk, disconnected):
+            return stream_tool, tool_index, False
+    return stream_tool, tool_index, True
+
+
+async def _emit_openai_streaming_tool_argument_pieces(
+    resp,
+    model: str,
+    chunk_id: str,
+    stream_tool: Dict[str, Any],
+    partial_json: str,
+    disconnected: list,
+) -> bool:
+    """向已打开的流式 tool call 追加 arguments 片段。"""
+    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
+        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+        entry = {
+            "index": stream_tool["index"],
+            "function": {"arguments": piece},
+        }
+        chunk = build_openai_chunk(
+            model,
+            chunk_id=chunk_id,
+            tool_calls=[entry],
+        )
+        if not await _emit_chunk(resp, chunk, disconnected):
+            return False
+    return True
+
+
 async def _send_stream_finish(
     resp,
     model: str,
@@ -472,6 +548,8 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     last_thinking_len = 0
     pending_tc_index = 0  # 已流式发送的 tool call 数量
     streamed_tool_calls: List[Dict[str, Any]] = []
+    stream_tool: Optional[Dict[str, Any]] = None
+    stream_tool_blocks_sent = 0
     try:
         async def _make_stream():
             async for event in _chat_once(
@@ -500,6 +578,15 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
             full_answer += content
             ready_calls = parser.feed(content)
 
+            had_stream_tool = stream_tool is not None
+            stream_tool, pending_tc_index, ok = await _emit_openai_streaming_tool_delta(
+                resp, parser, model, chunk_id, stream_tool, pending_tc_index, disconnected,
+            )
+            if not had_stream_tool and stream_tool is not None:
+                stream_tool_blocks_sent += 1
+            if not ok:
+                break
+
             # 发送 <entml:thinking> 块中新产生的思考内容
             pt = parser.partial_thinking
             if len(pt) > last_thinking_len:
@@ -521,10 +608,15 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
 
             # 增量发送本轮 feed 已解析完整的 tool calls（勿再 get_ready，计数已前进）
             if ready_calls:
-                streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in ready_calls)
-            pending_tc_index = await _emit_tool_call_chunks(
-                resp, model, chunk_id, ready_calls, pending_tc_index, disconnected,
-            )
+                fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+                streamed_tool_calls.extend(fixed)
+                if stream_tool is not None:
+                    stream_tool = None
+                    pending_tc_index += len(fixed)
+                else:
+                    pending_tc_index = await _emit_tool_call_chunks(
+                        resp, model, chunk_id, fixed, pending_tc_index, disconnected,
+                    )
 
     except asyncio.CancelledError:
         await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
@@ -572,13 +664,40 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     if not disconnected[0]:
         late_ready = parser.get_ready_tool_calls()
         if late_ready:
-            streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in late_ready)
-        pending_tc_index = await _emit_tool_call_chunks(
-            resp, model, chunk_id, late_ready, pending_tc_index, disconnected,
-        )
+            fixed = [_fix_tool_call_id(tc) for tc in late_ready]
+            streamed_tool_calls.extend(fixed)
+            if stream_tool is not None:
+                stream_tool = None
+                pending_tc_index += len(fixed)
+            else:
+                pending_tc_index = await _emit_tool_call_chunks(
+                    resp, model, chunk_id, fixed, pending_tc_index, disconnected,
+                )
+        elif stream_tool is not None:
+            if not parser.streaming_invoke_closed:
+                final_delta = parser.complete_stream_delta_if_needed()
+                if final_delta:
+                    _, piece = final_delta
+                    if piece:
+                        await _emit_openai_streaming_tool_argument_pieces(
+                            resp, model, chunk_id, stream_tool, piece, disconnected,
+                        )
+            stream_tool = None
+            if parser.streaming_invoke_closed or all_tool_calls:
+                pending_tc_index += 1
+            else:
+                logger.warning(
+                    "OpenAI stream ended with incomplete invoke %s", req_id,
+                )
 
     if not all_tool_calls:
         all_tool_calls = streamed_tool_calls
+
+    if all_tool_calls and stream_tool_blocks_sent:
+        pending_tc_index = max(
+            pending_tc_index,
+            min(len(all_tool_calls), stream_tool_blocks_sent),
+        )
 
     await _send_stream_finish(
         resp, model, chunk_id, all_tool_calls, disconnected,

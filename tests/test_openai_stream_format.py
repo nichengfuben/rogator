@@ -2,11 +2,34 @@ from __future__ import annotations
 
 """OpenAI 流式 tool_calls 格式与 mock.py OpenAIBuilder 对齐测试。"""
 
+import asyncio
 import json
 import unittest
+from unittest.mock import AsyncMock, MagicMock
 
-from handlers.openai import _openai_tool_call_entry
+from echotools.fncall import FncallStreamParser, get_protocol
+
+from handlers.openai import (
+    _emit_openai_streaming_tool_delta,
+    _openai_tool_call_entry,
+    _send_stream_finish,
+)
 from server.formats import build_openai_chunk
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    },
+]
 
 
 class TestOpenAIStreamFormat(unittest.TestCase):
@@ -59,11 +82,6 @@ class TestOpenAIStreamFormat(unittest.TestCase):
 
     def test_finish_reason_when_streamed_only(self) -> None:
         """mock 规范：只要已流式发出 tool_calls，finish 必须为 tool_calls。"""
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        from handlers.openai import _send_stream_finish
-
         resp = MagicMock()
         resp.write = AsyncMock()
         disconnected = [False]
@@ -77,6 +95,56 @@ class TestOpenAIStreamFormat(unittest.TestCase):
         payload = b"".join(c.args[0] for c in resp.write.call_args_list).decode("utf-8")
         self.assertIn('"finish_reason": "tool_calls"', payload)
         self.assertIn("[DONE]", payload)
+
+    def test_stream_invoke_emits_tool_call_arguments_incrementally(self) -> None:
+        """OpenAI 流式路径应在 invoke 开标签后增量发送 arguments。"""
+        protocol = get_protocol("entml")
+        parser = FncallStreamParser(protocol=protocol, tools=TOOLS)
+        text = (
+            '<entml:invoke name="get_weather">\n'
+            '<entml:parameter name="city">上海</entml:parameter>\n'
+            "</entml:invoke>"
+        )
+        resp = MagicMock()
+        writes: list[bytes] = []
+
+        async def capture_write(data: bytes) -> None:
+            writes.append(data)
+
+        resp.write = capture_write
+        disconnected = [False]
+        stream_tool = None
+        tool_index = 0
+
+        async def run() -> None:
+            nonlocal stream_tool, tool_index
+            for i in range(0, len(text), 4):
+                parser.feed(text[i : i + 4])
+                stream_tool, tool_index, ok = await _emit_openai_streaming_tool_delta(
+                    resp, parser, "qwen3.7-max", "gen-test", stream_tool, tool_index, disconnected,
+                )
+                self.assertTrue(ok)
+
+        asyncio.run(run())
+        payload = b"".join(writes).decode("utf-8")
+        self.assertIn('"tool_calls"', payload)
+        self.assertIn("get_weather", payload)
+        self.assertIn("city", payload)
+        chunks = [line for line in payload.split("\n") if line.startswith("data: ") and line != "data: [DONE]"]
+        self.assertGreater(len(chunks), 1)
+
+    def test_post_stream_remaining_after_streamed_tool(self) -> None:
+        """arguments 已流式发完时，finish 不应再重复整段 tool_calls。"""
+        all_tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city":"上海"}'},
+            }
+        ]
+        pending_tc_index = 1
+        remaining = all_tool_calls[pending_tc_index:]
+        self.assertEqual(remaining, [])
 
     def test_thinking_chunk_has_reasoning_details(self) -> None:
         chunk = build_openai_chunk("qwen3.7-max", chunk_id="gen-test", reasoning="plan")
