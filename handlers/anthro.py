@@ -20,6 +20,7 @@ from server.formats import (
     _fix_tool_call_id,
     _gen_msg_id,
     _gen_request_id,
+    _gen_tool_id,
     _json_response,
     convert_to_anthropic,
 )
@@ -298,6 +299,69 @@ async def _emit_ready_tool_calls(
     return block_idx, block_type, pending_tc_count + len(fixed), True
 
 
+async def _emit_streaming_tool_delta(
+    resp,
+    parser,
+    block_idx: int,
+    block_type: Optional[str],
+    stream_tool: Optional[Dict[str, Any]],
+    disconnected: list,
+) -> Tuple[int, Optional[str], Optional[Dict[str, Any]], bool]:
+    """invoke 开标签就绪后，增量发送 input_json_delta（无需等 </entml:invoke>）。"""
+    delta_info = parser.consume_stream_delta()
+    if not delta_info:
+        return block_idx, block_type, stream_tool, True
+    name, partial_json = delta_info
+    if not partial_json:
+        return block_idx, block_type, stream_tool, True
+    if block_type is not None:
+        block_idx = await _close_block(resp, block_idx, disconnected)
+        block_type = None
+    if stream_tool is None:
+        block_idx += 1
+        stream_tool = {
+            "block_idx": block_idx,
+            "tool_id": _gen_tool_id(),
+            "name": name,
+        }
+        if not await _emit_anthropic_event(resp, {
+            "type": "content_block_start",
+            "index": block_idx,
+            "content_block": {
+                "type": "tool_use",
+                "id": stream_tool["tool_id"],
+                "name": name,
+                "input": {},
+            },
+        }, disconnected):
+            return block_idx, block_type, stream_tool, False
+        block_type = "tool_use"
+    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
+        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+        if not await _emit_anthropic_event(resp, {
+            "type": "content_block_delta",
+            "index": stream_tool["block_idx"],
+            "delta": {"type": "input_json_delta", "partial_json": piece},
+        }, disconnected):
+            return block_idx, block_type, stream_tool, False
+    return block_idx, block_type, stream_tool, True
+
+
+async def _close_streaming_tool_block(
+    resp,
+    stream_tool: Optional[Dict[str, Any]],
+    block_idx: int,
+    disconnected: list,
+) -> Tuple[int, Optional[str]]:
+    """关闭流式 tool_use 块。"""
+    if stream_tool is None:
+        return block_idx, None
+    await _emit_anthropic_event(
+        resp, _content_block_stop_event(stream_tool["block_idx"]), disconnected,
+    )
+    return block_idx, None
+
+
 async def _stream_anthropic(
     resp, state, messages, model, tools, req_id, disconnected, protocol_options=None,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]]]:
@@ -310,6 +374,7 @@ async def _stream_anthropic(
     last_thinking_len = 0
     pending_tc_count = 0  # 已流式发送的 tool_use 数量
     streamed_tool_calls: List[Dict[str, Any]] = []
+    stream_tool: Optional[Dict[str, Any]] = None
     try:
         async def _make_chat_stream():
             async for event in _chat_once(
@@ -335,8 +400,13 @@ async def _stream_anthropic(
                 continue
 
             full_answer += content
-            # feed 已返回本轮就绪的 tool_calls（计数已前进），勿再 get_ready
             ready_calls = parser.feed(content)
+
+            block_idx, block_type, stream_tool, ok = await _emit_streaming_tool_delta(
+                resp, parser, block_idx, block_type, stream_tool, disconnected,
+            )
+            if not ok:
+                break
 
             pt = parser.partial_thinking
             if len(pt) > last_thinking_len:
@@ -373,15 +443,22 @@ async def _stream_anthropic(
                     }, disconnected):
                         break
 
-            # 增量发送本轮 feed 已解析完整的 invoke → tool_use
             if ready_calls:
-                streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in ready_calls)
-                block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
-                    resp, parser, block_idx, block_type, disconnected, pending_tc_count,
-                    ready=ready_calls,
-                )
-                if not ok:
-                    break
+                fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+                streamed_tool_calls.extend(fixed)
+                if stream_tool is not None:
+                    block_idx, block_type = await _close_streaming_tool_block(
+                        resp, stream_tool, block_idx, disconnected,
+                    )
+                    stream_tool = None
+                    pending_tc_count += len(fixed)
+                else:
+                    block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
+                        resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+                        ready=ready_calls,
+                    )
+                    if not ok:
+                        break
     except asyncio.CancelledError:
         logger.info("Stream cancelled %s", req_id)
         return block_idx, block_type, full_answer, True, pending_tc_count, streamed_tool_calls or all_tool_calls
@@ -447,18 +524,34 @@ async def _stream_anthropic(
     if not disconnected[0]:
         late_ready = parser.get_ready_tool_calls()
         if late_ready:
-            streamed_tool_calls.extend(_fix_tool_call_id(tc) for tc in late_ready)
-            block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
-                resp, parser, block_idx, block_type, disconnected, pending_tc_count,
-                ready=late_ready,
+            fixed = [_fix_tool_call_id(tc) for tc in late_ready]
+            streamed_tool_calls.extend(fixed)
+            if stream_tool is not None:
+                block_idx, block_type = await _close_streaming_tool_block(
+                    resp, stream_tool, block_idx, disconnected,
+                )
+                stream_tool = None
+                pending_tc_count += len(fixed)
+            else:
+                block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
+                    resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+                    ready=late_ready,
+                )
+                if not ok:
+                    merged = all_tool_calls or streamed_tool_calls
+                    return block_idx, block_type, full_answer, True, pending_tc_count, merged
+        elif stream_tool is not None:
+            block_idx, block_type = await _close_streaming_tool_block(
+                resp, stream_tool, block_idx, disconnected,
             )
+            stream_tool = None
         else:
             block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
                 resp, parser, block_idx, block_type, disconnected, pending_tc_count,
             )
-        if not ok:
-            merged = all_tool_calls or streamed_tool_calls
-            return block_idx, block_type, full_answer, True, pending_tc_count, merged
+            if not ok:
+                merged = all_tool_calls or streamed_tool_calls
+                return block_idx, block_type, full_answer, True, pending_tc_count, merged
 
     if not all_tool_calls:
         all_tool_calls = streamed_tool_calls
