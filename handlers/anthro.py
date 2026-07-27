@@ -545,11 +545,31 @@ async def _stream_anthropic(
                     merged = all_tool_calls or streamed_tool_calls
                     return block_idx, block_type, full_answer, True, pending_tc_count, merged
         elif stream_tool is not None:
+            if not parser.streaming_invoke_closed:
+                final_delta = parser.complete_stream_delta_if_needed()
+                if final_delta:
+                    _, piece = final_delta
+                    if piece:
+                        for i in range(0, len(piece), _STREAM_CHUNK_SIZE):
+                            chunk = piece[i : i + _STREAM_CHUNK_SIZE]
+                            await _emit_anthropic_event(resp, {
+                                "type": "content_block_delta",
+                                "index": stream_tool["block_idx"],
+                                "delta": {
+                                    "type": "input_json_delta",
+                                    "partial_json": chunk,
+                                },
+                            }, disconnected)
             block_idx, block_type = await _close_streaming_tool_block(
                 resp, stream_tool, block_idx, disconnected,
             )
             stream_tool = None
-            pending_tc_count += 1
+            if parser.streaming_invoke_closed or all_tool_calls:
+                pending_tc_count += 1
+            else:
+                logger.warning(
+                    "Anthropic stream ended with incomplete invoke %s", req_id,
+                )
         else:
             block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
                 resp, parser, block_idx, block_type, disconnected, pending_tc_count,
