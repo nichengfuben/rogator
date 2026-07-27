@@ -161,6 +161,22 @@ class TestThinkingLevels(unittest.TestCase):
         self.assertIn("<entml:thinking_mode>medium</entml:thinking_mode>", prompt)
         self.assertIn("<entml:max_thinking_length>25600</entml:max_thinking_length>", prompt)
 
+    def test_inject_no_tools_thinking_behavior_omits_invoke(self) -> None:
+        from echotools.fncall import get_protocol, inject_fncall
+        from handlers.openai import _build_protocol_options, _inject_protocol_options
+
+        opts = _inject_protocol_options(
+            _build_protocol_options({"thinking_level": "medium"}), True,
+        )
+        prompt = inject_fncall(
+            [{"role": "user", "content": "hi"}],
+            [],
+            get_protocol("entml"),
+            protocol_options=opts,
+        )[0]["content"]
+        self.assertIn("<thinking_behavior>", prompt)
+        self.assertNotIn("<entml:invoke>", prompt.split("</thinking_behavior>")[0])
+
 
 class TestMessageHistory(unittest.TestCase):
     def test_inject_renders_reasoning_in_history(self) -> None:

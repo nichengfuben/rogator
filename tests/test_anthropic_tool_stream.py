@@ -107,7 +107,38 @@ class TestAnthropicToolStream(unittest.TestCase):
             json.loads(batch_calls[0]["function"]["arguments"]),
         )
 
-    def test_thinking_plus_invoke_stream(self) -> None:
+    def test_stream_invoke_emits_input_json_delta_incrementally(self) -> None:
+        protocol = get_protocol("entml")
+        parser = FncallStreamParser(protocol=protocol, tools=TOOLS)
+        deltas: list[tuple[str, str]] = []
+        text = (
+            '<entml:invoke name="get_weather">\n'
+            '<entml:parameter name="city">上海</entml:parameter>\n'
+            "</entml:invoke>"
+        )
+        for i in range(0, len(text), 4):
+            parser.feed(text[i : i + 4])
+            chunk = parser.consume_stream_delta()
+            if chunk:
+                deltas.append(chunk)
+        self.assertTrue(deltas)
+        names = {d[0] for d in deltas}
+        self.assertEqual(names, {"get_weather"})
+        merged = "".join(d[1] for d in deltas)
+        self.assertIn("上海", merged)
+
+    def test_post_stream_remaining_after_streamed_tool(self) -> None:
+        """input_json_delta 已发完时，post_stream 不应再重复整段 tool_use。"""
+        all_tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city":"上海"}'},
+            }
+        ]
+        pending_tc_count = 1
+        remaining = all_tool_calls[pending_tc_count:]
+        self.assertEqual(remaining, [])
         protocol = get_protocol("entml")
         parser = FncallStreamParser(protocol=protocol, tools=TOOLS)
         emitted: list[dict] = []

@@ -375,6 +375,7 @@ async def _stream_anthropic(
     pending_tc_count = 0  # 已流式发送的 tool_use 数量
     streamed_tool_calls: List[Dict[str, Any]] = []
     stream_tool: Optional[Dict[str, Any]] = None
+    stream_tool_blocks_sent = 0
     try:
         async def _make_chat_stream():
             async for event in _chat_once(
@@ -402,9 +403,12 @@ async def _stream_anthropic(
             full_answer += content
             ready_calls = parser.feed(content)
 
+            had_stream_tool = stream_tool is not None
             block_idx, block_type, stream_tool, ok = await _emit_streaming_tool_delta(
                 resp, parser, block_idx, block_type, stream_tool, disconnected,
             )
+            if not had_stream_tool and stream_tool is not None:
+                stream_tool_blocks_sent += 1
             if not ok:
                 break
 
@@ -545,6 +549,7 @@ async def _stream_anthropic(
                 resp, stream_tool, block_idx, disconnected,
             )
             stream_tool = None
+            pending_tc_count += 1
         else:
             block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
                 resp, parser, block_idx, block_type, disconnected, pending_tc_count,
@@ -555,6 +560,12 @@ async def _stream_anthropic(
 
     if not all_tool_calls:
         all_tool_calls = streamed_tool_calls
+
+    if all_tool_calls and stream_tool_blocks_sent:
+        pending_tc_count = max(
+            pending_tc_count,
+            min(len(all_tool_calls), stream_tool_blocks_sent),
+        )
 
     return block_idx, block_type, full_answer, False, pending_tc_count, all_tool_calls
 
