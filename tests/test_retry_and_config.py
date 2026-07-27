@@ -70,6 +70,66 @@ class TestModelThinking(unittest.TestCase):
         self.assertTrue(enabled)
         self.assertEqual(mode, "Thinking")
 
+    def test_resolve_native_none(self) -> None:
+        enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "none")
+        self.assertFalse(enabled)
+        self.assertEqual(mode, "Fast")
+        self.assertFalse(use_entml)
+
+
+class TestThinkingLevels(unittest.TestCase):
+    def test_build_protocol_options_levels(self) -> None:
+        from handlers.openai import _build_protocol_options, protocol_thinking_level
+        from echotools.exec.fncall.protocols.entml_thinking import (
+            default_max_thinking_length_for_level,
+            resolve_thinking_injection,
+        )
+
+        cases = {
+            "none": ("none", None),
+            "low": ("on", 6554),
+            "medium": ("on", 13108),
+            "high": ("on", 32768),
+            "xhigh": ("on", 52428),
+            "max": ("on", 62260),
+            "auto": ("auto", None),
+        }
+        for level, (mode, default_max) in cases.items():
+            opts = _build_protocol_options({"thinking_level": level}) or {}
+            self.assertEqual(protocol_thinking_level(opts), level)
+            if level == "none":
+                self.assertIsNone(resolve_thinking_injection(opts))
+                continue
+            resolved = resolve_thinking_injection(opts)
+            assert resolved is not None
+            inj_mode, max_len = resolved
+            self.assertEqual(inj_mode, mode)
+            self.assertEqual(max_len, default_max)
+
+    def test_build_protocol_options_reasoning_effort(self) -> None:
+        from handlers.openai import _build_protocol_options, protocol_thinking_level
+
+        opts = _build_protocol_options({"reasoning_effort": "high"}) or {}
+        self.assertEqual(protocol_thinking_level(opts), "high")
+        self.assertEqual(opts.get("thinking_level"), "high")
+
+    def test_inject_renders_thinking_behavior(self) -> None:
+        from echotools.fncall import get_protocol, inject_fncall
+        from handlers.openai import _build_protocol_options, _inject_protocol_options
+
+        opts = _inject_protocol_options(
+            _build_protocol_options({"thinking_level": "medium"}), True,
+        )
+        prompt = inject_fncall(
+            [{"role": "user", "content": "hi"}],
+            [],
+            get_protocol("entml"),
+            protocol_options=opts,
+        )[0]["content"]
+        self.assertIn("<thinking_behavior>", prompt)
+        self.assertIn("<entml:thinking_mode>on</entml:thinking_mode>", prompt)
+        self.assertIn("<entml:max_thinking_length>13108</entml:max_thinking_length>", prompt)
+
 
 class TestMessageHistory(unittest.TestCase):
     def test_inject_renders_reasoning_in_history(self) -> None:
@@ -81,7 +141,9 @@ class TestMessageHistory(unittest.TestCase):
             "reasoning": "step one",
             "content": "answer text",
         }, {"role": "user", "content": "follow up"}]
-        opts = _inject_protocol_options(_build_protocol_options({"thinking": "on"}), True)
+        opts = _inject_protocol_options(
+            _build_protocol_options({"thinking_level": "medium"}), True,
+        )
         prompt = inject_fncall(msgs, [], get_protocol("entml"), protocol_options=opts)[0]["content"]
         self.assertIn("<entml:thinking>", prompt)
         self.assertIn("step one", prompt)

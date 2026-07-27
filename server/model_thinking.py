@@ -6,7 +6,11 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from echotools.exec.fncall.protocols.entml_thinking import normalize_thinking_mode
+from echotools.exec.fncall.protocols.entml_thinking import (
+    normalize_thinking_level,
+    normalize_thinking_mode,
+    resolve_thinking_injection,
+)
 
 logger = logging.getLogger("rogator")
 
@@ -57,21 +61,26 @@ def uses_entml_thinking(model: str) -> bool:
 
 def resolve_qwen_thinking(
     model: str,
-    request_thinking_mode: Optional[str],
+    request_thinking_level: Optional[str],
 ) -> Tuple[bool, str, bool]:
     """返回 (qwen_thinking_enabled, qwen_thinking_mode, use_entml_protocol)。
 
-    - entml 模型：上游永远 Fast，thinking 由 entml 解析。
-    - 非 entml 模型：请求非 off 时上游开思考（含 auto）；显式 off 时 Fast。
+    - entml 模型：上游永远 Fast，thinking 由 echotools `<thinking_behavior>` 注入。
+    - 非 entml 模型：thinking_level 非 none 时上游开思考；none 时 Fast。
     """
-    mode = normalize_thinking_mode(request_thinking_mode)
+    level = normalize_thinking_level(request_thinking_level)
+    if level is None and request_thinking_level is not None:
+        legacy = normalize_thinking_mode(request_thinking_level)
+        if legacy == "off":
+            level = "none"
+        elif legacy == "on":
+            level = "medium"
+        elif legacy == "auto":
+            level = "auto"
+    level = level or "none"
     if uses_entml_thinking(model):
         return False, "Fast", True
 
-    if mode is None or mode == "auto":
-        return True, "Thinking", False
-    if mode == "on":
-        return True, "Thinking", False
-    if mode == "off":
+    if level == "none" or resolve_thinking_injection({"thinking_level": level}) is None:
         return False, "Fast", False
-    return False, "Fast", False
+    return True, "Thinking", False

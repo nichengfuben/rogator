@@ -30,6 +30,8 @@ from handlers.openai import (
     _parse_tool_calls,
     _chat_once,
     convert_tools_to_openai,
+    protocol_thinking_level,
+    thinking_level_is_active,
 )
 from server.model_thinking import resolve_qwen_thinking
 from server.session_retry import stream_with_session_retry
@@ -452,12 +454,12 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     if not messages:
         return _error_response(400, "messages is required")
     protocol_options = _build_protocol_options(body)
-    req_mode = (protocol_options or {}).get("thinking_mode", "off")
-    _, _, use_entml = resolve_qwen_thinking(model, req_mode)
-    qwen_thinking = not use_entml and req_mode not in (None, "off")
+    req_level = protocol_thinking_level(protocol_options)
+    _, _, use_entml = resolve_qwen_thinking(model, req_level)
+    qwen_thinking = not use_entml and thinking_level_is_active(req_level)
     logger.info(
-        "Anthropic: %d messages, model=%s, stream=%s, tools=%d, thinking_mode=%s, qwen_thinking=%s",
-        len(messages), model, stream, len(tools), req_mode, qwen_thinking,
+        "Anthropic: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
+        len(messages), model, stream, len(tools), req_level, qwen_thinking,
     )
     req_id = _gen_request_id()
     if not stream:
