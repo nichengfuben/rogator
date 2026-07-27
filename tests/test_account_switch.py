@@ -71,7 +71,12 @@ class TestPrelogin(unittest.IsolatedAsyncioTestCase):
 
         client.login_account = AsyncMock(side_effect=_fake_login)
 
-        await client.prelogin_accounts(2)
+        stub_accounts = [
+            Account(username="a@test.com", password="pw"),
+            Account(username="b@test.com", password="pw"),
+        ]
+        with patch("server.qwen_client.ACCOUNTS", stub_accounts):
+            await client.prelogin_accounts(2)
         self.assertEqual(valid_session_count(client._sessions), 2)
 
 
