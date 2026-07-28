@@ -580,7 +580,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     disconnected = [False]
     full_answer = ""
     full_thinking = ""
-    parser = FncallStreamParser(protocol=state.protocol, tools=tools)
+    parser = FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options)
     last_safe_len = 0
     last_thinking_len = 0
     pending_tc_index = 0  # 已流式发送的 tool call 数量

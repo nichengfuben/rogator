@@ -441,7 +441,7 @@ async def _stream_anthropic(
     block_type: Optional[str] = None
     full_answer = ""
     all_tool_calls: List[Dict[str, Any]] = []
-    parser = FncallStreamParser(protocol=state.protocol, tools=tools)
+    parser = FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options)
     last_safe_len = 0
     last_thinking_len = 0
     pending_tc_count = 0  # 已流式发送的 tool_use 数量
