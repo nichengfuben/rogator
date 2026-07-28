@@ -41,6 +41,7 @@ MAX_CONCURRENT = CONFIG.max_concurrent
 MAX_QUEUE_SIZE = CONFIG.max_queue_size
 MAX_CHARS = CONFIG.max_chars
 QWEN_SEND_MAX_CHARS = CONFIG.qwen_send_max_chars
+MODEL_CONTEXT_LENGTH = CONFIG.model_context_length
 
 
 class LongTextSplitter:

@@ -40,6 +40,15 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cfg.prelogin, 5)
             self.assertEqual(cfg.max_retry_on_error, 2)
 
+    def test_load_config_limits_default_256k(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "config.toml"
+            p.write_text("[server]\nport = 8932\n", encoding="utf-8")
+            cfg = load_config(p)
+            self.assertEqual(cfg.max_chars, 256_000)
+            self.assertEqual(cfg.qwen_send_max_chars, 256_000)
+            self.assertEqual(cfg.model_context_length, 256_000)
+
     def test_loads_toml_parses_sections(self) -> None:
         data = _loads_toml('[server]\nport = 9000\nhost = "127.0.0.1"\n')
         self.assertEqual(data["server"]["port"], 9000)
@@ -184,11 +193,16 @@ class TestThinkingLevels(unittest.TestCase):
             self.assertIsNone(resolve_thinking_injection(opts), msg=str(body))
 
     def test_models_list_think_efforts(self) -> None:
-        from server.model_catalog import build_openai_model_entry, model_supports_thinking
+        from server.model_catalog import (
+            MODEL_CONTEXT_LENGTH,
+            build_openai_model_entry,
+            model_supports_thinking,
+        )
 
         self.assertTrue(model_supports_thinking("qwen3.7-max"))
         self.assertTrue(model_supports_thinking("qwen3.8-max-preview"))
         entry = build_openai_model_entry("qwen3.7-max")
+        self.assertEqual(entry.get("context_length"), MODEL_CONTEXT_LENGTH)
         te = entry.get("think_efforts") or {}
         self.assertTrue(te.get("support"))
         self.assertNotIn("none", te.get("valid_efforts", []))

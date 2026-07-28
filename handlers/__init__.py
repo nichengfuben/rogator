@@ -156,12 +156,21 @@ async def list_models_handler(request: web.Request) -> web.Response:
 
 
 async def anthropic_list_models_handler(request: web.Request) -> web.Response:
+    from server.model_catalog import model_context_length
+
     state = get_state()
     now = int(__import__("time").time())
+    ctx = model_context_length()
     return _json_response({
         "type": "list",
         "data": [
-            {"type": "model", "id": m, "display_name": m, "created_at": now}
+            {
+                "type": "model",
+                "id": m,
+                "display_name": m,
+                "created_at": now,
+                "context_length": ctx,
+            }
             for m in state._models
         ],
         "has_more": False,

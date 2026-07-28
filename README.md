@@ -70,8 +70,10 @@ max_retry_on_error = 3   # 限流/过期等可恢复错误时的换号重试次�
 [limits]
 max_concurrent = 8
 max_queue_size = 1000
-max_chars = 1024000
-qwen_send_max_chars = 21750000   # chat.qwen.ai 网关 JSON body 硬限 ~21 MiB
+# 256K 上下文（字符）；inject 后超限则尾部直发、前缀 OSS 附件
+max_chars = 256000
+qwen_send_max_chars = 256000
+model_context_length = 256000
 client_max_body_bytes = 33554432 # aiohttp 入站 body 上限（默认 1 MiB 会 413）
 
 [timeout]

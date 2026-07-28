@@ -32,8 +32,9 @@ class AppConfig:
     max_retry_on_error: int = 3
     max_concurrent: int = 8
     max_queue_size: int = 1000
-    max_chars: int = 1024000
-    qwen_send_max_chars: int = 21750000
+    max_chars: int = 256_000
+    qwen_send_max_chars: int = 256_000
+    model_context_length: int = 256_000
     client_max_body_bytes: int = 32 * 1024 * 1024
     create_chat_timeout: float = 15.0
     request_total_timeout: float = 600.0
@@ -73,8 +74,11 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         max_retry_on_error=int(_deep_get(raw, "retry", "max_retry_on_error", default=3)),
         max_concurrent=int(_deep_get(raw, "limits", "max_concurrent", default=8)),
         max_queue_size=int(_deep_get(raw, "limits", "max_queue_size", default=1000)),
-        max_chars=int(_deep_get(raw, "limits", "max_chars", default=1024000)),
-        qwen_send_max_chars=int(_deep_get(raw, "limits", "qwen_send_max_chars", default=21750000)),
+        max_chars=int(_deep_get(raw, "limits", "max_chars", default=256000)),
+        qwen_send_max_chars=int(_deep_get(raw, "limits", "qwen_send_max_chars", default=256000)),
+        model_context_length=int(
+            _deep_get(raw, "limits", "model_context_length", default=256000)
+        ),
         client_max_body_bytes=int(
             _deep_get(raw, "limits", "client_max_body_bytes", default=32 * 1024 * 1024)
         ),

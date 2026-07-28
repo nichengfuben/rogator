@@ -9,7 +9,7 @@
 用法：
   python scripts/preview_prompt_cases.py
   python scripts/preview_prompt_cases.py --dump-dir ./prompt_case_dumps
-  python scripts/preview_prompt_cases.py --max-chars 150000
+  python scripts/preview_prompt_cases.py --max-chars 256000
 """
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ def dump_case(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max-chars", type=int, default=150_000)
+    parser.add_argument("--max-chars", type=int, default=256_000)
     parser.add_argument("--model", default="qwen3.5-plus")
     parser.add_argument("--dump-dir", type=str, default=str(DEFAULT_DUMP_DIR))
     args = parser.parse_args()

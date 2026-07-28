@@ -13,11 +13,12 @@ prelogin = 3
 max_retry_on_error = 3
 
 [limits]
-max_concurrent = 8
-max_queue_size = 1000
-max_chars = 1024000
-# chat.qwen.ai 网关硬限 ~21 MiB JSON body；留余量供 entml 包装开销
-qwen_send_max_chars = 21750000
+max_concurrent = 32
+max_queue_size = 1024
+# 256K 上下文（字符计）；inject 后超限则尾部直发、前缀上传附件
+max_chars = 256000
+qwen_send_max_chars = 256000
+model_context_length = 256000
 # aiohttp 入站 POST body 上限（默认 1 MiB 会导致 Claude CLI 长会话 413）
 client_max_body_bytes = 33554432
 
