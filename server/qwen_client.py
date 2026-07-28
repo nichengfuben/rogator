@@ -48,6 +48,7 @@ from server.formats import (
     MODELS_FETCH_TIMEOUT,
     REQUEST_TOTAL_TIMEOUT,
     TokenExpiredError,
+    UpstreamTimeoutError,
     build_chat_payload,
     build_qwen_message,
     extract_last_user_content,
@@ -431,28 +432,34 @@ class QwenClient(UploadMixin):
         raise RuntimeError(f"Create chat failed: {data}")
 
     async def create_chat(self, session: QwenSession, model: str) -> str:
-        async with aiohttp.ClientSession() as s:
-            payload = {
-                "title": "新建对话", "models": [model], "chat_mode": "local",
-                "chat_type": "t2t", "timestamp": int(time.time() * 1000), "project_id": "",
-            }
-            headers = build_headers(session.token, include_version=False)
-            async with s.post(
-                f"{BASE_URL}{NEW_CHAT_PATH}", json=payload, headers=headers, ssl=False,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    if resp.status in (401, 403):
-                        self._invalidate_session(session)
-                        raise TokenExpiredError(f"Token expired: HTTP {resp.status}")
-                    raise RuntimeError(f"Create chat HTTP {resp.status}")
-                data = await resp.json()
-                if not data.get("success"):
-                    self._check_create_chat_error(session, data)
-                chat_id = str((data.get("data") or {}).get("id", ""))
-                if not chat_id:
-                    raise RuntimeError(f"Create chat failed: no chat_id in {data}")
-                return chat_id
+        timeout_s = CONFIG.create_chat_timeout
+        try:
+            async with aiohttp.ClientSession() as s:
+                payload = {
+                    "title": "新建对话", "models": [model], "chat_mode": "local",
+                    "chat_type": "t2t", "timestamp": int(time.time() * 1000), "project_id": "",
+                }
+                headers = build_headers(session.token, include_version=False)
+                async with s.post(
+                    f"{BASE_URL}{NEW_CHAT_PATH}", json=payload, headers=headers, ssl=False,
+                    timeout=aiohttp.ClientTimeout(total=timeout_s),
+                ) as resp:
+                    if resp.status != 200:
+                        if resp.status in (401, 403):
+                            self._invalidate_session(session)
+                            raise TokenExpiredError(f"Token expired: HTTP {resp.status}")
+                        raise RuntimeError(f"Create chat HTTP {resp.status}")
+                    data = await resp.json()
+                    if not data.get("success"):
+                        self._check_create_chat_error(session, data)
+                    chat_id = str((data.get("data") or {}).get("id", ""))
+                    if not chat_id:
+                        raise RuntimeError(f"Create chat failed: no chat_id in {data}")
+                    return chat_id
+        except asyncio.TimeoutError as e:
+            raise UpstreamTimeoutError(
+                f"Create chat timed out after {timeout_s}s"
+            ) from e
 
     async def chat_completion(
         self,

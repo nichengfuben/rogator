@@ -97,3 +97,38 @@ def test_bash_invoke_single_stop_and_valid_json(chunk: int) -> None:
             merged += e.split(":", 2)[-1]
     json.loads(merged)
     assert "Bash tool is working" in merged
+
+
+def _simulate_truncated_anthro_wire(text: str, chunk: int) -> str:
+    """上游截断、无 </entml:invoke>：force_close 后 wire JSON 必须可解析。"""
+    parser = FncallStreamParser(protocol=get_protocol("entml"), tools=TOOLS)
+    merged = ""
+    for i in range(0, len(text), chunk):
+        parser.feed(text[i : i + chunk])
+        while True:
+            d = parser.consume_stream_delta()
+            if not d:
+                break
+            merged += d[1]
+    if not parser.streaming_invoke_closed:
+        comp = parser.complete_stream_delta_if_needed()
+        if comp:
+            merged += comp[1]
+    parser.finalize()
+    return merged
+
+
+@pytest.mark.parametrize("chunk", [1, 17, 64])
+def test_truncated_large_bash_force_close_valid_json(chunk: int) -> None:
+    """回归：~7KiB Bash 在 </entml:invoke> 前截断时 client 累积 JSON 必须合法。"""
+    cmd = 'python -c "import base64;' + ("X" * 6800)
+    truncated = (
+        '<entml:invoke name="Bash">\n'
+        f'<entml:parameter name="command">{cmd}'
+    )
+    assert len(truncated) > 6800
+    merged = _simulate_truncated_anthro_wire(truncated, chunk)
+    assert 6800 < len(merged) < 7200
+    obj = json.loads(merged)
+    assert obj["command"].startswith('python -c "import base64;')
+    assert len(obj["command"]) > 6800

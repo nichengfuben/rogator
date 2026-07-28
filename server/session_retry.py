@@ -7,7 +7,7 @@ import re
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional, TypeVar
 
 from server.config import CONFIG
-from server.formats import PayloadTooLargeError, TokenExpiredError
+from server.formats import PayloadTooLargeError, TokenExpiredError, UpstreamTimeoutError
 from server.session_store import mask_username
 
 logger = logging.getLogger("rogator")
@@ -18,7 +18,26 @@ _RATE_LIMIT_HOURS_RE = re.compile(r'"num"\s*:\s*(\d+)')
 
 
 def is_retryable_error(exc: BaseException) -> bool:
-    return isinstance(exc, TokenExpiredError)
+    return isinstance(exc, (TokenExpiredError, UpstreamTimeoutError))
+
+
+def _handle_upstream_timeout_retry(
+    req_id: str,
+    exc: UpstreamTimeoutError,
+    *,
+    retries: int,
+    limit: int,
+) -> None:
+    if retries > limit:
+        logger.error(
+            "Retry exhausted for %s after %d attempt(s) (max_retry_on_error=%d): %s",
+            req_id, retries, limit, exc,
+        )
+        raise exc
+    logger.warning(
+        "Upstream timeout for %s (retry %d/%d): %s",
+        req_id, retries, limit, exc,
+    )
 
 
 def parse_rate_limit_block_seconds(message: str) -> float:
@@ -76,6 +95,9 @@ async def run_with_session_retry(
                 "Payload too large for %s, reducing send limit to %d and retrying: %s",
                 req_id, state.splitter.max_chars, e,
             )
+        except UpstreamTimeoutError as e:
+            retries += 1
+            _handle_upstream_timeout_retry(req_id, e, retries=retries, limit=limit)
         except Exception:
             raise
 
@@ -127,5 +149,8 @@ async def stream_with_session_retry(
                 "Payload too large for %s, reducing send limit to %d and retrying: %s",
                 req_id, state.splitter.max_chars, e,
             )
+        except UpstreamTimeoutError as e:
+            retries += 1
+            _handle_upstream_timeout_retry(req_id, e, retries=retries, limit=limit)
         except Exception:
             raise

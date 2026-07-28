@@ -52,10 +52,14 @@ pip install -r requirements-dev.txt
 
 ### 3. 配置（可选）
 
-编辑仓库根目录 `config.toml`：
+首次启动会从 `template/config.toml` 复制到 `config/config.toml`（本地文件 gitignore，不会提交）。
+若仓库根目录仍有旧版 `config.toml`，会自动迁移到 `config/`。
+
+对照 `template/config.toml` 编辑 `config/config.toml`；`server.version` 与模板不一致时启动日志会提醒，**不会自动修改你的 config 文件**。
 
 ```toml
 [server]
+version = "2.2.1"
 port = 8932
 host = "0.0.0.0"
 prelogin = 3          # 启动时预登录账号数；运行中不足时自动补登
@@ -68,14 +72,16 @@ max_concurrent = 8
 max_queue_size = 1000
 max_chars = 1024000
 qwen_send_max_chars = 21750000   # chat.qwen.ai 网关 JSON body 硬限 ~21 MiB
+client_max_body_bytes = 33554432 # aiohttp 入站 body 上限（默认 1 MiB 会 413）
 
 [timeout]
 request_total = 600.0
+create_chat = 15.0
 login = 30.0
 prelogin = 120.0
 ```
 
-CLI 参数会覆盖 `config.toml` 中的 `port` / `host` / `prelogin`。
+CLI 参数会覆盖 `config/config.toml` 中的 `port` / `host` / `prelogin`。
 
 ### 4. 启动
 
@@ -226,7 +232,8 @@ python scripts/build_prompt_preview.py
 ```
 .
 ├── main.py                 # 入口：aiohttp 生命周期、预登录
-├── config.toml             # 运行时配置（端口、prelogin、重试、限流）
+├── template/config.toml    # 配置模板（提交仓库）
+├── config/config.toml      # 本地运行时配置（gitignore）
 ├── state.py                # AppState、RequestScheduler、长文本分割
 ├── accounts.py             # 从 accounts.csv 加载账号（gitignore）
 ├── accounts.csv            # 本地账号 CSV（gitignore，需自行创建）
@@ -238,7 +245,8 @@ python scripts/build_prompt_preview.py
 │   ├── session_store.py    # sessions.json 读写与迁移
 │   ├── session_retry.py    # 请求级换号重试
 │   ├── model_thinking.py   # entml / 原生思考分流
-│   ├── config.py           # config.toml 加载
+│   ├── config.py           # config/config.toml 加载
+│   ├── config_files.py     # 模板路径、首次复制、版本提醒
 │   └── formats.py          # ID 生成、响应格式、常量
 ├── persist/                # 运行时数据（部分 gitignore）
 ├── scripts/

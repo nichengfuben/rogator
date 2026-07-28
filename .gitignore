@@ -38,6 +38,7 @@ env/
 htmlcov/
 .tox/
 # Project specific
+config/config.toml
 persist/qwen/
 persist/sessions.json
 logs/prompts/

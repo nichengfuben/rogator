@@ -14,6 +14,7 @@ from typing import Optional
 from aiohttp import web
 
 from server.config import CONFIG, load_config
+from server.config_files import user_config_path, warn_if_config_version_mismatch
 from server.logging_setup import setup_logging
 
 # ============================================================
@@ -23,6 +24,7 @@ from echotools.logger import get_logger
 
 _LOG_FILE = setup_logging()
 logger = get_logger("rogator")
+warn_if_config_version_mismatch(user_config_path(), logger)
 
 # ============================================================
 # 从模块导入
@@ -158,6 +160,7 @@ def _print_startup_info(state: AppState, port: int, prelogin_count: int) -> None
     logger.info("  Protocol    : %s", state.protocol.id)
     logger.info("  Sessions    : %d (max 12h)", state.client.session_count)
     logger.info("  Models      : %d", len(state._models))
+    logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
     logger.info("  Cleanup     : startup + background (%ds)", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
@@ -242,7 +245,7 @@ async def main_async(
         logger.error("Port %d already in use!", port)
         sys.exit(1)
 
-    app = web.Application()
+    app = web.Application(client_max_size=CONFIG.client_max_body_bytes)
     setup_routes(app)
     state = get_state()
     state.client._prelogin_target = prelogin_count

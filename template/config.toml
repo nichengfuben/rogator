@@ -1,0 +1,39 @@
+# Rogator 配置模板（提交仓库）
+# 本地配置：config/config.toml（gitignore，首次启动从本模板复制）
+# 升级后请对照本模板自行更新 config/config.toml；版本不一致时启动日志会提醒，不会自动改文件。
+
+[server]
+version = "2.2.1"
+port = 8932
+host = "0.0.0.0"
+prelogin = 3
+
+[retry]
+# 换号 / 上游超时重试次数（不含首次尝试）
+max_retry_on_error = 3
+
+[limits]
+max_concurrent = 8
+max_queue_size = 1000
+max_chars = 1024000
+# chat.qwen.ai 网关硬限 ~21 MiB JSON body；留余量供 entml 包装开销
+qwen_send_max_chars = 21750000
+# aiohttp 入站 POST body 上限（默认 1 MiB 会导致 Claude CLI 长会话 413）
+client_max_body_bytes = 33554432
+
+[timeout]
+request_total = 600.0
+create_chat = 15.0
+login = 30.0
+prelogin = 120.0
+
+[fncall]
+# record_prompt / print_prompt 任一为 true 时由 echotools 写入 logs/prompts/{uuid7}.txt
+record_prompt = false
+print_prompt = false
+
+[debug]
+level = "INFO"
+color = true
+log_to_file = true
+log_name = "rogator"

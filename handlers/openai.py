@@ -26,6 +26,7 @@ from server.formats import (
     MAX_CHARS,
     MAX_QUEUE_SIZE,
     TokenExpiredError,
+    UpstreamUsageTracker,
     _error_response,
     _fix_tool_call_id,
     _gen_chatcmpl_id,
@@ -329,11 +330,15 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
         response_parts = []
         think_parts = []
         event_count = 0
+        usage_tracker = UpstreamUsageTracker()
         async for event in _chat_once(
             state, messages, model, tools, req_id, protocol_options=protocol_options,
             prompt_api="openai",
         ):
             event_count += 1
+            usage_tracker.ingest_event(event)
+            if event.get("type") in ("response_created", "usage"):
+                continue
             if event.get("type") == "answer":
                 response_parts.append(event.get("content", ""))
             elif event.get("type") == "thinking":
@@ -347,7 +352,10 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
         display_text, entml_thinking = split_entml_thinking(display_text)
         if entml_thinking:
             reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
-        return build_openai_response(model, display_text, reasoning=reasoning, tool_calls=tool_calls)
+        return build_openai_response(
+            model, display_text, reasoning=reasoning, tool_calls=tool_calls,
+            usage=usage_tracker.openai_usage,
+        )
 
     return await run_with_session_retry(req_id, state, _run)
 
@@ -506,6 +514,7 @@ async def _send_stream_finish(
     all_tool_calls: List[Dict[str, Any]],
     disconnected: list,
     already_sent_tc_count: int = 0,
+    usage: Optional[Dict[str, Any]] = None,
 ) -> None:
     """补发未流式送出的 tool_calls，然后 finish + [DONE]（对齐 mock 收尾）。"""
     remaining = all_tool_calls[already_sent_tc_count:]
@@ -516,7 +525,9 @@ async def _send_stream_finish(
     finish_reason = (
         "tool_calls" if (all_tool_calls or already_sent_tc_count > 0) else "stop"
     )
-    chunk = build_openai_chunk(model, chunk_id=chunk_id, finish_reason=finish_reason)
+    chunk = build_openai_chunk(
+        model, chunk_id=chunk_id, finish_reason=finish_reason, usage=usage,
+    )
     await _emit_chunk(resp, chunk, disconnected)
     await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
 
@@ -587,6 +598,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     streamed_tool_calls: List[Dict[str, Any]] = []
     stream_tool: Optional[Dict[str, Any]] = None
     stream_tool_blocks_sent = 0
+    usage_tracker = UpstreamUsageTracker()
     try:
         async def _make_stream():
             async for event in _chat_once(
@@ -598,7 +610,10 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
         async for event in stream_with_session_retry(req_id, state, _make_stream):
             if disconnected[0]:
                 break
+            usage_tracker.ingest_event(event)
             etype = event.get("type")
+            if etype in ("response_created", "usage"):
+                continue
             content = event.get("content", "")
 
             if etype == "thinking":
@@ -740,5 +755,6 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     await _send_stream_finish(
         resp, model, chunk_id, all_tool_calls, disconnected,
         already_sent_tc_count=pending_tc_index,
+        usage=usage_tracker.openai_usage,
     )
     return resp

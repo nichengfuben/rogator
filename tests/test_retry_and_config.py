@@ -11,18 +11,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
 from server.config import AppConfig, _loads_toml, load_config
+from server.config_files import read_server_version, warn_if_config_version_mismatch
 from server.model_thinking import load_model_entml_map, resolve_qwen_thinking, uses_entml_thinking
-from server.session_retry import parse_rate_limit_block_seconds, run_with_session_retry
+from server.formats import UpstreamTimeoutError
+from server.session_retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
 from server.session_store import QwenSession, save_sessions, load_session_store
 from server.formats import TokenExpiredError
 
 
 class TestConfig(unittest.TestCase):
-    def test_load_config_defaults(self) -> None:
+    def test_load_config_missing_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            cfg = load_config(Path(tmp) / "missing.toml")
-            self.assertEqual(cfg.prelogin, 3)
-            self.assertEqual(cfg.max_retry_on_error, 3)
+            with self.assertRaises(FileNotFoundError):
+                load_config(Path(tmp) / "missing.toml")
+
+    def test_load_config_invalid_toml_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "config.toml"
+            p.write_text("bad[[[", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_config(p)
 
     def test_load_config_from_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -36,6 +44,52 @@ class TestConfig(unittest.TestCase):
         data = _loads_toml('[server]\nport = 9000\nhost = "127.0.0.1"\n')
         self.assertEqual(data["server"]["port"], 9000)
         self.assertEqual(data["server"]["host"], "127.0.0.1")
+
+    def test_read_server_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "config.toml"
+            p.write_text('[server]\nversion = "1.0.0"\n', encoding="utf-8")
+            self.assertEqual(read_server_version(p), "1.0.0")
+            self.assertIsNone(read_server_version(Path(tmp) / "missing.toml"))
+
+    def test_warn_config_version_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tpl_dir = root / "template"
+            cfg_dir = root / "config"
+            tpl_dir.mkdir()
+            cfg_dir.mkdir()
+            tpl_dir.joinpath("config.toml").write_text(
+                '[server]\nversion = "2.0.0"\n', encoding="utf-8",
+            )
+            cfg_dir.joinpath("config.toml").write_text(
+                '[server]\nversion = "1.0.0"\n', encoding="utf-8",
+            )
+            mock_logger = MagicMock()
+            with patch("server.config_files.TEMPLATE_DIR", tpl_dir), \
+                 patch("server.config_files.CONFIG_DIR", cfg_dir):
+                warn_if_config_version_mismatch(cfg_dir / "config.toml", mock_logger)
+            mock_logger.warning.assert_called_once()
+            args = mock_logger.warning.call_args[0]
+            self.assertEqual(args[1], "1.0.0")
+            self.assertEqual(args[2], "2.0.0")
+
+    def test_warn_config_version_match_silent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tpl_dir = root / "template"
+            cfg_dir = root / "config"
+            tpl_dir.mkdir()
+            cfg_dir.mkdir()
+            for d in (tpl_dir, cfg_dir):
+                d.joinpath("config.toml").write_text(
+                    '[server]\nversion = "2.0.0"\n', encoding="utf-8",
+                )
+            mock_logger = MagicMock()
+            with patch("server.config_files.TEMPLATE_DIR", tpl_dir), \
+                 patch("server.config_files.CONFIG_DIR", cfg_dir):
+                warn_if_config_version_mismatch(cfg_dir / "config.toml", mock_logger)
+            mock_logger.warning.assert_not_called()
 
 
 class TestModelThinking(unittest.TestCase):
@@ -284,6 +338,36 @@ class TestSessionRetry(unittest.TestCase):
             with self.assertRaises(TokenExpiredError):
                 asyncio.run(run_with_session_retry("req-2", state, _run))
         self.assertEqual(calls["n"], 1)
+
+    def test_run_with_session_retry_upstream_timeout(self) -> None:
+        state = MagicMock()
+        calls = {"n": 0}
+
+        async def _run():
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise UpstreamTimeoutError("Create chat timed out after 15s")
+            return "ok"
+
+        import asyncio
+        with patch("server.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
+            result = asyncio.run(run_with_session_retry("req-3", state, _run))
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls["n"], 3)
+
+    def test_run_with_session_retry_upstream_timeout_exhausted(self) -> None:
+        state = MagicMock()
+        calls = {"n": 0}
+
+        async def _run():
+            calls["n"] += 1
+            raise UpstreamTimeoutError("Create chat timed out after 15s")
+
+        import asyncio
+        with patch("server.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
+            with self.assertRaises(UpstreamTimeoutError):
+                asyncio.run(run_with_session_retry("req-4", state, _run))
+        self.assertEqual(calls["n"], 4)
 
 
 if __name__ == "__main__":
