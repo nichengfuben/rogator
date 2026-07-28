@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """session 过期与清理测试（基于 JWT exp - 30s）。"""
 
+import asyncio
 import base64
 import json
 import time
@@ -120,6 +121,27 @@ class TestSessionExpiry(unittest.TestCase):
             self.assertTrue(s.is_expired())
         finally:
             time.time = real_time  # type: ignore[assignment]
+
+
+class TestSessionCleanupLoop(unittest.IsolatedAsyncioTestCase):
+    async def test_cleanup_loop_replenishes_prelogin(self) -> None:
+        from state import AppState
+
+        state = AppState.__new__(AppState)
+        state.shutdown_event = asyncio.Event()
+        state._shutdown_requested = False
+        state.client = MagicMock()
+        state.client.cleanup_expired_sessions = MagicMock(return_value=["gone"])
+        state.client.ensure_prelogin = AsyncMock()
+
+        task = asyncio.create_task(state._session_cleanup_loop(interval=0.01))
+        await asyncio.sleep(0.05)
+        state._shutdown_requested = True
+        state.shutdown_event.set()
+        await task
+
+        self.assertGreaterEqual(state.client.cleanup_expired_sessions.call_count, 1)
+        self.assertGreaterEqual(state.client.ensure_prelogin.await_count, 1)
 
 
 if __name__ == "__main__":

@@ -91,6 +91,8 @@ python main.py [--port 8932] [--host 0.0.0.0] [--prelogin 3] [--log-level DEBUG]
 
 启动流程：加载/迁移会话 → 清理过期 session → 预登录至 `prelogin` 数量 → 刷新模型列表 → 监听 HTTP。
 
+运行中后台每 60s 清理过期 session，有效数低于 `prelogin` 时自动补登（无需等待新请求）。
+
 ### 5. 验证
 
 ```bash

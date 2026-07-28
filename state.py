@@ -207,10 +207,11 @@ class AppState:
                 await self.refresh_models()
 
     async def _session_cleanup_loop(self, interval: float = CLEANUP_INTERVAL) -> None:
-        """后台定时清理过期/失效 session 并落盘。"""
+        """后台定时清理过期 session；有效数低于 prelogin 时自动补登。"""
         while not self.is_shutting_down:
             try:
                 self.client.cleanup_expired_sessions()
+                await self.client.ensure_prelogin()
                 await asyncio.wait_for(self.shutdown_event.wait(), timeout=interval)
             except asyncio.TimeoutError:
                 continue

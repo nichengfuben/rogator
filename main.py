@@ -161,7 +161,7 @@ def _print_startup_info(state: AppState, port: int, prelogin_count: int) -> None
     logger.info("  Sessions    : %d (max 12h)", state.client.session_count)
     logger.info("  Models      : %d", len(state._models))
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
-    logger.info("  Cleanup     : startup + background (%ds)", int(CLEANUP_INTERVAL))
+    logger.info("  Cleanup     : startup + background (%ds, auto prelogin)", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
 
