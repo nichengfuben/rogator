@@ -10,7 +10,7 @@
   python scripts/dump_full_prompt.py --demo-markup-warning
   python scripts/dump_full_prompt.py --input request.json --out full_prompt.txt
 
-校验项对齐 echotools 2.3.63+ 历史工具行 ``{Name: json}`` / 简单标量 ``{Name: value}``，
+校验项对齐 echotools 2.3.70+ 历史工具行 ``{Name: json}`` / 简单标量 ``{Name: value}``，
 以及 ``<loop_warning>`` / ``<history_markup_warning>``（需对应 --demo-* 开关）。
 """
 from __future__ import annotations

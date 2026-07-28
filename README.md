@@ -198,7 +198,7 @@ Rogator 根据 `persist/model_entml_thinking.jsonl` 判断模型是否走 entml 
 | `true` | 上游 `Fast` + entml 解析 thinking（默认多数 Qwen3 模型） |
 | `false` | 上游原生 `Thinking`（如 `qwen3.8-max-preview`） |
 
-请求侧 `thinking` / `reasoning_effort` / `thinking_level` 会归一化为 echotools 挡位：`none` | `low` | `medium` | `high` | `xhigh` | `max` | `auto`。`off`、`none`、`thinking: false` 等均视为关闭思考（`none`，**不注入**任何 `<entml:thinking_mode>` / `<thinking_behavior>` / `max_thinking_length`）。其中 `low`–`max` 注入 `<entml:thinking_mode>` 为挡位名（如 `medium`）与对应默认 `max_thinking_length`（12800 / 25600 / 64000 / 102400 / 134736）；仅 legacy `thinking_mode: on` 时注入 `on`；`auto` 注入 `auto` 模式且无默认长度。指引文案位于 `<thinking_behavior>` 块。历史 assistant 的 `reasoning` 由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染。
+请求侧 `thinking` / `reasoning_effort` / `thinking_level` 会归一化为 echotools 挡位：`none` | `low` | `medium` | `high` | `xhigh` | `max` | `auto`。`off`、`none`、`thinking: false` 等均视为关闭思考（`none`，**不注入** `<entml:thinking_mode>` / `max_thinking_length`）。若 conversation history 中已有 `<entml:thinking>` 历史块（`include_thinking_in_history`），仍会注入**强制不思考**的 `<thinking_behavior>`；无历史思考块时则不注入任何 thinking 相关内容。其中 `low`–`max` 注入 `<entml:thinking_mode>` 为挡位名（如 `medium`）与对应默认 `max_thinking_length`（12800 / 25600 / 64000 / 102400 / 134736）；仅 legacy `thinking_mode: on` 时注入 `on`；`auto` 注入 `auto` 模式且无默认长度。指引文案位于 `<thinking_behavior>` 块。历史 assistant 的 `reasoning` 由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染。
 
 `GET /v1/models` 对支持思考的模型附带 `think_efforts`（`valid_efforts`、`default_effort`、`off_effort: none`），供 Kimi Code 等客户端刷新模型元数据。
 
