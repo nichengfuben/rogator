@@ -7,10 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _QWEN_ROOT = Path(__file__).resolve().parents[1]
-_ECHOTOOLS_SRC = _QWEN_ROOT.parent.parent / "PyPi" / "echotools-sdk" / "src"
-_ECHOTOOLS_TESTS = _ECHOTOOLS_SRC / "tests"
-for path in (_ECHOTOOLS_SRC, _ECHOTOOLS_TESTS):
-    if path.is_dir():
+_TESTS_DIR = Path(__file__).resolve().parent
+for path in (_QWEN_ROOT, _TESTS_DIR):
+    if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 from fixtures.simulated_llm_tool_responses import (  # noqa: E402
