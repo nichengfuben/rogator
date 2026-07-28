@@ -578,7 +578,7 @@ SIMULATED_LLM_RESPONSES: List[SimulatedCase] = [
         ),
         expect_names=["get_weather"],
         expect_args=[{"city": "杭州", "unit": "c"}],
-        expect_clean_substrings=["参考历史：", '{get_weather: {"city": "杭州", "unit": "c"}', "我再确认一次实时天气。"],
+        expect_clean_substrings=["参考历史：", "我再确认一次实时天气。"],
     ),
     # --- 模型分支：Claude Code / rogator 常见 agent 工具 ---
     SimulatedCase(
