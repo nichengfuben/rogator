@@ -567,7 +567,7 @@ SIMULATED_LLM_RESPONSES: List[SimulatedCase] = [
         response=(
             "参考历史：\n"
             "<tool>\n"
-            "[get_weather: 杭州 | c]\n"
+            "{get_weather: {\"city\": \"杭州\", \"unit\": \"c\"}}\n"
             "晴 26°C\n"
             "</tool>\n"
             "我再确认一次实时天气。\n"
@@ -578,7 +578,7 @@ SIMULATED_LLM_RESPONSES: List[SimulatedCase] = [
         ),
         expect_names=["get_weather"],
         expect_args=[{"city": "杭州", "unit": "c"}],
-        expect_clean_substrings=["参考历史：", "[get_weather: 杭州 | c]", "我再确认一次实时天气。"],
+        expect_clean_substrings=["参考历史：", '{get_weather: {"city": "杭州", "unit": "c"}', "我再确认一次实时天气。"],
     ),
     # --- 模型分支：Claude Code / rogator 常见 agent 工具 ---
     SimulatedCase(
@@ -682,15 +682,16 @@ SIMULATED_LLM_RESPONSES: List[SimulatedCase] = [
     ),
     SimulatedCase(
         id="agent_bash_inside_thinking",
-        description="thinking 块内 invoke（流式 hold 后仍应解析）",
+        description="thinking 块内 hold 工具前缀；闭合后块外 invoke 才解析",
         branch="thinking_invoke_hold",
         extra_tools=("Bash",),
         response=(
             "<entml:thinking>\n计划：\n"
+            "将在块外执行 echo in-thinking\n"
+            "</entml:thinking>\n"
             '<entml:invoke name="Bash">\n'
             '<entml:parameter name="command">echo in-thinking</entml:parameter>\n'
             "</entml:invoke>\n"
-            "</entml:thinking>\n"
             "可见回复。"
         ),
         expect_names=["Bash"],
