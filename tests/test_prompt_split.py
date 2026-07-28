@@ -39,5 +39,14 @@ class TestLongTextSplitter(unittest.TestCase):
         self.assertEqual(len(blob), 55_116)
         self.assertEqual(blob.decode("utf-8") + send, full)
 
+    def test_send_full_prompt_never_splits(self) -> None:
+        splitter = LongTextSplitter(max_chars=5, send_full_prompt=True)
+        full = "ABCDEFGHIJ" * 1000
+        send, name, blob = splitter.split(full)
+        self.assertEqual(send, full)
+        self.assertIsNone(name)
+        self.assertIsNone(blob)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""inject 后 prompt 落盘（echotools logs/prompts/{uuid7}.txt）与 debug 日志配置。"""
+"""inject 后 prompt 落盘（logs/prompts/{req_id}.txt）与 debug 日志配置。"""
 
 import logging
 from dataclasses import replace
@@ -63,7 +63,7 @@ def test_prompt_dump_disabled_no_file(
     assert "dump_dir=None" in caplog.text
 
 
-def test_record_prompt_writes_uuid_file(
+def test_record_prompt_writes_req_id_file(
     sample_messages: List[Dict[str, Any]],
     sample_tools: List[Dict[str, Any]],
     tmp_path,
@@ -86,11 +86,9 @@ def test_record_prompt_writes_uuid_file(
         model="qwen-test",
     )
     prompt = injected[0]["content"]
-    files = list(dump.glob("*.txt"))
-    assert len(files) == 1
-    assert files[0].name.endswith(".txt")
-    assert "req_oai" not in files[0].name
-    assert files[0].read_text(encoding="utf-8") == prompt
+    path = dump / "req_oai.txt"
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == prompt
     assert "dump_dir=" in caplog.text
 
 
@@ -114,7 +112,7 @@ def test_print_prompt_also_dumps_file(
         api="openai",
         model="qwen-test",
     )
-    assert len(list(dump.glob("*.txt"))) == 1
+    assert len(list(dump.glob("req_print.txt"))) == 1
 
 
 def test_load_config_fncall_flags(tmp_path) -> None:

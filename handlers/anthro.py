@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import aclosing
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
@@ -17,19 +18,23 @@ from echotools.exec.fncall.protocols.entml_think.core import (
 from server.formats import (
     TokenExpiredError,
     UpstreamUsageTracker,
+    ClientDisconnectedError,
     _error_response,
     _fix_tool_call_id,
     _gen_msg_id,
     _gen_request_id,
     _gen_tool_id,
     _json_response,
+    client_disconnected_response,
     convert_to_anthropic,
+    read_request_json,
     should_emit_anthropic_message_start,
 )
 from state import AppState, QueueFullError
 from echotools.fncall import FncallStreamParser
 
 from handlers import get_state, prepend_anthropic_system
+from server.response_record import record_raw_response
 from handlers.openai import (
     _process_openai_non_stream,
     _parse_tool_calls,
@@ -482,54 +487,182 @@ async def _stream_anthropic(
     stream_tool_blocks_sent = 0
     usage_tracker = UpstreamUsageTracker()
     message_started = False
-    try:
-        async def _make_chat_stream():
-            async for event in _chat_once(
-                state, messages, model, tools, req_id, protocol_options=protocol_options,
-                prompt_api="anthropic",
-            ):
-                yield event
+    deferred_content: List[Dict[str, Any]] = []
+    with record_raw_response(req_id) as raw_recorder:
+        try:
+            async def _make_chat_stream():
+                async for event in _chat_once(
+                    state, messages, model, tools, req_id, protocol_options=protocol_options,
+                    prompt_api="anthropic",
+                ):
+                    yield event
 
-        async for event in stream_with_session_retry(req_id, state, _make_chat_stream):
-            if disconnected[0]:
-                break
-            usage_tracker.ingest_event(event)
-            if should_emit_anthropic_message_start(event, message_started):
-                await _emit_anthropic_event(
-                    resp,
-                    _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
-                    disconnected,
+            async def _process_content_event(proc_event: Dict[str, Any]) -> bool:
+                nonlocal block_idx, block_type, full_answer, last_safe_len, last_thinking_len
+                nonlocal pending_tc_count, streamed_tool_calls, stream_tool, stream_tool_blocks_sent
+                etype = proc_event.get("type")
+                content = proc_event.get("content", "")
+                if etype in ("response_created", "usage"):
+                    return True
+                if etype == "thinking":
+                    if content:
+                        block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
+                            resp, content, block_idx, block_type, disconnected,
+                            parser=parser, stream_tool=stream_tool,
+                        )
+                        if not ok:
+                            return False
+                    return True
+
+                if etype != "answer":
+                    return True
+
+                full_answer += content
+                ready_calls = parser.feed(content)
+
+                had_stream_tool = stream_tool is not None
+                block_idx, block_type, stream_tool, ok = await _emit_streaming_tool_delta(
+                    resp, parser, block_idx, block_type, stream_tool, disconnected,
                 )
-                message_started = True
-            etype = event.get("type")
-            content = event.get("content", "")
-            if etype in ("response_created", "usage"):
-                continue
-            if etype == "thinking":
-                if content:
-                    block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
-                        resp, content, block_idx, block_type, disconnected,
-                        parser=parser, stream_tool=stream_tool,
-                    )
-                    if not ok:
+                if not had_stream_tool and stream_tool is not None:
+                    stream_tool_blocks_sent += 1
+                if not ok:
+                    return False
+
+                pt = parser.partial_thinking
+                if len(pt) > last_thinking_len:
+                    new_thinking = pt[last_thinking_len:]
+                    last_thinking_len = len(pt)
+                    if new_thinking:
+                        block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
+                            resp, new_thinking, block_idx, block_type, disconnected,
+                            parser=parser, stream_tool=stream_tool,
+                        )
+                        if not ok:
+                            return False
+
+                safe_text = parser.partial_text
+                if len(safe_text) > last_safe_len:
+                    new_text = safe_text[last_safe_len:]
+                    last_safe_len = len(safe_text)
+                    if new_text:
+                        if stream_tool is not None:
+                            if not await _flush_open_stream_tool(
+                                resp, parser, stream_tool, disconnected,
+                            ):
+                                return False
+                            stream_tool = None
+                            block_type = None
+                        if block_type != "text":
+                            if block_type == "thinking":
+                                block_idx = await _close_block(resp, block_idx, disconnected)
+                                block_type = None
+                            block_idx += 1
+                            if not await _emit_anthropic_event(resp, {
+                                "type": "content_block_start",
+                                "index": block_idx,
+                                "content_block": {"type": "text", "text": ""},
+                            }, disconnected):
+                                return False
+                            block_type = "text"
+                        if not await _emit_anthropic_event(resp, {
+                            "type": "content_block_delta",
+                            "index": block_idx,
+                            "delta": {"type": "text_delta", "text": new_text},
+                        }, disconnected):
+                            return False
+
+                if ready_calls:
+                    fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+                    streamed_tool_calls.extend(fixed)
+                    if stream_tool is not None:
+                        expected = next(
+                            (
+                                tc["function"]["arguments"]
+                                for tc in fixed
+                                if tc["function"]["name"] == stream_tool.get("name")
+                            ),
+                            fixed[0]["function"]["arguments"] if len(fixed) == 1 else None,
+                        )
+                        if not await _flush_open_stream_tool(
+                            resp, parser, stream_tool, disconnected,
+                            expected_arguments=expected,
+                        ):
+                            return False
+                        stream_tool = None
+                        block_type = None
+                        pending_tc_count += len(fixed)
+                    else:
+                        block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
+                            resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+                            ready=ready_calls,
+                        )
+                        if not ok:
+                            return False
+                return True
+
+            async def _process_content_events(events: List[Dict[str, Any]]) -> bool:
+                for proc_event in events:
+                    if not await _process_content_event(proc_event):
+                        return False
+                return True
+
+            async with aclosing(
+                stream_with_session_retry(req_id, state, _make_chat_stream),
+            ) as event_stream:
+                async for event in event_stream:
+                    if disconnected[0]:
                         break
-                continue
+                    usage_tracker.ingest_event(event)
+                    raw_recorder.ingest_event(event)
 
-            if etype != "answer":
-                continue
+                    to_process: List[Dict[str, Any]] = []
+                    if not message_started:
+                        if should_emit_anthropic_message_start(event, False):
+                            await _emit_anthropic_event(
+                                resp,
+                                _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
+                                disconnected,
+                            )
+                            message_started = True
+                            to_process = deferred_content + [event]
+                            deferred_content = []
+                        elif event.get("type") in ("thinking", "answer"):
+                            deferred_content.append(event)
+                            continue
+                        else:
+                            continue
+                    else:
+                        to_process = [event]
 
-            full_answer += content
-            ready_calls = parser.feed(content)
+                    if not await _process_content_events(to_process):
+                        break
 
-            had_stream_tool = stream_tool is not None
-            block_idx, block_type, stream_tool, ok = await _emit_streaming_tool_delta(
-                resp, parser, block_idx, block_type, stream_tool, disconnected,
-            )
-            if not had_stream_tool and stream_tool is not None:
-                stream_tool_blocks_sent += 1
-            if not ok:
-                break
+        except asyncio.CancelledError:
+            logger.info("Stream cancelled %s", req_id)
+            raise
+        except TokenExpiredError as e:
+            logger.warning("Anthropic stream token expired: %s", e)
+            error_msg = json.dumps({"type": "error", "error": {"message": str(e), "type": "rate_limited"}})
+            await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
+            merged = all_tool_calls or streamed_tool_calls
+            return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
+        except Exception as e:
+            logger.error("Anthropic stream error: %s", e, exc_info=True)
+            error_msg = json.dumps({"type": "error", "error": {"message": str(e)}})
+            await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
+            merged = all_tool_calls or streamed_tool_calls
+            return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
 
+        final_text = parser.partial_text
+        try:
+            final_text, parsed_calls = parser.finalize()
+            all_tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
+        except Exception as e:
+            logger.warning("anthropic stream parser.finalize failed: %s", e)
+            final_text = parser.partial_text
+
+        if not disconnected[0]:
             pt = parser.partial_thinking
             if len(pt) > last_thinking_len:
                 new_thinking = pt[last_thinking_len:]
@@ -540,9 +673,11 @@ async def _stream_anthropic(
                         parser=parser, stream_tool=stream_tool,
                     )
                     if not ok:
-                        break
+                        merged = all_tool_calls or streamed_tool_calls
+                        return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
 
-            safe_text = parser.partial_text
+        if not disconnected[0]:
+            safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
             if len(safe_text) > last_safe_len:
                 new_text = safe_text[last_safe_len:]
                 last_safe_len = len(safe_text)
@@ -551,7 +686,8 @@ async def _stream_anthropic(
                         if not await _flush_open_stream_tool(
                             resp, parser, stream_tool, disconnected,
                         ):
-                            break
+                            merged = all_tool_calls or streamed_tool_calls
+                            return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
                         stream_tool = None
                         block_type = None
                     if block_type != "text":
@@ -559,22 +695,23 @@ async def _stream_anthropic(
                             block_idx = await _close_block(resp, block_idx, disconnected)
                             block_type = None
                         block_idx += 1
-                        if not await _emit_anthropic_event(resp, {
+                        if await _emit_anthropic_event(resp, {
                             "type": "content_block_start",
                             "index": block_idx,
                             "content_block": {"type": "text", "text": ""},
                         }, disconnected):
-                            break
-                        block_type = "text"
-                    if not await _emit_anthropic_event(resp, {
-                        "type": "content_block_delta",
-                        "index": block_idx,
-                        "delta": {"type": "text_delta", "text": new_text},
-                    }, disconnected):
-                        break
+                            block_type = "text"
+                    if block_type == "text":
+                        await _emit_anthropic_event(resp, {
+                            "type": "content_block_delta",
+                            "index": block_idx,
+                            "delta": {"type": "text_delta", "text": new_text},
+                        }, disconnected)
 
-            if ready_calls:
-                fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+        if not disconnected[0]:
+            late_ready = parser.get_ready_tool_calls()
+            if late_ready:
+                fixed = [_fix_tool_call_id(tc) for tc in late_ready]
                 streamed_tool_calls.extend(fixed)
                 if stream_tool is not None:
                     expected = next(
@@ -589,102 +726,23 @@ async def _stream_anthropic(
                         resp, parser, stream_tool, disconnected,
                         expected_arguments=expected,
                     ):
-                        break
+                        merged = all_tool_calls or streamed_tool_calls
+                        return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
                     stream_tool = None
                     block_type = None
                     pending_tc_count += len(fixed)
                 else:
                     block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
                         resp, parser, block_idx, block_type, disconnected, pending_tc_count,
-                        ready=ready_calls,
+                        ready=late_ready,
                     )
                     if not ok:
-                        break
-    except asyncio.CancelledError:
-        logger.info("Stream cancelled %s", req_id)
-        return block_idx, block_type, full_answer, True, pending_tc_count, streamed_tool_calls or all_tool_calls, usage_tracker
-    except TokenExpiredError as e:
-        logger.warning("Anthropic stream token expired: %s", e)
-        error_msg = json.dumps({"type": "error", "error": {"message": str(e), "type": "rate_limited"}})
-        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
-        merged = all_tool_calls or streamed_tool_calls
-        return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
-    except Exception as e:
-        logger.error("Anthropic stream error: %s", e, exc_info=True)
-        error_msg = json.dumps({"type": "error", "error": {"message": str(e)}})
-        await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
-        merged = all_tool_calls or streamed_tool_calls
-        return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
-
-    # 刷 parser 尾部：holdback / thinking / 未闭合 invoke
-    final_text = parser.partial_text
-    try:
-        final_text, parsed_calls = parser.finalize()
-        all_tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
-    except Exception as e:
-        logger.warning("anthropic stream parser.finalize failed: %s", e)
-        final_text = parser.partial_text
-
-    if not disconnected[0]:
-        pt = parser.partial_thinking
-        if len(pt) > last_thinking_len:
-            new_thinking = pt[last_thinking_len:]
-            last_thinking_len = len(pt)
-            if new_thinking:
-                block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
-                    resp, new_thinking, block_idx, block_type, disconnected,
-                    parser=parser, stream_tool=stream_tool,
-                )
-                if not ok:
-                    merged = all_tool_calls or streamed_tool_calls
-                    return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
-
-    if not disconnected[0]:
-        safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
-        if len(safe_text) > last_safe_len:
-            new_text = safe_text[last_safe_len:]
-            last_safe_len = len(safe_text)
-            if new_text:
-                if stream_tool is not None:
-                    if not await _flush_open_stream_tool(
-                        resp, parser, stream_tool, disconnected,
-                    ):
                         merged = all_tool_calls or streamed_tool_calls
                         return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
-                    stream_tool = None
-                    block_type = None
-                if block_type != "text":
-                    if block_type == "thinking":
-                        block_idx = await _close_block(resp, block_idx, disconnected)
-                        block_type = None
-                    block_idx += 1
-                    if await _emit_anthropic_event(resp, {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }, disconnected):
-                        block_type = "text"
-                if block_type == "text":
-                    await _emit_anthropic_event(resp, {
-                        "type": "content_block_delta",
-                        "index": block_idx,
-                        "delta": {"type": "text_delta", "text": new_text},
-                    }, disconnected)
-
-    if not disconnected[0]:
-        late_ready = parser.get_ready_tool_calls()
-        if late_ready:
-            fixed = [_fix_tool_call_id(tc) for tc in late_ready]
-            streamed_tool_calls.extend(fixed)
-            if stream_tool is not None:
-                expected = next(
-                    (
-                        tc["function"]["arguments"]
-                        for tc in fixed
-                        if tc["function"]["name"] == stream_tool.get("name")
-                    ),
-                    fixed[0]["function"]["arguments"] if len(fixed) == 1 else None,
-                )
+            elif stream_tool is not None:
+                expected = None
+                if all_tool_calls:
+                    expected = all_tool_calls[0]["function"]["arguments"]
                 if not await _flush_open_stream_tool(
                     resp, parser, stream_tool, disconnected,
                     expected_arguments=expected,
@@ -693,58 +751,44 @@ async def _stream_anthropic(
                     return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
                 stream_tool = None
                 block_type = None
-                pending_tc_count += len(fixed)
+                if parser.streaming_invoke_closed or all_tool_calls:
+                    pending_tc_count += 1
+                else:
+                    logger.warning(
+                        "Anthropic stream ended with incomplete invoke %s", req_id,
+                    )
             else:
                 block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
                     resp, parser, block_idx, block_type, disconnected, pending_tc_count,
-                    ready=late_ready,
                 )
                 if not ok:
                     merged = all_tool_calls or streamed_tool_calls
                     return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
-        elif stream_tool is not None:
-            expected = None
-            if all_tool_calls:
-                expected = all_tool_calls[0]["function"]["arguments"]
-            if not await _flush_open_stream_tool(
-                resp, parser, stream_tool, disconnected,
-                expected_arguments=expected,
-            ):
-                merged = all_tool_calls or streamed_tool_calls
-                return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
-            stream_tool = None
-            block_type = None
-            if parser.streaming_invoke_closed or all_tool_calls:
-                pending_tc_count += 1
-            else:
-                logger.warning(
-                    "Anthropic stream ended with incomplete invoke %s", req_id,
-                )
-        else:
-            block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
-                resp, parser, block_idx, block_type, disconnected, pending_tc_count,
+
+        if not all_tool_calls:
+            all_tool_calls = streamed_tool_calls
+
+        if all_tool_calls and stream_tool_blocks_sent:
+            pending_tc_count = max(
+                pending_tc_count,
+                min(len(all_tool_calls), stream_tool_blocks_sent),
             )
-            if not ok:
+
+        if not message_started and not disconnected[0]:
+            await _emit_anthropic_event(
+                resp,
+                _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
+                disconnected,
+            )
+            message_started = True
+
+        if deferred_content and not disconnected[0]:
+            if not await _process_content_events(deferred_content):
                 merged = all_tool_calls or streamed_tool_calls
                 return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
+            deferred_content = []
 
-    if not all_tool_calls:
-        all_tool_calls = streamed_tool_calls
-
-    if all_tool_calls and stream_tool_blocks_sent:
-        pending_tc_count = max(
-            pending_tc_count,
-            min(len(all_tool_calls), stream_tool_blocks_sent),
-        )
-
-    if not message_started and not disconnected[0]:
-        await _emit_anthropic_event(
-            resp,
-            _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
-            disconnected,
-        )
-
-    return block_idx, block_type, full_answer, False, pending_tc_count, all_tool_calls, usage_tracker
+        return block_idx, block_type, full_answer, False, pending_tc_count, all_tool_calls, usage_tracker
 
 
 async def _send_post_stream(
@@ -849,7 +893,13 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     state = get_state()
     if state.is_shutting_down:
         return web.Response(status=503, text="Shutting down")
-    body = await request.json() if request.can_read_body else {}
+    try:
+        body = await read_request_json(request)
+    except ClientDisconnectedError:
+        logger.info("Anthropic client disconnected while reading body from %s", request.remote)
+        return client_disconnected_response()
+    except json.JSONDecodeError:
+        return _error_response(400, "Invalid JSON body")
     raw_messages = body.get("messages", [])
     system = body.get("system")
     model = body.get("model", state.model)

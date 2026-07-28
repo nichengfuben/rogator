@@ -67,7 +67,7 @@ class TestUpstreamUsageTracker(unittest.TestCase):
         })
         self.assertEqual(tracker.anthropic_message_start_usage, {
             "input_tokens": 8,
-            "output_tokens": 1,
+            "output_tokens": 2,
         })
         self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 2})
 
@@ -108,11 +108,21 @@ class TestAnthropicMessageStartTiming(unittest.TestCase):
 
     def test_emit_on_thinking_without_usage(self) -> None:
         ev = {"type": "thinking", "content": "plan"}
-        self.assertTrue(should_emit_anthropic_message_start(ev, False))
+        self.assertFalse(should_emit_anthropic_message_start(ev, False))
 
     def test_no_double_start(self) -> None:
         ev = {"type": "answer", "content": "hi", "usage": {"input_tokens": 1, "output_tokens": 2}}
         self.assertFalse(should_emit_anthropic_message_start(ev, True))
+
+
+    def test_message_delta_only_output_tokens(self) -> None:
+        tracker = UpstreamUsageTracker()
+        tracker.ingest_event({
+            "type": "usage",
+            "data": {"input_tokens": 100, "output_tokens": 42},
+        })
+        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 42})
+        self.assertNotIn("input_tokens", tracker.anthropic_message_delta_usage)
 
 
 class TestUsageInResponses(unittest.TestCase):

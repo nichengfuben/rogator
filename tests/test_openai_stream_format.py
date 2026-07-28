@@ -14,7 +14,11 @@ from handlers.openai import (
     _openai_tool_call_entry,
     _send_stream_finish,
 )
-from server.formats import build_openai_chunk
+from server.formats import (
+    build_openai_chunk,
+    build_openai_stream_usage_chunk,
+    openai_stream_include_usage,
+)
 
 
 TOOLS = [
@@ -153,6 +157,44 @@ class TestOpenAIStreamFormat(unittest.TestCase):
         self.assertEqual(delta["reasoning"], "plan")
         self.assertEqual(delta["reasoning_details"][0]["type"], "reasoning.text")
         self.assertEqual(delta["reasoning_details"][0]["text"], "plan")
+
+    def test_include_usage_finish_emits_separate_usage_chunk(self) -> None:
+        """官方：finish_reason chunk 带 usage:null，其后独立 usage chunk（choices 为空）。"""
+        resp = MagicMock()
+        resp.write = AsyncMock()
+        disconnected = [False]
+        usage = {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14}
+
+        async def run() -> None:
+            await _send_stream_finish(
+                resp, "qwen3.7-max", "gen-usage", [], disconnected,
+                usage=usage, include_usage=True,
+            )
+
+        asyncio.run(run())
+        payload = b"".join(c.args[0] for c in resp.write.call_args_list).decode("utf-8")
+        chunks = [
+            json.loads(line.removeprefix("data: "))
+            for line in payload.split("\n")
+            if line.startswith("data: ") and line != "data: [DONE]"
+        ]
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0]["choices"][0]["finish_reason"], "stop")
+        self.assertIsNone(chunks[0]["usage"])
+        self.assertEqual(chunks[1]["choices"], [])
+        self.assertEqual(chunks[1]["usage"]["total_tokens"], 14)
+
+    def test_stream_usage_chunk_shape(self) -> None:
+        chunk = build_openai_stream_usage_chunk(
+            "qwen3.7-max", "gen-u", {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        )
+        self.assertEqual(chunk["choices"], [])
+        self.assertEqual(chunk["usage"]["completion_tokens"], 2)
+
+    def test_openai_stream_include_usage_flag(self) -> None:
+        self.assertFalse(openai_stream_include_usage({}))
+        self.assertFalse(openai_stream_include_usage({"stream_options": {}}))
+        self.assertTrue(openai_stream_include_usage({"stream_options": {"include_usage": True}}))
 
 
 if __name__ == "__main__":

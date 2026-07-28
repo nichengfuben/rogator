@@ -70,11 +70,16 @@ max_retry_on_error = 3   # 限流/过期等可恢复错误时的换号重试次�
 [limits]
 max_concurrent = 8
 max_queue_size = 1000
-# 256K 上下文（字符）；inject 后超限则尾部直发、前缀 OSS 附件
-max_chars = 256000
+# inject 后发给 Qwen 的正文字符上限；超限则尾部直发、前缀 OSS 附件
 qwen_send_max_chars = 256000
+# /v1/models 等 API 对外声明的上下文长度
 model_context_length = 256000
 client_max_body_bytes = 33554432 # aiohttp 入站 body 上限（默认 1 MiB 会 413）
+
+[fncall]
+# record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt
+# record_response = true 时写入 logs/responses/{req_id}.txt（上游 thinking+answer，不经 entml 解析）
+record_response = false
 
 [timeout]
 request_total = 600.0

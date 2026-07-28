@@ -3,7 +3,7 @@
 # 升级后请对照本模板自行更新 config/config.toml；版本不一致时启动日志会提醒，不会自动改文件。
 
 [server]
-version = "2.2.1"
+version = "2.2.2"
 port = 8932
 host = "0.0.0.0"
 prelogin = 3
@@ -15,10 +15,12 @@ max_retry_on_error = 3
 [limits]
 max_concurrent = 32
 max_queue_size = 1024
-# 256K 上下文（字符计）；inject 后超限则尾部直发、前缀上传附件
-max_chars = 256000
-qwen_send_max_chars = 256000
+# inject 后发给 Qwen 的正文字符上限；超限则尾部直发、前缀上传附件
+qwen_send_max_chars = 1024000
+# /v1/models 等 API 对外声明的上下文长度
 model_context_length = 256000
+# true：绝不截断 prompt、不上传超长前缀附件，整段直发上游（413 时也不自动降限重试）
+send_full_prompt = false
 # aiohttp 入站 POST body 上限（默认 1 MiB 会导致 Claude CLI 长会话 413）
 client_max_body_bytes = 33554432
 
@@ -29,9 +31,11 @@ login = 30.0
 prelogin = 120.0
 
 [fncall]
-# record_prompt / print_prompt 任一为 true 时由 echotools 写入 logs/prompts/{uuid7}.txt
+# record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt
 record_prompt = false
 print_prompt = false
+# record_response = true 时写入 logs/responses/{req_id}.txt（上游 thinking+answer，不经 entml 解析）
+record_response = false
 
 [debug]
 level = "INFO"

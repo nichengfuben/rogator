@@ -32,9 +32,9 @@ class AppConfig:
     max_retry_on_error: int = 3
     max_concurrent: int = 8
     max_queue_size: int = 1000
-    max_chars: int = 256_000
     qwen_send_max_chars: int = 256_000
     model_context_length: int = 256_000
+    send_full_prompt: bool = False
     client_max_body_bytes: int = 32 * 1024 * 1024
     create_chat_timeout: float = 15.0
     request_total_timeout: float = 600.0
@@ -42,6 +42,7 @@ class AppConfig:
     prelogin_timeout: float = 120.0
     record_prompt: bool = True
     print_prompt: bool = False
+    record_response: bool = False
     log_level: str = "DEBUG"
     log_to_file: bool = True
     log_name: str = "rogator"
@@ -74,11 +75,11 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         max_retry_on_error=int(_deep_get(raw, "retry", "max_retry_on_error", default=3)),
         max_concurrent=int(_deep_get(raw, "limits", "max_concurrent", default=8)),
         max_queue_size=int(_deep_get(raw, "limits", "max_queue_size", default=1000)),
-        max_chars=int(_deep_get(raw, "limits", "max_chars", default=256000)),
         qwen_send_max_chars=int(_deep_get(raw, "limits", "qwen_send_max_chars", default=256000)),
         model_context_length=int(
             _deep_get(raw, "limits", "model_context_length", default=256000)
         ),
+        send_full_prompt=bool(_deep_get(raw, "limits", "send_full_prompt", default=False)),
         client_max_body_bytes=int(
             _deep_get(raw, "limits", "client_max_body_bytes", default=32 * 1024 * 1024)
         ),
@@ -88,6 +89,7 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         prelogin_timeout=float(_deep_get(raw, "timeout", "prelogin", default=120.0)),
         record_prompt=bool(_deep_get(raw, "fncall", "record_prompt", default=True)),
         print_prompt=bool(_deep_get(raw, "fncall", "print_prompt", default=False)),
+        record_response=bool(_deep_get(raw, "fncall", "record_response", default=False)),
         log_level=str(
             _deep_get(raw, "debug", "level")
             or _deep_get(raw, "logging", "level", default="DEBUG")

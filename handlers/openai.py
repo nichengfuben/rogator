@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import aclosing
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from aiohttp import web
@@ -20,13 +21,14 @@ from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinki
 
 from handlers import EmptyResponseError, extract_system_for_inject, get_state
 from handlers.fncall_inject import inject_fncall_for_request
+from server.response_record import record_raw_response
 from server.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.session_retry import run_with_session_retry, stream_with_session_retry
 from server.formats import (
-    MAX_CHARS,
     MAX_QUEUE_SIZE,
     TokenExpiredError,
     UpstreamUsageTracker,
+    ClientDisconnectedError,
     _error_response,
     _fix_tool_call_id,
     _gen_chatcmpl_id,
@@ -35,6 +37,10 @@ from server.formats import (
     _json_response,
     build_openai_chunk,
     build_openai_response,
+    build_openai_stream_usage_chunk,
+    client_disconnected_response,
+    openai_stream_include_usage,
+    read_request_json,
 )
 from state import AppState, QueueFullError
 
@@ -331,18 +337,20 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
         think_parts = []
         event_count = 0
         usage_tracker = UpstreamUsageTracker()
-        async for event in _chat_once(
-            state, messages, model, tools, req_id, protocol_options=protocol_options,
-            prompt_api="openai",
-        ):
-            event_count += 1
-            usage_tracker.ingest_event(event)
-            if event.get("type") in ("response_created", "usage"):
-                continue
-            if event.get("type") == "answer":
-                response_parts.append(event.get("content", ""))
-            elif event.get("type") == "thinking":
-                think_parts.append(event.get("content", ""))
+        with record_raw_response(req_id) as raw_recorder:
+            async for event in _chat_once(
+                state, messages, model, tools, req_id, protocol_options=protocol_options,
+                prompt_api="openai",
+            ):
+                event_count += 1
+                usage_tracker.ingest_event(event)
+                raw_recorder.ingest_event(event)
+                if event.get("type") in ("response_created", "usage"):
+                    continue
+                if event.get("type") == "answer":
+                    response_parts.append(event.get("content", ""))
+                elif event.get("type") == "thinking":
+                    think_parts.append(event.get("content", ""))
         if event_count == 0:
             logger.warning("No events received from qwen for req %s", req_id)
             raise EmptyResponseError(f"No events received from qwen for {req_id}")
@@ -354,7 +362,7 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
             reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
         return build_openai_response(
             model, display_text, reasoning=reasoning, tool_calls=tool_calls,
-            usage=usage_tracker.openai_usage,
+            usage=usage_tracker.openai_stream_usage(),
         )
 
     return await run_with_session_retry(req_id, state, _run)
@@ -415,6 +423,8 @@ async def _emit_tool_call_chunks(
     tool_calls: List[Dict[str, Any]],
     start_index: int,
     disconnected: list,
+    *,
+    include_usage: bool = False,
 ) -> int:
     """按 mock 规范：每个 tool call 单独一个 chunk，delta.content=null。"""
     index = start_index
@@ -423,6 +433,7 @@ async def _emit_tool_call_chunks(
             model,
             chunk_id=chunk_id,
             tool_calls=[_openai_tool_call_entry(index, tc)],
+            usage_null=include_usage,
         )
         if not await _emit_chunk(resp, chunk, disconnected):
             break
@@ -438,6 +449,8 @@ async def _emit_openai_streaming_tool_delta(
     stream_tool: Optional[Dict[str, Any]],
     tool_index: int,
     disconnected: list,
+    *,
+    include_usage: bool = False,
 ) -> Tuple[Optional[Dict[str, Any]], int, bool]:
     """invoke 开标签就绪后，增量发送 tool_calls.function.arguments（无需等 </entml:invoke>）。"""
     while True:
@@ -476,6 +489,7 @@ async def _emit_openai_streaming_tool_delta(
                 model,
                 chunk_id=chunk_id,
                 tool_calls=[entry],
+                usage_null=include_usage,
             )
             if not await _emit_chunk(resp, chunk, disconnected):
                 return stream_tool, tool_index, False
@@ -489,6 +503,8 @@ async def _emit_openai_streaming_tool_argument_pieces(
     stream_tool: Dict[str, Any],
     partial_json: str,
     disconnected: list,
+    *,
+    include_usage: bool = False,
 ) -> bool:
     """向已打开的流式 tool call 追加 arguments 片段。"""
     for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
@@ -501,6 +517,7 @@ async def _emit_openai_streaming_tool_argument_pieces(
             model,
             chunk_id=chunk_id,
             tool_calls=[entry],
+            usage_null=include_usage,
         )
         if not await _emit_chunk(resp, chunk, disconnected):
             return False
@@ -515,20 +532,32 @@ async def _send_stream_finish(
     disconnected: list,
     already_sent_tc_count: int = 0,
     usage: Optional[Dict[str, Any]] = None,
+    *,
+    include_usage: bool = False,
 ) -> None:
-    """补发未流式送出的 tool_calls，然后 finish + [DONE]（对齐 mock 收尾）。"""
+    """补发未流式送出的 tool_calls，然后 finish + [DONE]（对齐 OpenAI 官方流式收尾）。"""
     remaining = all_tool_calls[already_sent_tc_count:]
     if remaining:
         await _emit_tool_call_chunks(
             resp, model, chunk_id, remaining, already_sent_tc_count, disconnected,
+            include_usage=include_usage,
         )
     finish_reason = (
         "tool_calls" if (all_tool_calls or already_sent_tc_count > 0) else "stop"
     )
-    chunk = build_openai_chunk(
-        model, chunk_id=chunk_id, finish_reason=finish_reason, usage=usage,
-    )
-    await _emit_chunk(resp, chunk, disconnected)
+    if include_usage:
+        chunk = build_openai_chunk(
+            model, chunk_id=chunk_id, finish_reason=finish_reason, usage_null=True,
+        )
+        await _emit_chunk(resp, chunk, disconnected)
+        if usage is not None:
+            usage_chunk = build_openai_stream_usage_chunk(model, chunk_id, usage)
+            await _emit_chunk(resp, usage_chunk, disconnected)
+    else:
+        chunk = build_openai_chunk(
+            model, chunk_id=chunk_id, finish_reason=finish_reason, usage=usage,
+        )
+        await _emit_chunk(resp, chunk, disconnected)
     await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
 
 
@@ -542,7 +571,13 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
         return web.Response(status=503, text="Shutting down")
     if state.scheduler.pending >= MAX_QUEUE_SIZE:
         return web.Response(status=503, text="Busy")
-    body = await request.json() if request.can_read_body else {}
+    try:
+        body = await read_request_json(request)
+    except ClientDisconnectedError:
+        logger.info("OpenAI client disconnected while reading body from %s", request.remote)
+        return client_disconnected_response()
+    except json.JSONDecodeError:
+        return _error_response(400, "Invalid JSON body")
     messages = body.get("messages", [])
     model = body.get("model", state.model)
     stream = body.get("stream", False)
@@ -560,7 +595,10 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     req_id = _gen_request_id()
     if not stream:
         return await _handle_non_stream(state, messages, model, req_id, tools, protocol_options)
-    return await _handle_stream(request, state, messages, model, req_id, tools, protocol_options)
+    return await _handle_stream(
+        request, state, messages, model, req_id, tools, protocol_options,
+        include_usage=openai_stream_include_usage(body),
+    )
 
 
 async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
@@ -580,7 +618,10 @@ async def _handle_non_stream(state, messages, model, req_id, tools, protocol_opt
         return _error_response(500, str(e))
 
 
-async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None):
+async def _handle_stream(
+    request, state, messages, model, req_id, tools, protocol_options=None, *,
+    include_usage: bool = False,
+):
     resp = web.StreamResponse(
         status=200,
         headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
@@ -599,69 +640,134 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
     stream_tool: Optional[Dict[str, Any]] = None
     stream_tool_blocks_sent = 0
     usage_tracker = UpstreamUsageTracker()
-    try:
-        async def _make_stream():
-            async for event in _chat_once(
-                state, messages, model, tools, req_id, protocol_options=protocol_options,
-                prompt_api="openai",
-            ):
-                yield event
 
-        async for event in stream_with_session_retry(req_id, state, _make_stream):
-            if disconnected[0]:
-                break
-            usage_tracker.ingest_event(event)
-            etype = event.get("type")
-            if etype in ("response_created", "usage"):
-                continue
-            content = event.get("content", "")
+    def _stream_chunk(**kwargs: Any) -> Dict[str, Any]:
+        if include_usage:
+            kwargs["usage_null"] = True
+        return build_openai_chunk(model, chunk_id=chunk_id, **kwargs)
 
-            if etype == "thinking":
-                # 上游原生 thinking 事件
-                full_thinking += content
-                if content:
-                    chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=content)
-                    if not await _emit_chunk(resp, chunk, disconnected):
+    with record_raw_response(req_id) as raw_recorder:
+        try:
+            async def _make_stream():
+                async for event in _chat_once(
+                    state, messages, model, tools, req_id, protocol_options=protocol_options,
+                    prompt_api="openai",
+                ):
+                    yield event
+
+            async with aclosing(
+                stream_with_session_retry(req_id, state, _make_stream),
+            ) as event_stream:
+                async for event in event_stream:
+                    if disconnected[0]:
                         break
-                continue
+                    usage_tracker.ingest_event(event)
+                    raw_recorder.ingest_event(event)
+                    etype = event.get("type")
+                    if etype in ("response_created", "usage"):
+                        continue
+                    content = event.get("content", "")
 
-            if etype != "answer":
-                continue
+                    if etype == "thinking":
+                        full_thinking += content
+                        if content:
+                            chunk = _stream_chunk(reasoning=content)
+                            if not await _emit_chunk(resp, chunk, disconnected):
+                                break
+                        continue
 
-            full_answer += content
-            ready_calls = parser.feed(content)
+                    if etype != "answer":
+                        continue
 
-            had_stream_tool = stream_tool is not None
-            stream_tool, pending_tc_index, ok = await _emit_openai_streaming_tool_delta(
-                resp, parser, model, chunk_id, stream_tool, pending_tc_index, disconnected,
-            )
-            if not had_stream_tool and stream_tool is not None:
-                stream_tool_blocks_sent += 1
-            if not ok:
-                break
+                    full_answer += content
+                    ready_calls = parser.feed(content)
 
-            # 发送 <entml:thinking> 块中新产生的思考内容
+                    had_stream_tool = stream_tool is not None
+                    stream_tool, pending_tc_index, ok = await _emit_openai_streaming_tool_delta(
+                        resp, parser, model, chunk_id, stream_tool, pending_tc_index, disconnected,
+                        include_usage=include_usage,
+                    )
+                    if not had_stream_tool and stream_tool is not None:
+                        stream_tool_blocks_sent += 1
+                    if not ok:
+                        break
+
+                    pt = parser.partial_thinking
+                    if len(pt) > last_thinking_len:
+                        new_thinking = pt[last_thinking_len:]
+                        last_thinking_len = len(pt)
+                        full_thinking += new_thinking
+                        chunk = _stream_chunk(reasoning=new_thinking)
+                        if not await _emit_chunk(resp, chunk, disconnected):
+                            break
+
+                    safe_text = parser.partial_text
+                    if len(safe_text) > last_safe_len:
+                        new_text = safe_text[last_safe_len:]
+                        last_safe_len = len(safe_text)
+                        chunk = _stream_chunk(content=new_text)
+                        if not await _emit_chunk(resp, chunk, disconnected):
+                            break
+
+                    if ready_calls:
+                        fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+                        streamed_tool_calls.extend(fixed)
+                        if stream_tool is not None:
+                            stream_tool = None
+                            pending_tc_index += len(fixed)
+                        else:
+                            pending_tc_index = await _emit_tool_call_chunks(
+                                resp, model, chunk_id, fixed, pending_tc_index, disconnected,
+                                include_usage=include_usage,
+                            )
+
+        except asyncio.CancelledError:
+            logger.info("OpenAI stream cancelled %s", req_id)
+            await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
+            raise
+        except TokenExpiredError as e:
+            logger.warning("OpenAI stream token expired: %s", e)
+            await _write_openai_stream_error(resp, str(e), disconnected, error_type="rate_limited", code=429)
+            return resp
+        except Exception as e:
+            logger.error("OpenAI stream error: %s", e, exc_info=True)
+            await _write_openai_stream_error(resp, str(e), disconnected)
+            return resp
+
+        if disconnected[0]:
+            logger.info("Client disconnected during stream %s", req_id)
+            return resp
+
+        all_tool_calls: List[Dict[str, Any]] = []
+        final_text = parser.partial_text
+        try:
+            final_text, parsed_calls = parser.finalize()
+            all_tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
+        except Exception as e:
+            logger.warning("stream parser.finalize failed: %s", e)
+
+        if not disconnected[0]:
             pt = parser.partial_thinking
             if len(pt) > last_thinking_len:
                 new_thinking = pt[last_thinking_len:]
                 last_thinking_len = len(pt)
                 full_thinking += new_thinking
-                chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=new_thinking)
-                if not await _emit_chunk(resp, chunk, disconnected):
-                    break
+                chunk = _stream_chunk(reasoning=new_thinking)
+                await _emit_chunk(resp, chunk, disconnected)
 
-            # 发送新产生的可见文本
-            safe_text = parser.partial_text
+        if not disconnected[0]:
+            safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
             if len(safe_text) > last_safe_len:
                 new_text = safe_text[last_safe_len:]
                 last_safe_len = len(safe_text)
-                chunk = build_openai_chunk(model, chunk_id=chunk_id, content=new_text)
-                if not await _emit_chunk(resp, chunk, disconnected):
-                    break
+                if new_text:
+                    chunk = _stream_chunk(content=new_text)
+                    await _emit_chunk(resp, chunk, disconnected)
 
-            # 增量发送本轮 feed 已解析完整的 tool calls（勿再 get_ready，计数已前进）
-            if ready_calls:
-                fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+        if not disconnected[0]:
+            late_ready = parser.get_ready_tool_calls()
+            if late_ready:
+                fixed = [_fix_tool_call_id(tc) for tc in late_ready]
                 streamed_tool_calls.extend(fixed)
                 if stream_tool is not None:
                     stream_tool = None
@@ -669,92 +775,39 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
                 else:
                     pending_tc_index = await _emit_tool_call_chunks(
                         resp, model, chunk_id, fixed, pending_tc_index, disconnected,
+                        include_usage=include_usage,
+                    )
+            elif stream_tool is not None:
+                if not parser.streaming_invoke_closed:
+                    final_delta = parser.complete_stream_delta_if_needed()
+                    if final_delta:
+                        _, piece = final_delta
+                        if piece:
+                            await _emit_openai_streaming_tool_argument_pieces(
+                                resp, model, chunk_id, stream_tool, piece, disconnected,
+                                include_usage=include_usage,
+                            )
+                stream_tool = None
+                if parser.streaming_invoke_closed or all_tool_calls:
+                    pending_tc_index += 1
+                else:
+                    logger.warning(
+                        "OpenAI stream ended with incomplete invoke %s", req_id,
                     )
 
-    except asyncio.CancelledError:
-        await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
-        return resp
-    except TokenExpiredError as e:
-        logger.warning("OpenAI stream token expired: %s", e)
-        await _write_openai_stream_error(resp, str(e), disconnected, error_type="rate_limited", code=429)
-        return resp
-    except Exception as e:
-        logger.error("OpenAI stream error: %s", e, exc_info=True)
-        await _write_openai_stream_error(resp, str(e), disconnected)
-        return resp
-    if disconnected[0]:
-        logger.info("Client disconnected during stream %s", req_id)
-        return resp
+        if not all_tool_calls:
+            all_tool_calls = streamed_tool_calls
 
-    # 刷 parser 尾部：holdback / thinking 块 / 未闭合 invoke
-    all_tool_calls: List[Dict[str, Any]] = []
-    final_text = parser.partial_text
-    try:
-        final_text, parsed_calls = parser.finalize()
-        all_tool_calls = [_fix_tool_call_id(tc) for tc in parsed_calls]
-    except Exception as e:
-        logger.warning("stream parser.finalize failed: %s", e)
+        if all_tool_calls and stream_tool_blocks_sent:
+            pending_tc_index = max(
+                pending_tc_index,
+                min(len(all_tool_calls), stream_tool_blocks_sent),
+            )
 
-    if not disconnected[0]:
-        pt = parser.partial_thinking
-        if len(pt) > last_thinking_len:
-            new_thinking = pt[last_thinking_len:]
-            last_thinking_len = len(pt)
-            full_thinking += new_thinking
-            chunk = build_openai_chunk(model, chunk_id=chunk_id, reasoning=new_thinking)
-            await _emit_chunk(resp, chunk, disconnected)
-
-    if not disconnected[0]:
-        # finalize 后 partial_text 已与剥离结果对齐；无 tool 时也可用 final_text
-        safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
-        if len(safe_text) > last_safe_len:
-            new_text = safe_text[last_safe_len:]
-            last_safe_len = len(safe_text)
-            if new_text:
-                chunk = build_openai_chunk(model, chunk_id=chunk_id, content=new_text)
-                await _emit_chunk(resp, chunk, disconnected)
-
-    if not disconnected[0]:
-        late_ready = parser.get_ready_tool_calls()
-        if late_ready:
-            fixed = [_fix_tool_call_id(tc) for tc in late_ready]
-            streamed_tool_calls.extend(fixed)
-            if stream_tool is not None:
-                stream_tool = None
-                pending_tc_index += len(fixed)
-            else:
-                pending_tc_index = await _emit_tool_call_chunks(
-                    resp, model, chunk_id, fixed, pending_tc_index, disconnected,
-                )
-        elif stream_tool is not None:
-            if not parser.streaming_invoke_closed:
-                final_delta = parser.complete_stream_delta_if_needed()
-                if final_delta:
-                    _, piece = final_delta
-                    if piece:
-                        await _emit_openai_streaming_tool_argument_pieces(
-                            resp, model, chunk_id, stream_tool, piece, disconnected,
-                        )
-            stream_tool = None
-            if parser.streaming_invoke_closed or all_tool_calls:
-                pending_tc_index += 1
-            else:
-                logger.warning(
-                    "OpenAI stream ended with incomplete invoke %s", req_id,
-                )
-
-    if not all_tool_calls:
-        all_tool_calls = streamed_tool_calls
-
-    if all_tool_calls and stream_tool_blocks_sent:
-        pending_tc_index = max(
-            pending_tc_index,
-            min(len(all_tool_calls), stream_tool_blocks_sent),
+        await _send_stream_finish(
+            resp, model, chunk_id, all_tool_calls, disconnected,
+            already_sent_tc_count=pending_tc_index,
+            usage=usage_tracker.openai_stream_usage(),
+            include_usage=include_usage,
         )
-
-    await _send_stream_finish(
-        resp, model, chunk_id, all_tool_calls, disconnected,
-        already_sent_tc_count=pending_tc_index,
-        usage=usage_tracker.openai_usage,
-    )
-    return resp
+        return resp

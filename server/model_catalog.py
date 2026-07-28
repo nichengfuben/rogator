@@ -19,7 +19,7 @@ MODEL_CONTEXT_LENGTH: int = 256_000
 
 
 def model_context_length() -> int:
-    """当前配置的模型上下文（/v1/models 与截断阈值共用）。"""
+    """当前配置的模型上下文（/v1/models 等 API 元数据）。"""
     try:
         from server.config import CONFIG
 

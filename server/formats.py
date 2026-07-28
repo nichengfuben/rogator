@@ -2,12 +2,14 @@ from __future__ import annotations
 
 """ID generation, format builders, and utilities for the Qwen adapter."""
 
+import asyncio
 import json
 import time
 import uuid
 from typing import Any, Dict, List, Optional
 
 from aiohttp import web
+from aiohttp.client_exceptions import ClientConnectionError, ServerDisconnectedError
 
 
 # ============================================================
@@ -18,7 +20,6 @@ PORT: int = 8932
 MAX_CONCURRENT: int = 8
 MAX_QUEUE_SIZE: int = 1000
 PRELOGIN_ACCOUNT_COUNT: int = 3
-MAX_CHARS: int = 256_000
 REQUEST_TOTAL_TIMEOUT: float = 600.0
 MODELS_FETCH_TIMEOUT: float = 60.0
 LOGIN_TIMEOUT: float = 30.0
@@ -109,6 +110,41 @@ class TokenExpiredError(Exception):
     pass
 
 
+class ClientDisconnectedError(Exception):
+    """客户端在请求体读完之前关闭连接。"""
+
+
+_CLIENT_DISCONNECT_ERRORS = (
+    asyncio.CancelledError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    ConnectionError,
+    ClientConnectionError,
+    ServerDisconnectedError,
+)
+
+
+async def read_request_json(request: web.Request) -> Dict[str, Any]:
+    """读取 JSON 请求体；客户端断连时抛出 ``ClientDisconnectedError``。"""
+    if not request.can_read_body:
+        return {}
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        raise
+    except _CLIENT_DISCONNECT_ERRORS as exc:
+        raise ClientDisconnectedError() from exc
+    if not isinstance(body, dict):
+        return {}
+    return body
+
+
+def client_disconnected_response() -> web.Response:
+    """客户端已断开时的响应（499 Client Closed Request）。"""
+    return web.Response(status=499, text="Client disconnected")
+
+
 # ============================================================
 # 消息工具函数
 # ============================================================
@@ -168,23 +204,6 @@ def _fix_tool_call_id(tc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
-# 长文本分割器
-# ============================================================
-
-class LongTextSplitter:
-    def __init__(self, max_chars: int = MAX_CHARS):
-        self.max_chars = max_chars
-
-    def split(self, text: str):
-        if len(text) <= self.max_chars:
-            return text, None, None
-        send_text = text[-self.max_chars:]
-        remaining_text = text[:-self.max_chars]
-        filename = f"remaining_{int(time.time())}_{uuid.uuid4().hex[:8]}.txt"
-        return send_text, filename, remaining_text.encode("utf-8")
-
-
-# ============================================================
 # Qwen 聊天消息构建
 # ============================================================
 
@@ -233,6 +252,8 @@ def build_openai_chunk(
     chunk_id: Optional[str] = None,
     tool_calls: Optional[List[Dict[str, Any]]] = None,
     usage: Optional[Dict[str, Any]] = None,
+    *,
+    usage_null: bool = False,
 ) -> Dict[str, Any]:
     delta: Dict[str, Any] = {"role": "assistant"}
 
@@ -260,9 +281,37 @@ def build_openai_chunk(
         "model": model,
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason, "logprobs": None}],
     }
-    if usage is not None:
+    if usage_null:
+        result["usage"] = None
+    elif usage is not None:
         result["usage"] = usage
     return result
+
+
+def build_openai_stream_usage_chunk(
+    model: str,
+    chunk_id: str,
+    usage: Dict[str, Any],
+) -> Dict[str, Any]:
+    """OpenAI 流式：include_usage 时 finish 之后的独立 usage chunk（choices 为空）。"""
+    return {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [],
+        "usage": usage,
+    }
+
+
+def openai_stream_include_usage(body: Optional[Dict[str, Any]]) -> bool:
+    """请求是否启用了 stream_options.include_usage。"""
+    if not body:
+        return False
+    opts = body.get("stream_options")
+    if not isinstance(opts, dict):
+        return False
+    return bool(opts.get("include_usage"))
 
 
 def _build_usage_dict() -> Dict[str, int]:
@@ -332,15 +381,12 @@ def extract_cached_tokens(raw: Optional[Dict[str, Any]]) -> int:
 
 
 def should_emit_anthropic_message_start(event: Dict[str, Any], message_started: bool) -> bool:
-    """Anthropic 流式：在拿到 input_tokens 后再发 message_start（跳过 response.created）。"""
+    """Anthropic 流式：拿到上游 usage 后再发 message_start（跳过 response.created）。"""
     if message_started:
         return False
-    etype = event.get("type")
-    if etype == "response_created":
+    if event.get("type") == "response_created":
         return False
-    if extract_usage_from_event(event) is not None:
-        return True
-    return etype in ("thinking", "answer")
+    return extract_usage_from_event(event) is not None
 
 
 class UpstreamUsageTracker:
@@ -374,16 +420,23 @@ class UpstreamUsageTracker:
 
     @property
     def anthropic_message_start_usage(self) -> Dict[str, int]:
-        """Anthropic message_start：input_tokens + 占位 output_tokens。"""
+        """Anthropic message_start：上游 input/output 快照。"""
+        out = self._usage["completion_tokens"]
         return {
             "input_tokens": self._usage["prompt_tokens"],
-            "output_tokens": 1,
+            "output_tokens": max(1, out) if self._seen else 0,
         }
 
     @property
     def anthropic_message_delta_usage(self) -> Dict[str, int]:
-        """Anthropic message_delta：仅 final output_tokens。"""
+        """Anthropic message_delta：官方仅含累计 output_tokens。"""
         return {"output_tokens": self._usage["completion_tokens"]}
+
+    def openai_stream_usage(self) -> Optional[Dict[str, Any]]:
+        """流式 finish chunk：无上游用量时不伪造零值。"""
+        if not self._seen:
+            return None
+        return self.openai_usage
 
 
 def _build_openai_message(

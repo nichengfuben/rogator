@@ -11,7 +11,6 @@ from echotools.logger import get_logger
 
 from server.config import CONFIG
 from server.formats import (
-    MAX_CHARS,
     MAX_CONCURRENT,
     MAX_QUEUE_SIZE,
     MAX_REQUEST_RESTARTS,
@@ -39,18 +38,26 @@ class QueueFullError(Exception):
 # 启动时从 config.toml 覆盖部分常量
 MAX_CONCURRENT = CONFIG.max_concurrent
 MAX_QUEUE_SIZE = CONFIG.max_queue_size
-MAX_CHARS = CONFIG.max_chars
 QWEN_SEND_MAX_CHARS = CONFIG.qwen_send_max_chars
 MODEL_CONTEXT_LENGTH = CONFIG.model_context_length
 
 
 class LongTextSplitter:
-    def __init__(self, max_chars: int = QWEN_SEND_MAX_CHARS):
+    def __init__(
+        self,
+        max_chars: int = QWEN_SEND_MAX_CHARS,
+        *,
+        send_full_prompt: bool = False,
+    ) -> None:
         self.max_chars = max_chars
+        self.send_full_prompt = send_full_prompt
 
     def split(self, text: str):
-        """Inject 后整段 prompt 超限：尾部 max_chars → send，剩余前缀 → 附件。"""
-        if len(text) <= self.max_chars:
+        """Inject 后整段 prompt 超限：尾部 max_chars → send，剩余前缀 → 附件。
+
+        ``send_full_prompt=True`` 时不截断、不上传附件，原样发送。
+        """
+        if self.send_full_prompt or len(text) <= self.max_chars:
             return text, None, None
         send_text = text[-self.max_chars:]
         remaining_text = text[:-self.max_chars]
@@ -180,7 +187,7 @@ class AppState:
     def __init__(self) -> None:
         self.shutdown_event = asyncio.Event()
         self._shutdown_requested = False
-        self.splitter = LongTextSplitter()
+        self.splitter = LongTextSplitter(send_full_prompt=CONFIG.send_full_prompt)
         self.client = QwenClient(self.splitter)
         self.scheduler = RequestScheduler(MAX_CONCURRENT, MAX_QUEUE_SIZE)
         self.tracker = ActiveRequestTracker()

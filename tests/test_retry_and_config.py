@@ -45,9 +45,16 @@ class TestConfig(unittest.TestCase):
             p = Path(tmp) / "config.toml"
             p.write_text("[server]\nport = 8932\n", encoding="utf-8")
             cfg = load_config(p)
-            self.assertEqual(cfg.max_chars, 256_000)
             self.assertEqual(cfg.qwen_send_max_chars, 256_000)
             self.assertEqual(cfg.model_context_length, 256_000)
+            self.assertFalse(cfg.send_full_prompt)
+
+    def test_load_config_send_full_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "config.toml"
+            p.write_text("[limits]\nsend_full_prompt = true\n", encoding="utf-8")
+            cfg = load_config(p)
+            self.assertTrue(cfg.send_full_prompt)
 
     def test_loads_toml_parses_sections(self) -> None:
         data = _loads_toml('[server]\nport = 9000\nhost = "127.0.0.1"\n')
@@ -430,6 +437,30 @@ class TestSessionRetry(unittest.TestCase):
             with self.assertRaises(UpstreamTimeoutError):
                 asyncio.run(run_with_session_retry("req-4", state, _run))
         self.assertEqual(calls["n"], 4)
+
+    def test_stream_with_session_retry_early_break_closes_inner(self) -> None:
+        import asyncio
+        from contextlib import aclosing
+
+        state = MagicMock()
+        closed = {"n": 0}
+
+        async def make_stream():
+            try:
+                for i in range(10):
+                    yield {"type": "answer", "content": str(i)}
+                    await asyncio.sleep(0)
+            finally:
+                closed["n"] += 1
+
+        async def _run():
+            async with aclosing(stream_with_session_retry("req-5", state, make_stream)) as events:
+                async for event in events:
+                    if event["content"] == "2":
+                        break
+
+        asyncio.run(_run())
+        self.assertEqual(closed["n"], 1)
 
 
 if __name__ == "__main__":

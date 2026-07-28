@@ -31,16 +31,22 @@ warn_if_config_version_mismatch(user_config_path(), logger)
 # ============================================================
 from handlers import get_state, setup_routes
 from handlers.fncall_inject import prompt_dump_dir
+from server.response_record import response_dump_dir
 from server.session_store import CLEANUP_INTERVAL
 from state import AppState
 
 if _LOG_FILE is not None:
     logger.info("file logging enabled path=%s", _LOG_FILE)
 logger.info(
-    "prompt record=%s print=%s dir=%s pattern=logs/prompts/{uuid7}.txt",
+    "prompt record=%s print=%s dir=%s pattern=logs/prompts/{req_id}.txt",
     CONFIG.record_prompt,
     CONFIG.print_prompt,
     prompt_dump_dir(),
+)
+logger.info(
+    "response record=%s dir=%s pattern=logs/responses/{req_id}.txt (upstream think+answer, pre-entml)",
+    CONFIG.record_response,
+    response_dump_dir(),
 )
 
 # ============================================================
@@ -161,6 +167,7 @@ def _print_startup_info(state: AppState, port: int, prelogin_count: int) -> None
     logger.info("  Sessions    : %d (max 12h)", state.client.session_count)
     logger.info("  Models      : %d", len(state._models))
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
+    logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)
     logger.info("  Cleanup     : startup + background (%ds, auto prelogin)", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)

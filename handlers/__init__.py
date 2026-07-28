@@ -9,7 +9,13 @@ from aiohttp import web
 
 from echotools.logger import get_logger
 
-from server.formats import _error_response, _json_response
+from server.formats import (
+    ClientDisconnectedError,
+    _error_response,
+    _json_response,
+    client_disconnected_response,
+    read_request_json,
+)
 from state import AppState
 
 logger = get_logger("rogator")
@@ -208,7 +214,10 @@ def _message_content_char_count(content: object) -> int:
 async def count_tokens_handler(request: web.Request) -> web.Response:
     """估算请求消息的 token 数量（OpenAI / Anthropic 兼容）。"""
     try:
-        body = await request.json()
+        body = await read_request_json(request)
+    except ClientDisconnectedError:
+        logger.info("Client disconnected while reading body from %s", request.remote)
+        return client_disconnected_response()
     except (json.JSONDecodeError, ValueError):
         return _json_response({"input_tokens": 0})
     messages = body.get("messages", []) or []
@@ -227,7 +236,10 @@ async def audio_speech_handler(request: web.Request) -> web.Response:
     """OpenAI 兼容的 TTS 端点，委托给 QwenClient.synthesize_tts。"""
     state = get_state()
     try:
-        body = await request.json()
+        body = await read_request_json(request)
+    except ClientDisconnectedError:
+        logger.info("Client disconnected while reading body from %s", request.remote)
+        return client_disconnected_response()
     except (json.JSONDecodeError, ValueError):
         return _error_response(400, "Invalid JSON body")
     text = body.get("input", "")
@@ -249,7 +261,10 @@ async def images_generations_handler(request: web.Request) -> web.Response:
     """OpenAI 兼容的图片生成端点（图生图/图生视频前置帧），委托给 QwenClient.generate_video。"""
     state = get_state()
     try:
-        body = await request.json()
+        body = await read_request_json(request)
+    except ClientDisconnectedError:
+        logger.info("Client disconnected while reading body from %s", request.remote)
+        return client_disconnected_response()
     except (json.JSONDecodeError, ValueError):
         return _error_response(400, "Invalid JSON body")
     prompt = body.get("prompt", "")
