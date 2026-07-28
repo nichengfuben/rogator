@@ -13,6 +13,8 @@ else:
     import tomli as _toml_loader
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
+PROJECT_ROOT = _CONFIG_PATH.parent
+LOG_DIR = PROJECT_ROOT / "logs"
 
 
 def _loads_toml(text: str) -> Dict[str, Any]:
@@ -35,6 +37,21 @@ class AppConfig:
     request_total_timeout: float = 600.0
     login_timeout: float = 30.0
     prelogin_timeout: float = 120.0
+    record_prompt: bool = True
+    print_prompt: bool = False
+    log_level: str = "DEBUG"
+    log_to_file: bool = True
+    log_name: str = "rogator"
+    log_color: bool = True
+
+
+def resolve_log_path(path: str, *, project_root: Path | None = None) -> Path:
+    """将相对路径解析为绝对路径（兼容旧配置）。"""
+    root = project_root or PROJECT_ROOT
+    p = Path(path)
+    if not p.is_absolute():
+        p = root / p
+    return p
 
 
 def _deep_get(data: Dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -64,6 +81,26 @@ def load_config(path: Path | None = None) -> AppConfig:
         request_total_timeout=float(_deep_get(raw, "timeout", "request_total", default=600.0)),
         login_timeout=float(_deep_get(raw, "timeout", "login", default=30.0)),
         prelogin_timeout=float(_deep_get(raw, "timeout", "prelogin", default=120.0)),
+        record_prompt=bool(_deep_get(raw, "fncall", "record_prompt", default=True)),
+        print_prompt=bool(_deep_get(raw, "fncall", "print_prompt", default=False)),
+        log_level=str(
+            _deep_get(raw, "debug", "level")
+            or _deep_get(raw, "logging", "level", default="DEBUG")
+        ).upper(),
+        log_to_file=bool(
+            _deep_get(raw, "debug", "log_to_file")
+            if _deep_get(raw, "debug", "log_to_file") is not None
+            else _deep_get(raw, "logging", "log_to_file", default=True)
+        ),
+        log_name=str(
+            _deep_get(raw, "debug", "log_name")
+            or _deep_get(raw, "logging", "log_name", default="rogator")
+        ),
+        log_color=bool(
+            _deep_get(raw, "debug", "color")
+            if _deep_get(raw, "debug", "color") is not None
+            else _deep_get(raw, "logging", "color", default=True)
+        ),
     )
 
 

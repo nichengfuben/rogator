@@ -249,8 +249,71 @@ async def _send_tool_use_blocks(resp, tool_calls, block_idx: int, disconnected: 
     return block_idx
 
 
-async def _send_thinking_delta(resp, content, block_idx, block_type, disconnected):
-    if block_type == "text":
+async def _emit_tool_json_pieces(
+    resp,
+    stream_tool: Dict[str, Any],
+    partial_json: str,
+    disconnected: list,
+) -> bool:
+    stream_tool["json_buf"] = stream_tool.get("json_buf", "") + partial_json
+    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
+        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+        if not await _emit_anthropic_event(resp, {
+            "type": "content_block_delta",
+            "index": stream_tool["block_idx"],
+            "delta": {"type": "input_json_delta", "partial_json": piece},
+        }, disconnected):
+            return False
+    return True
+
+
+async def _flush_open_stream_tool(
+    resp,
+    parser,
+    stream_tool: Optional[Dict[str, Any]],
+    disconnected: list,
+    *,
+    expected_arguments: Optional[str] = None,
+) -> bool:
+    """补全并关闭流式 tool_use；Anthropic 要求先 stop 再开下一块。"""
+    if stream_tool is None:
+        return True
+    while True:
+        delta_info = parser.consume_stream_delta()
+        if not delta_info:
+            break
+        _name, partial_json = delta_info
+        if partial_json:
+            if not await _emit_tool_json_pieces(resp, stream_tool, partial_json, disconnected):
+                return False
+    if not parser.streaming_invoke_closed:
+        final_delta = parser.complete_stream_delta_if_needed()
+        if final_delta:
+            _name, piece = final_delta
+            if piece and not await _emit_tool_json_pieces(resp, stream_tool, piece, disconnected):
+                return False
+    if expected_arguments:
+        buf = stream_tool.get("json_buf", "")
+        if expected_arguments.startswith(buf) and len(expected_arguments) > len(buf):
+            tail = expected_arguments[len(buf) :]
+            if not await _emit_tool_json_pieces(resp, stream_tool, tail, disconnected):
+                return False
+    await _emit_anthropic_event(
+        resp, _content_block_stop_event(stream_tool["block_idx"]), disconnected,
+    )
+    return not disconnected[0]
+
+
+async def _send_thinking_delta(
+    resp, content, block_idx, block_type, disconnected,
+    *, parser=None, stream_tool=None,
+):
+    if stream_tool is not None and parser is not None:
+        if not await _flush_open_stream_tool(resp, parser, stream_tool, disconnected):
+            return block_idx, block_type, stream_tool, False
+        stream_tool = None
+        block_type = None
+    elif block_type == "text":
         block_idx = await _close_block(resp, block_idx, disconnected)
         block_type = None
     if block_type != "thinking":
@@ -262,7 +325,7 @@ async def _send_thinking_delta(resp, content, block_idx, block_type, disconnecte
             "index": block_idx,
             "content_block": {"type": "thinking", "thinking": ""},
         }, disconnected):
-            return block_idx, block_type, False
+            return block_idx, block_type, stream_tool, False
         block_type = "thinking"
     if content:
         if not await _emit_anthropic_event(resp, {
@@ -270,8 +333,8 @@ async def _send_thinking_delta(resp, content, block_idx, block_type, disconnecte
             "index": block_idx,
             "delta": {"type": "thinking_delta", "thinking": content},
         }, disconnected):
-            return block_idx, block_type, False
-    return block_idx, block_type, True
+            return block_idx, block_type, stream_tool, False
+    return block_idx, block_type, stream_tool, True
 
 
 async def _emit_ready_tool_calls(
@@ -308,41 +371,41 @@ async def _emit_streaming_tool_delta(
     disconnected: list,
 ) -> Tuple[int, Optional[str], Optional[Dict[str, Any]], bool]:
     """invoke 开标签就绪后，增量发送 input_json_delta（无需等 </entml:invoke>）。"""
-    delta_info = parser.consume_stream_delta()
-    if not delta_info:
-        return block_idx, block_type, stream_tool, True
-    name, partial_json = delta_info
-    if not partial_json:
-        return block_idx, block_type, stream_tool, True
-    if block_type is not None:
-        block_idx = await _close_block(resp, block_idx, disconnected)
-        block_type = None
-    if stream_tool is None:
-        block_idx += 1
-        stream_tool = {
-            "block_idx": block_idx,
-            "tool_id": _gen_tool_id(),
-            "name": name,
-        }
-        if not await _emit_anthropic_event(resp, {
-            "type": "content_block_start",
-            "index": block_idx,
-            "content_block": {
-                "type": "tool_use",
-                "id": stream_tool["tool_id"],
+    while True:
+        delta_info = parser.consume_stream_delta()
+        if not delta_info:
+            break
+        name, partial_json = delta_info
+        if not partial_json:
+            continue
+        if block_type is not None and block_type != "tool_use":
+            block_idx = await _close_block(resp, block_idx, disconnected)
+            block_type = None
+        if stream_tool is not None and stream_tool.get("name") != name:
+            if not await _flush_open_stream_tool(resp, parser, stream_tool, disconnected):
+                return block_idx, block_type, stream_tool, False
+            stream_tool = None
+        if stream_tool is None:
+            block_idx += 1
+            stream_tool = {
+                "block_idx": block_idx,
+                "tool_id": _gen_tool_id(),
                 "name": name,
-                "input": {},
-            },
-        }, disconnected):
-            return block_idx, block_type, stream_tool, False
-        block_type = "tool_use"
-    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
-        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
-        if not await _emit_anthropic_event(resp, {
-            "type": "content_block_delta",
-            "index": stream_tool["block_idx"],
-            "delta": {"type": "input_json_delta", "partial_json": piece},
-        }, disconnected):
+                "json_buf": "",
+            }
+            if not await _emit_anthropic_event(resp, {
+                "type": "content_block_start",
+                "index": block_idx,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": stream_tool["tool_id"],
+                    "name": name,
+                    "input": {},
+                },
+            }, disconnected):
+                return block_idx, block_type, stream_tool, False
+            block_type = "tool_use"
+        if not await _emit_tool_json_pieces(resp, stream_tool, partial_json, disconnected):
             return block_idx, block_type, stream_tool, False
     return block_idx, block_type, stream_tool, True
 
@@ -352,9 +415,18 @@ async def _close_streaming_tool_block(
     stream_tool: Optional[Dict[str, Any]],
     block_idx: int,
     disconnected: list,
+    *,
+    parser=None,
+    expected_arguments: Optional[str] = None,
 ) -> Tuple[int, Optional[str]]:
-    """关闭流式 tool_use 块。"""
+    """关闭流式 tool_use 块（兼容旧调用；优先走 _flush_open_stream_tool）。"""
     if stream_tool is None:
+        return block_idx, None
+    if parser is not None:
+        await _flush_open_stream_tool(
+            resp, parser, stream_tool, disconnected,
+            expected_arguments=expected_arguments,
+        )
         return block_idx, None
     await _emit_anthropic_event(
         resp, _content_block_stop_event(stream_tool["block_idx"]), disconnected,
@@ -380,6 +452,7 @@ async def _stream_anthropic(
         async def _make_chat_stream():
             async for event in _chat_once(
                 state, messages, model, tools, req_id, protocol_options=protocol_options,
+                prompt_api="anthropic",
             ):
                 yield event
 
@@ -390,8 +463,9 @@ async def _stream_anthropic(
             content = event.get("content", "")
             if etype == "thinking":
                 if content:
-                    block_idx, block_type, ok = await _send_thinking_delta(
-                        resp, content, block_idx, block_type, disconnected
+                    block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
+                        resp, content, block_idx, block_type, disconnected,
+                        parser=parser, stream_tool=stream_tool,
                     )
                     if not ok:
                         break
@@ -417,8 +491,9 @@ async def _stream_anthropic(
                 new_thinking = pt[last_thinking_len:]
                 last_thinking_len = len(pt)
                 if new_thinking:
-                    block_idx, block_type, ok = await _send_thinking_delta(
-                        resp, new_thinking, block_idx, block_type, disconnected
+                    block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
+                        resp, new_thinking, block_idx, block_type, disconnected,
+                        parser=parser, stream_tool=stream_tool,
                     )
                     if not ok:
                         break
@@ -428,6 +503,13 @@ async def _stream_anthropic(
                 new_text = safe_text[last_safe_len:]
                 last_safe_len = len(safe_text)
                 if new_text:
+                    if stream_tool is not None:
+                        if not await _flush_open_stream_tool(
+                            resp, parser, stream_tool, disconnected,
+                        ):
+                            break
+                        stream_tool = None
+                        block_type = None
                     if block_type != "text":
                         if block_type == "thinking":
                             block_idx = await _close_block(resp, block_idx, disconnected)
@@ -451,10 +533,21 @@ async def _stream_anthropic(
                 fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
                 streamed_tool_calls.extend(fixed)
                 if stream_tool is not None:
-                    block_idx, block_type = await _close_streaming_tool_block(
-                        resp, stream_tool, block_idx, disconnected,
+                    expected = next(
+                        (
+                            tc["function"]["arguments"]
+                            for tc in fixed
+                            if tc["function"]["name"] == stream_tool.get("name")
+                        ),
+                        fixed[0]["function"]["arguments"] if len(fixed) == 1 else None,
                     )
+                    if not await _flush_open_stream_tool(
+                        resp, parser, stream_tool, disconnected,
+                        expected_arguments=expected,
+                    ):
+                        break
                     stream_tool = None
+                    block_type = None
                     pending_tc_count += len(fixed)
                 else:
                     block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
@@ -494,8 +587,9 @@ async def _stream_anthropic(
             new_thinking = pt[last_thinking_len:]
             last_thinking_len = len(pt)
             if new_thinking:
-                block_idx, block_type, ok = await _send_thinking_delta(
-                    resp, new_thinking, block_idx, block_type, disconnected
+                block_idx, block_type, stream_tool, ok = await _send_thinking_delta(
+                    resp, new_thinking, block_idx, block_type, disconnected,
+                    parser=parser, stream_tool=stream_tool,
                 )
                 if not ok:
                     merged = all_tool_calls or streamed_tool_calls
@@ -507,6 +601,14 @@ async def _stream_anthropic(
             new_text = safe_text[last_safe_len:]
             last_safe_len = len(safe_text)
             if new_text:
+                if stream_tool is not None:
+                    if not await _flush_open_stream_tool(
+                        resp, parser, stream_tool, disconnected,
+                    ):
+                        merged = all_tool_calls or streamed_tool_calls
+                        return block_idx, block_type, full_answer, True, pending_tc_count, merged
+                    stream_tool = None
+                    block_type = None
                 if block_type != "text":
                     if block_type == "thinking":
                         block_idx = await _close_block(resp, block_idx, disconnected)
@@ -531,10 +633,22 @@ async def _stream_anthropic(
             fixed = [_fix_tool_call_id(tc) for tc in late_ready]
             streamed_tool_calls.extend(fixed)
             if stream_tool is not None:
-                block_idx, block_type = await _close_streaming_tool_block(
-                    resp, stream_tool, block_idx, disconnected,
+                expected = next(
+                    (
+                        tc["function"]["arguments"]
+                        for tc in fixed
+                        if tc["function"]["name"] == stream_tool.get("name")
+                    ),
+                    fixed[0]["function"]["arguments"] if len(fixed) == 1 else None,
                 )
+                if not await _flush_open_stream_tool(
+                    resp, parser, stream_tool, disconnected,
+                    expected_arguments=expected,
+                ):
+                    merged = all_tool_calls or streamed_tool_calls
+                    return block_idx, block_type, full_answer, True, pending_tc_count, merged
                 stream_tool = None
+                block_type = None
                 pending_tc_count += len(fixed)
             else:
                 block_idx, block_type, pending_tc_count, ok = await _emit_ready_tool_calls(
@@ -545,25 +659,17 @@ async def _stream_anthropic(
                     merged = all_tool_calls or streamed_tool_calls
                     return block_idx, block_type, full_answer, True, pending_tc_count, merged
         elif stream_tool is not None:
-            if not parser.streaming_invoke_closed:
-                final_delta = parser.complete_stream_delta_if_needed()
-                if final_delta:
-                    _, piece = final_delta
-                    if piece:
-                        for i in range(0, len(piece), _STREAM_CHUNK_SIZE):
-                            chunk = piece[i : i + _STREAM_CHUNK_SIZE]
-                            await _emit_anthropic_event(resp, {
-                                "type": "content_block_delta",
-                                "index": stream_tool["block_idx"],
-                                "delta": {
-                                    "type": "input_json_delta",
-                                    "partial_json": chunk,
-                                },
-                            }, disconnected)
-            block_idx, block_type = await _close_streaming_tool_block(
-                resp, stream_tool, block_idx, disconnected,
-            )
+            expected = None
+            if all_tool_calls:
+                expected = all_tool_calls[0]["function"]["arguments"]
+            if not await _flush_open_stream_tool(
+                resp, parser, stream_tool, disconnected,
+                expected_arguments=expected,
+            ):
+                merged = all_tool_calls or streamed_tool_calls
+                return block_idx, block_type, full_answer, True, pending_tc_count, merged
             stream_tool = None
+            block_type = None
             if parser.streaming_invoke_closed or all_tool_calls:
                 pending_tc_count += 1
             else:

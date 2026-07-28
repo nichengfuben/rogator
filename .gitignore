@@ -40,7 +40,9 @@ htmlcov/
 # Project specific
 persist/qwen/
 persist/sessions.json
+logs/prompts/
 abnormis.txt
+full_prompt_dump.txt
 *.log
 *.rar
 scripts/prompt_case_dumps/

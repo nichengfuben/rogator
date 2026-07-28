@@ -20,3 +20,13 @@ qwen_send_max_chars = 21750000
 request_total = 600.0
 login = 30.0
 prelogin = 120.0
+
+[fncall]
+# record_prompt / print_prompt 任一为 true 时由 echotools 写入 logs/prompts/{uuid7}.txt
+record_prompt = true
+print_prompt = false
+
+[debug]
+level = "DEBUG"
+color = true
+log_name = "rogator"

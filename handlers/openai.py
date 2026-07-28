@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from aiohttp import web
 
-from echotools.fncall import FncallStreamParser, inject_fncall
+from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 from echotools.exec.fncall.protocols.entml_think.core import (
     normalize_thinking_level,
@@ -19,6 +19,7 @@ from echotools.exec.fncall.protocols.entml_think.core import (
 from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking
 
 from handlers import EmptyResponseError, extract_system_for_inject, get_state
+from handlers.fncall_inject import inject_fncall_for_request
 from server.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.session_retry import run_with_session_retry, stream_with_session_retry
 from server.formats import (
@@ -225,7 +226,16 @@ def _parse_tool_calls(state: AppState, full_answer: str, tools: List[Dict]) -> T
         return full_answer, []
 
 
-async def _prepare_stream(state, messages, model, tools, req_id, protocol_options=None):
+async def _prepare_stream(
+    state,
+    messages,
+    model,
+    tools,
+    req_id,
+    protocol_options=None,
+    *,
+    prompt_api: str = "openai",
+):
     """准备工作（获取session、构建消息、上传文件、创建chat），单次尝试"""
     qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
         model, protocol_thinking_level(protocol_options),
@@ -239,8 +249,14 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
     image_urls = state.client.extract_image_urls(messages)
     user_system_prompt, messages = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
-    injected = inject_fncall(
-        messages, openai_tools, state.protocol, lang="zh",
+    injected = inject_fncall_for_request(
+        messages,
+        openai_tools,
+        state.protocol,
+        req_id=req_id,
+        api=prompt_api,
+        model=model,
+        lang="zh",
         user_system_prompt=user_system_prompt,
         protocol_options=inject_options,
     )
@@ -273,15 +289,29 @@ async def _prepare_stream(state, messages, model, tools, req_id, protocol_option
     return session, final_messages, files, chat_id, qwen_enabled, qwen_mode
 
 
-async def _run_prepare_once(state, messages, model, tools, req_id, protocol_options=None):
+async def _run_prepare_once(
+    state, messages, model, tools, req_id, protocol_options=None, *, prompt_api: str = "openai",
+):
     """单次准备，失败向上抛出 TokenExpiredError。"""
-    return await _prepare_stream(state, messages, model, tools, req_id, protocol_options)
+    return await _prepare_stream(
+        state, messages, model, tools, req_id, protocol_options, prompt_api=prompt_api,
+    )
 
 
-async def _chat_once(state, messages, model, tools, req_id, files=None, protocol_options=None) -> AsyncGenerator[Dict[str, Any], None]:
+async def _chat_once(
+    state,
+    messages,
+    model,
+    tools,
+    req_id,
+    files=None,
+    protocol_options=None,
+    *,
+    prompt_api: str = "openai",
+) -> AsyncGenerator[Dict[str, Any], None]:
     """单次聊天（不含换号重试，由 session_retry 包装）。"""
     session, final_messages, uploaded_files, chat_id, qwen_enabled, qwen_mode = await _run_prepare_once(
-        state, messages, model, tools, req_id, protocol_options
+        state, messages, model, tools, req_id, protocol_options, prompt_api=prompt_api,
     )
     if files is not None:
         uploaded_files = files
@@ -299,7 +329,10 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
         response_parts = []
         think_parts = []
         event_count = 0
-        async for event in _chat_once(state, messages, model, tools, req_id, protocol_options=protocol_options):
+        async for event in _chat_once(
+            state, messages, model, tools, req_id, protocol_options=protocol_options,
+            prompt_api="openai",
+        ):
             event_count += 1
             if event.get("type") == "answer":
                 response_parts.append(event.get("content", ""))
@@ -399,41 +432,45 @@ async def _emit_openai_streaming_tool_delta(
     disconnected: list,
 ) -> Tuple[Optional[Dict[str, Any]], int, bool]:
     """invoke 开标签就绪后，增量发送 tool_calls.function.arguments（无需等 </entml:invoke>）。"""
-    delta_info = parser.consume_stream_delta()
-    if not delta_info:
-        return stream_tool, tool_index, True
-    name, partial_json = delta_info
-    if not partial_json:
-        return stream_tool, tool_index, True
-    if stream_tool is None:
-        stream_tool = {
-            "index": tool_index,
-            "id": _gen_tool_id(),
-            "name": name,
-            "header_sent": False,
-        }
-    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
-        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
-        if not stream_tool["header_sent"]:
-            entry: Dict[str, Any] = {
+    while True:
+        delta_info = parser.consume_stream_delta()
+        if not delta_info:
+            break
+        name, partial_json = delta_info
+        if not partial_json:
+            continue
+        if stream_tool is not None and stream_tool.get("name") != name:
+            stream_tool = None
+            tool_index += 1
+        if stream_tool is None:
+            stream_tool = {
                 "index": tool_index,
-                "id": stream_tool["id"],
-                "type": "function",
-                "function": {"name": name, "arguments": piece},
+                "id": _gen_tool_id(),
+                "name": name,
+                "header_sent": False,
             }
-            stream_tool["header_sent"] = True
-        else:
-            entry = {
-                "index": stream_tool["index"],
-                "function": {"arguments": piece},
-            }
-        chunk = build_openai_chunk(
-            model,
-            chunk_id=chunk_id,
-            tool_calls=[entry],
-        )
-        if not await _emit_chunk(resp, chunk, disconnected):
-            return stream_tool, tool_index, False
+        for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
+            piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+            if not stream_tool["header_sent"]:
+                entry: Dict[str, Any] = {
+                    "index": tool_index,
+                    "id": stream_tool["id"],
+                    "type": "function",
+                    "function": {"name": name, "arguments": piece},
+                }
+                stream_tool["header_sent"] = True
+            else:
+                entry = {
+                    "index": stream_tool["index"],
+                    "function": {"arguments": piece},
+                }
+            chunk = build_openai_chunk(
+                model,
+                chunk_id=chunk_id,
+                tool_calls=[entry],
+            )
+            if not await _emit_chunk(resp, chunk, disconnected):
+                return stream_tool, tool_index, False
     return stream_tool, tool_index, True
 
 
@@ -554,6 +591,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
         async def _make_stream():
             async for event in _chat_once(
                 state, messages, model, tools, req_id, protocol_options=protocol_options,
+                prompt_api="openai",
             ):
                 yield event
 

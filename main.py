@@ -13,28 +13,33 @@ from typing import Optional
 
 from aiohttp import web
 
-# ============================================================
-# echotools 日志配置
-# ============================================================
-from echotools.logger import configure, get_logger
+from server.config import CONFIG, load_config
+from server.logging_setup import setup_logging
 
-configure(
-    level="DEBUG",
-    color=True,
-    show_time=True,
-    show_level=True,
-    show_name=True,
-    time_format="%Y-%m-%d %H:%M:%S",
-)
+# ============================================================
+# echotools 日志：控制台 + logs/rogator.log
+# ============================================================
+from echotools.logger import get_logger
+
+_LOG_FILE = setup_logging()
 logger = get_logger("rogator")
 
 # ============================================================
 # 从模块导入
 # ============================================================
 from handlers import get_state, setup_routes
-from server.config import CONFIG, load_config
+from handlers.fncall_inject import prompt_dump_dir
 from server.session_store import CLEANUP_INTERVAL
 from state import AppState
+
+if _LOG_FILE is not None:
+    logger.info("file logging enabled path=%s", _LOG_FILE)
+logger.info(
+    "prompt record=%s print=%s dir=%s pattern=logs/prompts/{uuid7}.txt",
+    CONFIG.record_prompt,
+    CONFIG.print_prompt,
+    prompt_dump_dir(),
+)
 
 # ============================================================
 # 全局常量
@@ -79,9 +84,9 @@ def parse_args() -> argparse.Namespace:
         help=f"预登录账户数 (默认: {PRELOGIN_ACCOUNT_COUNT})",
     )
     parser.add_argument(
-        "--log-level", type=str, default="DEBUG",
+        "--log-level", type=str, default=CONFIG.log_level,
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="日志级别 (默认: DEBUG)",
+        help=f"日志级别 (默认: {CONFIG.log_level})",
     )
     return parser.parse_args()
 
@@ -260,6 +265,7 @@ async def main_async(
 def main() -> None:
     """服务器主入口。"""
     args = parse_args()
+    setup_logging(args.log_level)
     try:
         asyncio.run(main_async(
             port=args.port,

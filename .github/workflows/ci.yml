@@ -31,4 +31,4 @@ jobs:
       - name: Run tests
         env:
           PYTHONPATH: .
-        run: python -m unittest discover -s tests -q
+        run: python -m pytest tests -q
