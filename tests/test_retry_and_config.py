@@ -10,10 +10,13 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
-from server.config import AppConfig, load_config
+from dataclasses import replace
+from server.config import CONFIG, AppConfig, load_config
 from server.config.app_config import _loads_toml
 from server.config.files import (
+    PROJECT_ROOT,
     ensure_user_config_file,
+    overlay_user_config,
     read_server_version,
     warn_if_config_version_mismatch,
 )
@@ -23,43 +26,68 @@ from server.retry import parse_rate_limit_block_seconds, run_with_session_retry,
 from server.client.session_store import QwenSession, save_sessions, load_session_store
 from server.formats import TokenExpiredError
 
+_PROJECT_TEMPLATE = PROJECT_ROOT / "template" / "config.toml"
+
+
+def _write_user_config(tmp: str, user_text: str) -> tuple[Path, Path]:
+    root = Path(tmp)
+    user_path = root / "config.toml"
+    user_path.write_text(user_text, encoding="utf-8")
+    return user_path, _PROJECT_TEMPLATE
+
 
 class TestConfig(unittest.TestCase):
     def test_load_config_missing_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(FileNotFoundError):
-                load_config(Path(tmp) / "missing.toml")
+                load_config(Path(tmp) / "missing.toml", template_path=_PROJECT_TEMPLATE)
+
+    def test_load_config_template_missing_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path = Path(tmp) / "config.toml"
+            user_path.write_text("[server]\nport = 8932\n", encoding="utf-8")
+            with self.assertRaises(FileNotFoundError):
+                load_config(user_path, template_path=Path(tmp) / "missing-template.toml")
 
     def test_load_config_invalid_toml_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "config.toml"
-            p.write_text("bad[[[", encoding="utf-8")
+            user_path, tpl_path = _write_user_config(tmp, "bad[[[")
             with self.assertRaises(ValueError):
-                load_config(p)
+                load_config(user_path, template_path=tpl_path)
 
     def test_load_config_from_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "config.toml"
-            p.write_text('[server]\nprelogin = 5\n[retry]\nmax_retry_on_error = 2\n', encoding="utf-8")
-            cfg = load_config(p)
+            user_path, tpl_path = _write_user_config(
+                tmp, '[server]\nprelogin = 5\n[retry]\nmax_retry_on_error = 2\n',
+            )
+            cfg = load_config(user_path, template_path=tpl_path)
             self.assertEqual(cfg.prelogin, 5)
             self.assertEqual(cfg.max_retry_on_error, 2)
 
-    def test_load_config_limits_default_256k(self) -> None:
+    def test_load_config_limits_from_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "config.toml"
-            p.write_text("[server]\nport = 8932\n", encoding="utf-8")
-            cfg = load_config(p)
-            self.assertEqual(cfg.qwen_send_max_chars, 256_000)
+            user_path, tpl_path = _write_user_config(tmp, "[server]\nport = 8932\n")
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.qwen_send_max_chars, 1_024_000)
             self.assertEqual(cfg.model_context_length, 256_000)
             self.assertFalse(cfg.send_full_prompt)
+            self.assertEqual(cfg.prelogin, 32)
 
     def test_load_config_send_full_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "config.toml"
-            p.write_text("[limits]\nsend_full_prompt = true\n", encoding="utf-8")
-            cfg = load_config(p)
+            user_path, tpl_path = _write_user_config(
+                tmp, "[limits]\nsend_full_prompt = true\n",
+            )
+            cfg = load_config(user_path, template_path=tpl_path)
             self.assertTrue(cfg.send_full_prompt)
+
+    def test_overlay_user_config_keeps_template_sections(self) -> None:
+        template = {"server": {"port": 8932, "prelogin": 32}, "limits": {"max_concurrent": 32}}
+        user = {"server": {"port": 9000}}
+        merged = overlay_user_config(template, user)
+        self.assertEqual(merged["server"]["port"], 9000)
+        self.assertEqual(merged["server"]["prelogin"], 32)
+        self.assertEqual(merged["limits"]["max_concurrent"], 32)
 
     def test_loads_toml_parses_sections(self) -> None:
         data = _loads_toml('[server]\nport = 9000\nhost = "127.0.0.1"\n')
@@ -140,7 +168,7 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(path, root / "config.toml")
             self.assertTrue(path.is_file())
             self.assertEqual(read_server_version(path), None)
-            cfg = load_config(path)
+            cfg = load_config(path, template_path=_PROJECT_TEMPLATE)
             self.assertEqual(cfg.port, 9001)
 
 
@@ -458,7 +486,7 @@ class TestSessionRetry(unittest.TestCase):
             raise TokenExpiredError("Rate limited: num 12")
 
         import asyncio
-        with patch("server.retry.session_retry.CONFIG", AppConfig(max_retry_on_error=1)):
+        with patch("server.retry.session_retry.CONFIG", replace(CONFIG, max_retry_on_error=1)):
             with self.assertRaises(TokenExpiredError):
                 asyncio.run(run_with_session_retry("req-2", state, _run))
         self.assertEqual(calls["n"], 1)
@@ -474,7 +502,7 @@ class TestSessionRetry(unittest.TestCase):
             return "ok"
 
         import asyncio
-        with patch("server.retry.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
+        with patch("server.retry.session_retry.CONFIG", replace(CONFIG, max_retry_on_error=3)):
             result = asyncio.run(run_with_session_retry("req-3", state, _run))
         self.assertEqual(result, "ok")
         self.assertEqual(calls["n"], 3)
@@ -488,7 +516,7 @@ class TestSessionRetry(unittest.TestCase):
             raise UpstreamTimeoutError("Create chat timed out after 15s")
 
         import asyncio
-        with patch("server.retry.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
+        with patch("server.retry.session_retry.CONFIG", replace(CONFIG, max_retry_on_error=3)):
             with self.assertRaises(UpstreamTimeoutError):
                 asyncio.run(run_with_session_retry("req-4", state, _run))
         self.assertEqual(calls["n"], 4)

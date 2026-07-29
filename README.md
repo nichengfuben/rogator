@@ -55,7 +55,7 @@ pip install -r requirements-dev.txt
 首次启动会从 `template/config.toml` 复制到项目根目录 `config.toml`（本地文件 gitignore，不会提交）。
 若仍存在旧路径 `config/config.toml`，会自动复制到根目录。
 
-对照 `template/config.toml` 编辑根目录 `config.toml`；`server.version` 与模板不一致时启动日志会提醒，**不会自动修改你的 config 文件**。
+**加载策略（运行时）**：以 `template/config.toml` 为完整缺省，`config.toml` 里**只覆盖你写出的键**；未写出的节/键取自模板，**不使用代码内置默认值**。不会把模板合并写回你的 config 文件。`server.version` 与模板不一致时启动日志会提醒。
 
 ```toml
 [server]
@@ -88,12 +88,12 @@ login = 30.0
 prelogin = 120.0
 ```
 
-CLI 参数会覆盖根目录 `config.toml` 中的 `port` / `host` / `prelogin`。
+监听地址、端口、预登录数量等均来自 `config.toml`（未写项取自 `template/config.toml`）。
 
 ### 4. 启动
 
 ```bash
-python main.py [--port 8932] [--host 0.0.0.0] [--prelogin 3] [--log-level DEBUG]
+python main.py
 ```
 
 启动流程：加载/迁移会话 → 清理过期 session → 预登录至 `prelogin` 数量 → 刷新模型列表 → 监听 HTTP。
