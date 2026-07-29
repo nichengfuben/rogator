@@ -10,8 +10,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
-from server.session_store import QwenSession, clean_expired, SessionStoreMeta
-from server.qwen_client import QwenClient
+from server.client.session_store import QwenSession, clean_expired, SessionStoreMeta
+from server.client.qwen_client import QwenClient
 
 
 def _make_jwt(exp: float) -> str:
@@ -77,7 +77,7 @@ class TestSessionExpiry(unittest.TestCase):
 
     def test_prune_expired_on_get_valid_session(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("server.qwen_client.load_session_store", return_value=([], empty_meta)):
+        with patch("server.client.qwen_client.load_session_store", return_value=([], empty_meta)):
             client = QwenClient(MagicMock())
         client._sessions = [
             _session(-5, name="old@test.com"),

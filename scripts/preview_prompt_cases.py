@@ -22,8 +22,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for entry in (ROOT / "src", ROOT):
+    s = str(entry)
+    if s not in sys.path:
+        sys.path.insert(0, s)
+import path_setup  # noqa: F401
 
 from echotools.fncall import get_protocol, inject_fncall
 
@@ -34,7 +37,7 @@ from handlers.openai import (
     convert_tools_to_openai,
     protocol_thinking_level,
 )
-from server.model_thinking import resolve_qwen_thinking
+from server.model.model_thinking import resolve_qwen_thinking
 from state import LongTextSplitter
 
 Branch = Literal[

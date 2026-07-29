@@ -1,12 +1,12 @@
 # Rogator 配置模板（提交仓库）
-# 本地配置：config/config.toml（gitignore，首次启动从本模板复制）
-# 升级后请对照本模板自行更新 config/config.toml；版本不一致时启动日志会提醒，不会自动改文件。
+# 本地配置：项目根目录 config.toml（gitignore，首次启动从本模板复制）
+# 升级后请对照本模板自行更新 config.toml；版本不一致时启动日志会提醒，不会自动改文件。
 
 [server]
 version = "2.2.2"
 port = 8932
 host = "0.0.0.0"
-prelogin = 3
+prelogin = 32
 
 [retry]
 # 换号 / 上游超时重试次数（不含首次尝试）
@@ -14,7 +14,7 @@ max_retry_on_error = 3
 
 [limits]
 max_concurrent = 32
-max_queue_size = 1024
+max_queue_size = 512
 # inject 后发给 Qwen 的正文字符上限；超限则尾部直发、前缀上传附件
 qwen_send_max_chars = 1024000
 # /v1/models 等 API 对外声明的上下文长度

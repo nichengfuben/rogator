@@ -38,7 +38,7 @@ env/
 htmlcov/
 .tox/
 # Project specific
-config/config.toml
+config.toml
 persist/qwen/
 persist/sessions.json
 logs/prompts/
@@ -47,7 +47,7 @@ full_prompt_dump.txt
 *.log
 *.rar
 scripts/prompt_case_dumps/
-# accounts.csv holds credentials (ignored below); accounts.py is the public loader
+# accounts.csv holds credentials (ignored below); src/accounts.py is the public loader
 # Claude Code
 CLAUDE.local.md
 # OS

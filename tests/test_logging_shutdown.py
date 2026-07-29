@@ -4,7 +4,7 @@ import logging
 import unittest
 from unittest.mock import patch
 
-from server.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
 
 
 class TestLoggingShutdown(unittest.TestCase):

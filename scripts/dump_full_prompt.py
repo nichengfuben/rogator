@@ -23,8 +23,11 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for entry in (ROOT / "src", ROOT):
+    s = str(entry)
+    if s not in sys.path:
+        sys.path.insert(0, s)
+import path_setup  # noqa: F401
 
 from echotools.exec.fncall.protocols.entml_think.core import (
     default_max_thinking_length_for_level,

@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+for p in (_ROOT / "src", _ROOT):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+import path_setup  # noqa: F401
 _TESTS = _ROOT / "tests"
 if str(_TESTS) not in sys.path:
     sys.path.insert(0, str(_TESTS))

@@ -4,18 +4,32 @@
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+_root = Path(__file__).resolve().parent
+for _entry in (_root / "src", _root):
+    _path = str(_entry)
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+import path_setup  # noqa: F401
+
 import argparse
 import asyncio
-import signal
 import socket
 import sys
-from typing import Any, Optional
+from typing import Optional
 
 from aiohttp import web
 
 from server.config import CONFIG, load_config
-from server.config_files import user_config_path, warn_if_config_version_mismatch
-from server.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.files import user_config_path, warn_if_config_version_mismatch
+from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.shutdown import (
+    cancel_leftover_tasks,
+    install_asyncio_exception_handler,
+    install_signal_handlers,
+)
 
 # ============================================================
 # echotools 日志：控制台 + logs/rogator.log
@@ -31,8 +45,8 @@ warn_if_config_version_mismatch(user_config_path(), logger)
 # ============================================================
 from handlers import get_state, setup_routes
 from handlers.fncall_inject import prompt_dump_dir
-from server.response_record import response_dump_dir
-from server.session_store import CLEANUP_INTERVAL
+from server.records.response_record import response_dump_dir
+from server.client.session_store import CLEANUP_INTERVAL
 from state import AppState
 
 if _LOG_FILE is not None:
@@ -123,48 +137,11 @@ def _validate_config(port: int, prelogin_count: int) -> None:
 
 
 def _install_signal_handlers(state: AppState) -> None:
-    """注册系统信号处理器（Unix/macOS 用 asyncio；Windows 回退 signal.signal）。"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-
-    def _request_shutdown(sig_name: str) -> None:
-        logger.info("Signal %s received, shutting down...", sig_name)
-        state.shutdown_event.set()
-
-    def _sync_sigint_handler(_signum: int, _frame: Optional[Any]) -> None:
-        logger.info("Interrupt received, shutting down...")
-        loop.call_soon_threadsafe(state.shutdown_event.set)
-
-    installed_async: set[int] = set()
-    for sig_name in ("SIGINT", "SIGTERM"):
-        sig = getattr(signal, sig_name, None)
-        if sig is None:
-            continue
-        try:
-            loop.add_signal_handler(sig, _request_shutdown, sig_name)
-            installed_async.add(sig)
-        except (NotImplementedError, RuntimeError, ValueError):
-            pass
-
-    sigint = getattr(signal, "SIGINT", None)
-    if sigint is not None and sigint not in installed_async:
-        # Windows 及不支持 add_signal_handler 的环境
-        try:
-            signal.signal(sigint, _sync_sigint_handler)
-        except (ValueError, OSError, AttributeError):
-            pass
+    install_signal_handlers(state)
 
 
 async def _cancel_leftover_tasks() -> None:
-    """取消所有遗留的 asyncio 任务。"""
-    current = asyncio.current_task()
-    tasks = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
-    for t in tasks:
-        t.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    await cancel_leftover_tasks()
 
 
 # ============================================================
@@ -224,6 +201,7 @@ async def _run_server(app: web.Application, state: AppState, port: int) -> None:
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
         _install_signal_handlers(state)
+        install_asyncio_exception_handler(state)
         while not state.shutdown_event.is_set():
             try:
                 await asyncio.wait_for(state.shutdown_event.wait(), timeout=1.0)
@@ -235,15 +213,17 @@ async def _run_server(app: web.Application, state: AppState, port: int) -> None:
         logger.error("Fatal: %s", e, exc_info=True)
         raise
     finally:
-        if site:
-            try:
-                await site.stop()
-            except Exception:
-                pass
         try:
             await asyncio.wait_for(state.shutdown(), timeout=SHUTDOWN_TOTAL_TIMEOUT)
         except (asyncio.TimeoutError, Exception):
             pass
+        if site:
+            try:
+                await site.stop()
+            except OSError as exc:
+                logger.debug("site.stop during shutdown: %s", exc)
+            except Exception:
+                pass
         try:
             await runner.cleanup()
         except Exception:

@@ -43,7 +43,7 @@ python main.py [--port 8932] [--host 0.0.0.0] [--prelogin 1] [--log-level DEBUG]
 - `core/` — Main QwenClient (mixin-based: AuthMixin, UploadMixin, MediaMixin, VideoGenMixin, LogsMixin), with submodules: crypto/, transport/, compat/, storage/, media/
 - `server/` — Simplified QwenClient (used by state.py), format builders, OSS upload
 - `state.py` — AppState, RequestScheduler, LongTextSplitter with resilient executor
-- `accounts.py` — Hardcoded disposable account pool (758KB), auto token refresh rotation
+- `src/accounts.py` — Account pool loaded from `accounts.csv`, auto token refresh rotation
 - `main.py` — Entry point, aiohttp server lifecycle
 - `mvp/` — Standalone smoke-test scripts (chat.py, test_upload_analysis.py)
 - `achecker.py` — Project compliance checker (dir children, file lines, function length, nesting depth)

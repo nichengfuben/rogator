@@ -20,8 +20,8 @@ from server.formats import (
     DEFAULT_MODEL,
     TokenExpiredError,
 )
-from server.session_store import CLEANUP_INTERVAL, QwenSession
-from server.qwen_client import QwenClient
+from server.client.session_store import CLEANUP_INTERVAL, QwenSession
+from server.client.qwen_client import QwenClient
 
 logger = get_logger("rogator")
 

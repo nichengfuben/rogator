@@ -21,9 +21,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = ROOT / "tests"
-for path in (ROOT, TESTS_DIR):
+for path in (ROOT / "src", ROOT, TESTS_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
+import path_setup  # noqa: F401
 
 from echotools.fncall import get_protocol  # noqa: E402
 from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking  # noqa: E402
