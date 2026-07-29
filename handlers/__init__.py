@@ -16,6 +16,7 @@ from server.formats import (
     client_disconnected_response,
     read_request_json,
 )
+from server.token_estimate import estimate_anthropic_request_input_tokens
 from state import AppState
 
 logger = get_logger("rogator")
@@ -199,20 +200,12 @@ async def anthropic_root_handler(request: web.Request) -> web.Response:
     )
 
 
-def _message_content_char_count(content: object) -> int:
-    if isinstance(content, str):
-        return len(content)
-    if not isinstance(content, list):
-        return 0
-    total = 0
-    for part in content:
-        if isinstance(part, dict) and part.get("type") in ("text", "input_text"):
-            total += len(part.get("text", ""))
-    return total
-
-
 async def count_tokens_handler(request: web.Request) -> web.Response:
-    """估算请求消息的 token 数量（OpenAI / Anthropic 兼容）。"""
+    """估算请求消息的 token 数量（Anthropic ``POST /v1/messages/count_tokens``）。
+
+    Claude Code 在发消息前会调此端点；我们按 ``len(…) // 3`` 估算 input，
+    与正式对话里 ``message_start.input_tokens`` 策略一致。输出 token 不在此接口返回。
+    """
     try:
         body = await read_request_json(request)
     except ClientDisconnectedError:
@@ -220,16 +213,13 @@ async def count_tokens_handler(request: web.Request) -> web.Response:
         return client_disconnected_response()
     except (json.JSONDecodeError, ValueError):
         return _json_response({"input_tokens": 0})
-    messages = body.get("messages", []) or []
-    system = body.get("system", "")
-    total_chars = len(system) if isinstance(system, str) else 0
-    for msg in messages:
-        total_chars += _message_content_char_count(msg.get("content", ""))
-    return _json_response({"input_tokens": _estimate_tokens_from_chars(total_chars)})
+    return _json_response({"input_tokens": estimate_anthropic_request_input_tokens(body)})
 
 
 def _estimate_tokens_from_chars(total_chars: int) -> int:
-    return max(0, total_chars // 3)
+    from server.token_estimate import estimate_tokens_from_char_count
+
+    return estimate_tokens_from_char_count(total_chars)
 
 
 async def audio_speech_handler(request: web.Request) -> web.Response:

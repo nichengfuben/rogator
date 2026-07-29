@@ -65,7 +65,7 @@ class TestUpstreamUsageTracker(unittest.TestCase):
             "content": "hi",
             "usage": {"input_tokens": 8, "output_tokens": 2},
         })
-        self.assertEqual(tracker.anthropic_message_start_usage, {
+        self.assertEqual(tracker.anthropic_message_start_usage_for(estimated_input_tokens=8), {
             "input_tokens": 8,
             "output_tokens": 2,
         })
