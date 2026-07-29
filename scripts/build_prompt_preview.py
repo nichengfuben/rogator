@@ -24,8 +24,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for entry in (ROOT / "src", ROOT):
+    s = str(entry)
+    if s not in sys.path:
+        sys.path.insert(0, s)
+import path_setup  # noqa: F401
 
 from echotools.fncall import get_protocol, inject_fncall
 
@@ -42,7 +45,7 @@ from handlers.openai import (
     protocol_thinking_level,
 )
 from server.formats import build_qwen_message
-from server.model_thinking import resolve_qwen_thinking
+from server.model.model_thinking import resolve_qwen_thinking
 
 
 def demo_openai_messages() -> List[Dict[str, Any]]:

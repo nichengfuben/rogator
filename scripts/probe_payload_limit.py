@@ -14,8 +14,11 @@ from typing import Tuple
 import aiohttp
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for entry in (ROOT / "src", ROOT):
+    s = str(entry)
+    if s not in sys.path:
+        sys.path.insert(0, s)
+import path_setup  # noqa: F401
 
 from core.crypto.crypto import build_headers, build_login_headers, hash_password
 from core.transport.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH

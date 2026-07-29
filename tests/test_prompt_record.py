@@ -160,11 +160,11 @@ def test_resolve_log_file_path_format(tmp_path, monkeypatch) -> None:
     from dataclasses import replace
 
     from server.config import LOG_DIR
-    from server.logging_setup import resolve_log_file_path
+    from server.config.logging_setup import resolve_log_file_path
 
-    monkeypatch.setattr("server.logging_setup.LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr("server.config.logging_setup.LOG_DIR", tmp_path / "logs")
     monkeypatch.setattr(
-        "server.logging_setup.CONFIG",
+        "server.config.logging_setup.CONFIG",
         replace(CONFIG, log_to_file=True, log_name="rogator"),
     )
     path = resolve_log_file_path()
@@ -179,9 +179,9 @@ def test_setup_logging_writes_file(tmp_path, monkeypatch) -> None:
     from dataclasses import replace
 
     log_dir = tmp_path / "logs"
-    monkeypatch.setattr("server.logging_setup.LOG_DIR", log_dir)
+    monkeypatch.setattr("server.config.logging_setup.LOG_DIR", log_dir)
     monkeypatch.setattr(
-        "server.logging_setup.CONFIG",
+        "server.config.logging_setup.CONFIG",
         replace(
             CONFIG,
             log_to_file=True,
@@ -189,7 +189,7 @@ def test_setup_logging_writes_file(tmp_path, monkeypatch) -> None:
             log_level="INFO",
         ),
     )
-    from server.logging_setup import setup_logging
+    from server.config.logging_setup import setup_logging
 
     path = setup_logging()
     assert path is not None

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from echotools.fncall import FncallStreamParser, get_protocol
 
-from handlers.openai import (
+from handlers.openai.stream_tools import (
     _emit_openai_streaming_tool_delta,
     _openai_tool_call_entry,
     _send_stream_finish,

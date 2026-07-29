@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 _QWEN = Path(__file__).resolve().parents[1]
-if str(_QWEN) not in sys.path:
-    sys.path.insert(0, str(_QWEN))
+for p in (_QWEN / "src", _QWEN):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+import path_setup  # noqa: F401
 
 _ECHO = _QWEN.parent.parent / "PyPi" / "echotools-sdk" / "src"
 if _ECHO.is_dir():

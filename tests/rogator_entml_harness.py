@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _QWEN_ROOT = Path(__file__).resolve().parents[1]
 _TESTS_DIR = Path(__file__).resolve().parent
-for path in (_QWEN_ROOT, _TESTS_DIR):
+_SRC_DIR = _QWEN_ROOT / "src"
+for path in (_SRC_DIR, _QWEN_ROOT, _TESTS_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 

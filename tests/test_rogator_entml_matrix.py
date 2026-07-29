@@ -10,9 +10,10 @@ import pytest
 
 _QWEN_ROOT = Path(__file__).resolve().parents[1]
 _TESTS_DIR = Path(__file__).resolve().parent
-for p in (_QWEN_ROOT, _TESTS_DIR):
+for p in (_QWEN_ROOT / "src", _QWEN_ROOT, _TESTS_DIR):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
+import path_setup  # noqa: F401
 
 from rogator_entml_harness import (  # noqa: E402
     CHUNK_SIZES,

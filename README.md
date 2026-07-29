@@ -22,7 +22,7 @@ Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 An
 
 ### 1. 准备账号
 
-账号从本地 `accounts.csv` 加载（`accounts.py` / `accounts.csv` 均已 gitignore）。CSV 列格式：
+账号从本地 `accounts.csv` 加载（`src/accounts.py` / `accounts.csv` 均已 gitignore）。CSV 列格式：
 
 ```csv
 email,password,name
@@ -52,10 +52,10 @@ pip install -r requirements-dev.txt
 
 ### 3. 配置（可选）
 
-首次启动会从 `template/config.toml` 复制到 `config/config.toml`（本地文件 gitignore，不会提交）。
-若仓库根目录仍有旧版 `config.toml`，会自动迁移到 `config/`。
+首次启动会从 `template/config.toml` 复制到项目根目录 `config.toml`（本地文件 gitignore，不会提交）。
+若仍存在旧路径 `config/config.toml`，会自动复制到根目录。
 
-对照 `template/config.toml` 编辑 `config/config.toml`；`server.version` 与模板不一致时启动日志会提醒，**不会自动修改你的 config 文件**。
+对照 `template/config.toml` 编辑根目录 `config.toml`；`server.version` 与模板不一致时启动日志会提醒，**不会自动修改你的 config 文件**。
 
 ```toml
 [server]
@@ -88,7 +88,7 @@ login = 30.0
 prelogin = 120.0
 ```
 
-CLI 参数会覆盖 `config/config.toml` 中的 `port` / `host` / `prelogin`。
+CLI 参数会覆盖根目录 `config.toml` 中的 `port` / `host` / `prelogin`。
 
 ### 4. 启动
 
@@ -241,27 +241,19 @@ python scripts/build_prompt_preview.py
 ```
 .
 ├── main.py                 # 入口：aiohttp 生命周期、预登录
+├── config.toml             # 本地运行时配置（gitignore）
 ├── template/config.toml    # 配置模板（提交仓库）
-├── config/config.toml      # 本地运行时配置（gitignore）
 ├── state.py                # AppState、RequestScheduler、长文本分割
-├── accounts.py             # 从 accounts.csv 加载账号（gitignore）
 ├── accounts.csv            # 本地账号 CSV（gitignore，需自行创建）
-├── handlers/
-│   ├── openai.py           # /v1/chat/completions
-│   └── anthro.py           # /v1/messages
-├── server/
-│   ├── qwen_client.py      # 运行时 Qwen 客户端（登录、换号、prelogin）
-│   ├── session_store.py    # sessions.json 读写与迁移
-│   ├── session_retry.py    # 请求级换号重试
-│   ├── model_thinking.py   # entml / 原生思考分流
-│   ├── config.py           # config/config.toml 加载
-│   ├── config_files.py     # 模板路径、首次复制、版本提醒
-│   └── formats.py          # ID 生成、响应格式、常量
+├── src/
+│   ├── path_setup.py       # 注入 src/ 与根目录到 sys.path
+│   ├── accounts.py           # 从 accounts.csv 加载账号
+│   ├── handlers/           # OpenAI / Anthropic 路由
+│   └── server/             # Qwen 客户端、配置、格式转换
 ├── persist/                # 运行时数据（部分 gitignore）
 ├── scripts/
 │   └── build_prompt_preview.py
-├── tests/                  # pytest 单元测试
-└── core/                   # 遗留 mixin 客户端（TTS/视频等能力仍被引用）
+└── tests/                  # pytest 单元测试（含 conftest.py）
 ```
 
 ## 测试

@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-from server.chat_sse import iter_sse_events
+from server.client.chat import iter_sse_events
 from server.formats import UpstreamTimeoutError
 
 

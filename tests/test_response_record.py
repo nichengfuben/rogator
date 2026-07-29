@@ -8,7 +8,7 @@ from dataclasses import replace
 import pytest
 
 from server.config import CONFIG
-from server.response_record import RawResponseRecorder, record_raw_response, response_dump_dir
+from server.records.response_record import RawResponseRecorder, record_raw_response, response_dump_dir
 
 
 def test_response_dump_dir_under_project_root() -> None:
@@ -18,9 +18,9 @@ def test_response_dump_dir_under_project_root() -> None:
 
 def test_record_response_disabled_no_file(tmp_path, monkeypatch) -> None:
     dump = tmp_path / "responses"
-    monkeypatch.setattr("server.response_record.response_dump_dir", lambda: dump)
+    monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: dump)
     monkeypatch.setattr(
-        "server.response_record.CONFIG",
+        "server.records.response_record.CONFIG",
         replace(CONFIG, record_response=False),
     )
     recorder = RawResponseRecorder("req_off")
@@ -36,9 +36,9 @@ def test_record_response_writes_req_id_file(
 ) -> None:
     caplog.set_level(logging.INFO, logger="rogator")
     dump = tmp_path / "responses"
-    monkeypatch.setattr("server.response_record.response_dump_dir", lambda: dump)
+    monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: dump)
     monkeypatch.setattr(
-        "server.response_record.CONFIG",
+        "server.records.response_record.CONFIG",
         replace(CONFIG, record_response=True),
     )
     recorder = RawResponseRecorder("req_abc")
@@ -54,9 +54,9 @@ def test_record_response_writes_req_id_file(
 
 def test_record_raw_response_context_manager_finalizes(tmp_path, monkeypatch) -> None:
     dump = tmp_path / "responses"
-    monkeypatch.setattr("server.response_record.response_dump_dir", lambda: dump)
+    monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: dump)
     monkeypatch.setattr(
-        "server.response_record.CONFIG",
+        "server.records.response_record.CONFIG",
         replace(CONFIG, record_response=True),
     )
     with record_raw_response("req_ctx") as recorder:
@@ -75,13 +75,13 @@ def test_prompt_and_response_share_req_id(
     prompts = tmp_path / "prompts"
     responses = tmp_path / "responses"
     monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: prompts)
-    monkeypatch.setattr("server.response_record.response_dump_dir", lambda: responses)
+    monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: responses)
     monkeypatch.setattr(
         "handlers.fncall_inject.CONFIG",
         replace(CONFIG, record_prompt=True, print_prompt=False, record_response=True),
     )
     monkeypatch.setattr(
-        "server.response_record.CONFIG",
+        "server.records.response_record.CONFIG",
         replace(CONFIG, record_prompt=True, print_prompt=False, record_response=True),
     )
 

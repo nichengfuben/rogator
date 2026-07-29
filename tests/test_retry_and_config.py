@@ -10,12 +10,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from accounts import Account
-from server.config import AppConfig, _loads_toml, load_config
-from server.config_files import read_server_version, warn_if_config_version_mismatch
-from server.model_thinking import load_model_entml_map, resolve_qwen_thinking, uses_entml_thinking
+from server.config import AppConfig, load_config
+from server.config.app_config import _loads_toml
+from server.config.files import (
+    ensure_user_config_file,
+    read_server_version,
+    warn_if_config_version_mismatch,
+)
+from server.model.model_thinking import load_model_entml_map, resolve_qwen_thinking, uses_entml_thinking
 from server.formats import UpstreamTimeoutError
-from server.session_retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
-from server.session_store import QwenSession, save_sessions, load_session_store
+from server.retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
+from server.client.session_store import QwenSession, save_sessions, load_session_store
 from server.formats import TokenExpiredError
 
 
@@ -72,19 +77,17 @@ class TestConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tpl_dir = root / "template"
-            cfg_dir = root / "config"
             tpl_dir.mkdir()
-            cfg_dir.mkdir()
             tpl_dir.joinpath("config.toml").write_text(
                 '[server]\nversion = "2.0.0"\n', encoding="utf-8",
             )
-            cfg_dir.joinpath("config.toml").write_text(
-                '[server]\nversion = "1.0.0"\n', encoding="utf-8",
-            )
+            user_cfg = root / "config.toml"
+            user_cfg.write_text('[server]\nversion = "1.0.0"\n', encoding="utf-8")
             mock_logger = MagicMock()
-            with patch("server.config_files.TEMPLATE_DIR", tpl_dir), \
-                 patch("server.config_files.CONFIG_DIR", cfg_dir):
-                warn_if_config_version_mismatch(cfg_dir / "config.toml", mock_logger)
+            with patch("server.config.files.PROJECT_ROOT", root), \
+                 patch("server.config.files.TEMPLATE_DIR", tpl_dir), \
+                 patch("server.config.files.USER_CONFIG_PATH", user_cfg):
+                warn_if_config_version_mismatch(user_cfg, mock_logger)
             mock_logger.warning.assert_called_once()
             args = mock_logger.warning.call_args[0]
             self.assertEqual(args[1], "1.0.0")
@@ -94,37 +97,51 @@ class TestConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tpl_dir = root / "template"
-            cfg_dir = root / "config"
             tpl_dir.mkdir()
-            cfg_dir.mkdir()
             tpl_dir.joinpath("config.toml").write_text(
                 '[server]\nversion = "2.0.0"\n', encoding="utf-8",
             )
-            cfg_dir.joinpath("config.toml").write_text(
-                '[server]\nport = 8932\n', encoding="utf-8",
-            )
+            user_cfg = root / "config.toml"
+            user_cfg.write_text('[server]\nport = 8932\n', encoding="utf-8")
             mock_logger = MagicMock()
-            with patch("server.config_files.TEMPLATE_DIR", tpl_dir), \
-                 patch("server.config_files.CONFIG_DIR", cfg_dir):
-                warn_if_config_version_mismatch(cfg_dir / "config.toml", mock_logger)
+            with patch("server.config.files.PROJECT_ROOT", root), \
+                 patch("server.config.files.TEMPLATE_DIR", tpl_dir), \
+                 patch("server.config.files.USER_CONFIG_PATH", user_cfg):
+                warn_if_config_version_mismatch(user_cfg, mock_logger)
             mock_logger.warning.assert_not_called()
 
     def test_warn_config_version_match_silent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             tpl_dir = root / "template"
-            cfg_dir = root / "config"
             tpl_dir.mkdir()
-            cfg_dir.mkdir()
-            for d in (tpl_dir, cfg_dir):
-                d.joinpath("config.toml").write_text(
-                    '[server]\nversion = "2.0.0"\n', encoding="utf-8",
-                )
+            content = '[server]\nversion = "2.0.0"\n'
+            tpl_dir.joinpath("config.toml").write_text(content, encoding="utf-8")
+            user_cfg = root / "config.toml"
+            user_cfg.write_text(content, encoding="utf-8")
             mock_logger = MagicMock()
-            with patch("server.config_files.TEMPLATE_DIR", tpl_dir), \
-                 patch("server.config_files.CONFIG_DIR", cfg_dir):
-                warn_if_config_version_mismatch(cfg_dir / "config.toml", mock_logger)
+            with patch("server.config.files.PROJECT_ROOT", root), \
+                 patch("server.config.files.TEMPLATE_DIR", tpl_dir), \
+                 patch("server.config.files.USER_CONFIG_PATH", user_cfg):
+                warn_if_config_version_mismatch(user_cfg, mock_logger)
             mock_logger.warning.assert_not_called()
+
+    def test_ensure_user_config_from_legacy_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy_dir = root / "config"
+            legacy_dir.mkdir()
+            legacy_cfg = legacy_dir / "config.toml"
+            legacy_cfg.write_text('[server]\nport = 9001\n', encoding="utf-8")
+            with patch("server.config.files.PROJECT_ROOT", root), \
+                 patch("server.config.files.USER_CONFIG_PATH", root / "config.toml"), \
+                 patch("server.config.files.LEGACY_DIR_CONFIG", legacy_cfg):
+                path = ensure_user_config_file()
+            self.assertEqual(path, root / "config.toml")
+            self.assertTrue(path.is_file())
+            self.assertEqual(read_server_version(path), None)
+            cfg = load_config(path)
+            self.assertEqual(cfg.port, 9001)
 
 
 class TestModelThinking(unittest.TestCase):
@@ -219,7 +236,7 @@ class TestThinkingLevels(unittest.TestCase):
             self.assertIsNone(resolve_thinking_injection(opts), msg=str(body))
 
     def test_models_list_think_efforts(self) -> None:
-        from server.model_catalog import (
+        from server.model.model_catalog import (
             MODEL_CONTEXT_LENGTH,
             build_openai_model_entry,
             model_supports_thinking,
@@ -345,7 +362,7 @@ class TestSessionStoreMeta(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             sessions_file = Path(tmp) / "sessions.json"
-            with patch("server.session_store.SESSIONS_FILE", str(sessions_file)):
+            with patch("server.client.session_store.SESSIONS_FILE", str(sessions_file)):
                 acc = Account(username="a@test.com", password="pw")
                 s = QwenSession(
                     account=acc, token=_make_jwt(time.time() + 3600),
@@ -382,14 +399,33 @@ class TestSessionStoreMeta(unittest.TestCase):
                 }),
                 encoding="utf-8",
             )
-            with patch("server.session_store.SESSIONS_FILE", str(target)), \
-                 patch("server.session_store.LEGACY_SESSIONS_FILE", str(legacy)):
+            with patch("server.client.session_store.SESSIONS_FILE", str(target)), \
+                 patch("server.client.session_store.LEGACY_SESSIONS_FILE", str(legacy)):
                 loaded, meta = load_session_store()
                 self.assertTrue(target.exists())
                 self.assertFalse(legacy.exists())
                 self.assertEqual(len(loaded), 1)
                 self.assertEqual(meta.current_index, 2)
                 self.assertEqual(meta.account_index, 3)
+
+    def test_atomic_write_falls_back_when_replace_fails(self) -> None:
+        from server.client.session_store import _atomic_write_text
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "sessions.json"
+            payload = '{"count": 1}'
+            with patch("server.client.session_store.os.replace", side_effect=OSError(5, "拒绝访问")):
+                _atomic_write_text(target, payload)
+            self.assertEqual(target.read_text(encoding="utf-8"), payload)
+
+
+class TestStreamToolJsonSync(unittest.TestCase):
+    def test_arguments_json_equal_ignores_whitespace(self) -> None:
+        from handlers.anthro.stream_tools import _arguments_json_equal
+
+        compact = '{"command":"hello"}'
+        spaced = '{"command": "hello"}'
+        self.assertTrue(_arguments_json_equal(compact, spaced))
 
 
 class TestSessionRetry(unittest.TestCase):
@@ -422,7 +458,7 @@ class TestSessionRetry(unittest.TestCase):
             raise TokenExpiredError("Rate limited: num 12")
 
         import asyncio
-        with patch("server.session_retry.CONFIG", AppConfig(max_retry_on_error=1)):
+        with patch("server.retry.session_retry.CONFIG", AppConfig(max_retry_on_error=1)):
             with self.assertRaises(TokenExpiredError):
                 asyncio.run(run_with_session_retry("req-2", state, _run))
         self.assertEqual(calls["n"], 1)
@@ -438,7 +474,7 @@ class TestSessionRetry(unittest.TestCase):
             return "ok"
 
         import asyncio
-        with patch("server.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
+        with patch("server.retry.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
             result = asyncio.run(run_with_session_retry("req-3", state, _run))
         self.assertEqual(result, "ok")
         self.assertEqual(calls["n"], 3)
@@ -452,7 +488,7 @@ class TestSessionRetry(unittest.TestCase):
             raise UpstreamTimeoutError("Create chat timed out after 15s")
 
         import asyncio
-        with patch("server.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
+        with patch("server.retry.session_retry.CONFIG", AppConfig(max_retry_on_error=3)):
             with self.assertRaises(UpstreamTimeoutError):
                 asyncio.run(run_with_session_retry("req-4", state, _run))
         self.assertEqual(calls["n"], 4)
