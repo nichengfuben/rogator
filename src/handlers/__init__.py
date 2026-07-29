@@ -16,7 +16,10 @@ from server.formats import (
     client_disconnected_response,
     read_request_json,
 )
-from server.model.token_estimate import estimate_anthropic_request_input_tokens
+from server.model.token_estimate import (
+    estimate_anthropic_injected_input_tokens,
+    estimate_anthropic_request_input_tokens,
+)
 from state import AppState
 
 logger = get_logger("rogator")
@@ -201,10 +204,10 @@ async def anthropic_root_handler(request: web.Request) -> web.Response:
 
 
 async def count_tokens_handler(request: web.Request) -> web.Response:
-    """估算请求消息的 token 数量（Anthropic ``POST /v1/messages/count_tokens``）。
+    """估算 Anthropic ``POST /v1/messages/count_tokens`` 的 input_tokens。
 
-    发消息前的预检端点；此时无 Qwen 上游响应，只能 ``len(…) // 3`` 估算。
-    正式 ``/v1/messages`` 对话的 input/output 均使用 chat.qwen.ai 上游 ``usage``。
+    按 inject 后 prompt 字符 // 3 估算，与正式对话上游 usage 口径更接近。
+    正式对话的 input/output 仍以 chat.qwen.ai 上游 usage 为准。
     """
     try:
         body = await read_request_json(request)
@@ -213,7 +216,25 @@ async def count_tokens_handler(request: web.Request) -> web.Response:
         return client_disconnected_response()
     except (json.JSONDecodeError, ValueError):
         return _json_response({"input_tokens": 0})
-    return _json_response({"input_tokens": estimate_anthropic_request_input_tokens(body)})
+    state = get_state()
+    model = str(body.get("model") or state.model)
+    try:
+        from handlers.anthro.normalize import _build_anthropic_protocol_options
+
+        protocol_options = _build_anthropic_protocol_options(body)
+    except ValueError:
+        protocol_options = None
+    try:
+        tokens = estimate_anthropic_injected_input_tokens(
+            body,
+            protocol=state.protocol,
+            model=model,
+            protocol_options=protocol_options,
+        )
+    except Exception:
+        logger.debug("count_tokens inject estimate failed, falling back to raw body", exc_info=True)
+        tokens = estimate_anthropic_request_input_tokens(body)
+    return _json_response({"input_tokens": tokens})
 
 
 def _estimate_tokens_from_chars(total_chars: int) -> int:

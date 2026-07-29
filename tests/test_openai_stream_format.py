@@ -192,9 +192,10 @@ class TestOpenAIStreamFormat(unittest.TestCase):
         self.assertEqual(chunk["usage"]["completion_tokens"], 2)
 
     def test_openai_stream_include_usage_flag(self) -> None:
-        self.assertFalse(openai_stream_include_usage({}))
-        self.assertFalse(openai_stream_include_usage({"stream_options": {}}))
+        self.assertTrue(openai_stream_include_usage({}))
+        self.assertTrue(openai_stream_include_usage({"stream_options": {}}))
         self.assertTrue(openai_stream_include_usage({"stream_options": {"include_usage": True}}))
+        self.assertFalse(openai_stream_include_usage({"stream_options": {"include_usage": False}}))
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ from server.formats import (
     TokenExpiredError,
     UpstreamTimeoutError,
     UpstreamUsageTracker,
+    log_qwen_upstream_usage,
+    openai_stream_include_usage,
     ClientDisconnectedError,
     _error_response,
     _fix_tool_call_id,
@@ -37,7 +39,6 @@ from server.formats import (
     _json_response,
     build_openai_chunk,
     client_disconnected_response,
-    openai_stream_include_usage,
     read_request_json,
 )
 from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
@@ -71,7 +72,11 @@ class OpenAIStreamState:
 
     def stream_chunk(self, **kwargs: Any) -> Dict[str, Any]:
         if self.include_usage:
-            kwargs["usage_null"] = True
+            usage = self.usage_tracker.openai_stream_usage()
+            if usage is not None:
+                kwargs["usage"] = usage
+            else:
+                kwargs["usage_null"] = True
         return build_openai_chunk(self.model, chunk_id=self.chunk_id, **kwargs)
 
 
@@ -145,11 +150,16 @@ async def _process_openai_stream_answer(st: OpenAIStreamState, content: str) -> 
 
 async def _process_openai_stream_event(st: OpenAIStreamState, event: Dict[str, Any]) -> bool:
     """处理单个上游事件；返回 False 表示应中断流。"""
-    st.usage_tracker.ingest_event(event)
     etype = event.get("type")
+    if etype == "prompt_meta":
+        st.usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
+        return True
+    st.usage_tracker.ingest_event(event)
     if etype in ("response_created", "usage"):
         return True
     content = event.get("content", "")
+    if content and etype in ("thinking", "answer"):
+        st.usage_tracker.add_output_chars(len(content))
     if etype == "thinking":
         return await _process_openai_stream_thinking(st, content)
     if etype != "answer":
@@ -269,11 +279,13 @@ async def _finish_openai_stream(st: OpenAIStreamState, resp, model, include_usag
     await _flush_remaining_thinking_and_text(st, final_text)
     await _finalize_openai_stream_tool(st, parsed_calls)
     all_tool_calls = _resolve_all_tool_calls(st, parsed_calls)
+    usage = st.usage_tracker.openai_stream_usage()
+    emit_usage = include_usage and usage is not None
     await _send_stream_finish(
         resp, model, st.chunk_id, all_tool_calls, st.disconnected,
         already_sent_tc_count=st.pending_tc_index,
-        usage=st.usage_tracker.openai_stream_usage(),
-        include_usage=include_usage,
+        usage=usage,
+        include_usage=emit_usage,
     )
     return resp
 
@@ -321,6 +333,8 @@ async def _handle_stream(
                 logger.error("OpenAI stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
                 await _write_openai_stream_error(resp, str(e), st.disconnected)
                 return resp
+            finally:
+                log_qwen_upstream_usage(req_id, st.usage_tracker)
     except QueueFullError as exc:
         return handler_error_response(exc, label="OpenAI stream")
 

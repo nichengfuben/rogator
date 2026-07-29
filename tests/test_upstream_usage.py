@@ -51,6 +51,33 @@ class TestNormalizeUpstreamUsage(unittest.TestCase):
 
 
 class TestUpstreamUsageTracker(unittest.TestCase):
+    def test_stream_estimate_before_upstream(self) -> None:
+        tracker = UpstreamUsageTracker()
+        tracker.set_estimated_input_from_prompt_chars(664_430)
+        self.assertEqual(tracker.anthropic_message_start_usage, {
+            "input_tokens": 166_107,
+            "output_tokens": 0,
+        })
+        tracker.add_output_chars(1200)
+        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 300})
+        usage = tracker.openai_stream_usage()
+        assert usage is not None
+        self.assertEqual(usage["prompt_tokens"], 166_107)
+        self.assertEqual(usage["completion_tokens"], 300)
+
+    def test_upstream_overrides_stream_estimate_at_finish(self) -> None:
+        tracker = UpstreamUsageTracker()
+        tracker.set_estimated_input_from_prompt_chars(1000)
+        tracker.add_output_chars(400)
+        tracker.ingest_event({
+            "type": "usage",
+            "data": {"input_tokens": 185251, "output_tokens": 300},
+        })
+        self.assertEqual(tracker.anthropic_message_start_usage["input_tokens"], 185251)
+        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 300})
+        assert tracker.openai_stream_usage() is not None
+        self.assertEqual(tracker.openai_stream_usage()["prompt_tokens"], 185251)
+
     def test_ingest_usage_event(self) -> None:
         tracker = UpstreamUsageTracker()
         tracker.ingest_event({"type": "usage", "data": {"input_tokens": 3, "output_tokens": 4}})
@@ -67,9 +94,26 @@ class TestUpstreamUsageTracker(unittest.TestCase):
         })
         self.assertEqual(tracker.anthropic_message_start_usage, {
             "input_tokens": 8,
-            "output_tokens": 2,
+            "output_tokens": 0,
         })
         self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 2})
+
+    def test_anthropic_message_start_includes_cache_read(self) -> None:
+        tracker = UpstreamUsageTracker()
+        tracker.ingest_event({
+            "type": "usage",
+            "data": {
+                "input_tokens": 124392,
+                "output_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 122496},
+            },
+        })
+        self.assertEqual(tracker.anthropic_message_start_usage["input_tokens"], 124392)
+        self.assertEqual(tracker.anthropic_message_start_usage["output_tokens"], 0)
+        self.assertEqual(
+            tracker.anthropic_message_start_usage["cache_read_input_tokens"],
+            122496,
+        )
 
     def test_cumulative_last_snapshot_wins(self) -> None:
         tracker = UpstreamUsageTracker()
@@ -95,6 +139,24 @@ class TestUpstreamUsageTracker(unittest.TestCase):
             },
         })
         self.assertEqual(tracker.openai_usage["prompt_tokens_details"], {"cached_tokens": 42})
+        self.assertEqual(tracker.last_raw_usage["input_tokens"], 100)
+
+    def test_log_qwen_upstream_usage_emits_debug_json(self) -> None:
+        from unittest.mock import patch
+
+        from server.formats.usage import log_qwen_upstream_usage
+
+        tracker = UpstreamUsageTracker()
+        tracker.ingest_event({
+            "type": "usage",
+            "data": {"input_tokens": 9, "output_tokens": 3, "total_tokens": 12},
+        })
+        with patch("server.formats.usage.logger") as log:
+            log_qwen_upstream_usage("req-test", tracker)
+        log.debug.assert_called_once()
+        msg = log.debug.call_args[0][2]
+        self.assertIn("input_tokens", msg)
+        self.assertIn("9", msg)
 
 
 class TestAnthropicMessageStartTiming(unittest.TestCase):

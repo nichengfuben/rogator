@@ -52,12 +52,13 @@ from server.formats.openai_build import (
     build_openai_response,
     build_openai_stream_usage_chunk,
     convert_to_anthropic,
-    openai_stream_include_usage,
 )
 from server.formats.usage import (
     UpstreamUsageTracker,
     build_usage_dict,
+    log_qwen_upstream_usage,
     normalize_upstream_usage,
+    openai_stream_include_usage,
     should_emit_anthropic_message_start,
 )
 
@@ -99,6 +100,7 @@ __all__ = [
     "TokenExpiredError",
     "UpstreamTimeoutError",
     "UpstreamUsageTracker",
+    "log_qwen_upstream_usage",
     "build_chat_payload",
     "build_openai_chunk",
     "build_openai_response",

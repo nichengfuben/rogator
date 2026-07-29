@@ -14,6 +14,7 @@ from server.formats import (
     TokenExpiredError,
     UpstreamUsageTracker,
     build_openai_response,
+    log_qwen_upstream_usage,
 )
 from server.model.model_thinking import resolve_qwen_thinking
 from server.records.response_record import record_raw_response
@@ -139,6 +140,8 @@ async def _chat_once(
     )
     if files is not None:
         uploaded_files = files
+    send_text = final_messages[0].get("content") or ""
+    yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
     async for event in state.client.chat_completion(
         session, chat_id, final_messages, model, uploaded_files,
         qwen_thinking_enabled=qwen_enabled,
@@ -162,7 +165,7 @@ async def _collect_non_stream_response(
             event_count += 1
             usage_tracker.ingest_event(event)
             raw_recorder.ingest_event(event)
-            if event.get("type") in ("response_created", "usage"):
+            if event.get("type") in ("response_created", "usage", "prompt_meta"):
                 continue
             if event.get("type") == "answer":
                 response_parts.append(event.get("content", ""))
@@ -177,6 +180,7 @@ async def _collect_non_stream_response(
     display_text, entml_thinking = split_entml_thinking(display_text)
     if entml_thinking:
         reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
+    log_qwen_upstream_usage(req_id, usage_tracker)
     return build_openai_response(
         model, display_text, reasoning=reasoning, tool_calls=tool_calls,
         usage=usage_tracker.openai_stream_usage(),

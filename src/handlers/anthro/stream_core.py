@@ -10,6 +10,7 @@ from server.formats import (
     UpstreamUsageTracker,
     UpstreamTimeoutError,
     _fix_tool_call_id,
+    log_qwen_upstream_usage,
     should_emit_anthropic_message_start,
 )
 from server.records.response_record import record_raw_response
@@ -45,7 +46,7 @@ async def _make_anthropic_chat_stream(state, messages, model, tools, req_id, pro
         yield event
 
 
-async def _maybe_emit_message_start(
+async def _ensure_anthropic_message_start(
     resp,
     model: str,
     msg_id: str,
@@ -61,6 +62,19 @@ async def _maybe_emit_message_start(
         disconnected,
     )
     state.message_started = True
+
+
+async def _maybe_emit_message_start(
+    resp,
+    model: str,
+    msg_id: str,
+    usage_tracker: UpstreamUsageTracker,
+    state: AnthropicStreamState,
+    disconnected: list,
+) -> None:
+    await _ensure_anthropic_message_start(
+        resp, model, msg_id, usage_tracker, state, disconnected,
+    )
 
 
 async def _handle_stream_token_expired(
@@ -277,22 +291,30 @@ async def _stream_event_loop(
         async for event in event_stream:
             if disconnected[0]:
                 break
+            etype = event.get("type")
+            if etype == "prompt_meta":
+                usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
+                await _ensure_anthropic_message_start(
+                    resp, model, msg_id, usage_tracker, stream_state, disconnected,
+                )
+                continue
+
             usage_tracker.ingest_event(event)
             raw_recorder.ingest_event(event)
 
+            content = event.get("content", "")
+            if content and etype in ("thinking", "answer"):
+                usage_tracker.add_output_chars(len(content))
+
             if not stream_state.message_started:
-                if should_emit_anthropic_message_start(event, False):
-                    await _emit_anthropic_event(
-                        resp,
-                        _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
-                        disconnected,
+                if etype in ("response_created",):
+                    continue
+                if should_emit_anthropic_message_start(event, False) or etype in ("thinking", "answer"):
+                    await _ensure_anthropic_message_start(
+                        resp, model, msg_id, usage_tracker, stream_state, disconnected,
                     )
-                    stream_state.message_started = True
                     to_process = stream_state.deferred_content + [event]
                     stream_state.deferred_content = []
-                elif event.get("type") in ("thinking", "answer"):
-                    stream_state.deferred_content.append(event)
-                    continue
                 else:
                     continue
             else:
@@ -361,6 +383,8 @@ async def _stream_anthropic(
             return await _handle_stream_generic_error(
                 resp, stream_state, usage_tracker, e, disconnected,
             )
+        finally:
+            log_qwen_upstream_usage(req_id, usage_tracker)
 
         return await _complete_anthropic_stream(
             resp, parser, stream_state, usage_tracker, model, msg_id, req_id, disconnected,
