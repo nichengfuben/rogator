@@ -203,7 +203,7 @@ async def anthropic_root_handler(request: web.Request) -> web.Response:
 async def count_tokens_handler(request: web.Request) -> web.Response:
     """估算请求消息的 token 数量（Anthropic ``POST /v1/messages/count_tokens``）。
 
-    Claude Code 发消息前的预检端点；此时无 Qwen 上游响应，只能 ``len(…) // 3`` 估算。
+    发消息前的预检端点；此时无 Qwen 上游响应，只能 ``len(…) // 3`` 估算。
     正式 ``/v1/messages`` 对话的 input/output 均使用 chat.qwen.ai 上游 ``usage``。
     """
     try:

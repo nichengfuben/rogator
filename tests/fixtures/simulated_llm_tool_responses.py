@@ -99,7 +99,7 @@ TOOLS: List[Dict[str, Any]] = [
     },
 ]
 
-# Claude Code / rogator 链路常见工具（不在默认 TOOLS 内）
+# Anthropic 兼容客户端 / rogator 链路常见工具（不在默认 TOOLS 内）
 AGENT_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -580,7 +580,7 @@ SIMULATED_LLM_RESPONSES: List[SimulatedCase] = [
         expect_args=[{"city": "杭州", "unit": "c"}],
         expect_clean_substrings=["参考历史：", "我再确认一次实时天气。"],
     ),
-    # --- 模型分支：Claude Code / rogator 常见 agent 工具 ---
+    # --- 模型分支：Anthropic 兼容客户端 / rogator 常见 agent 工具 ---
     SimulatedCase(
         id="agent_write_windows_path",
         description="Write：Windows 绝对路径 + 含引号 contents",

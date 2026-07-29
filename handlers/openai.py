@@ -27,6 +27,7 @@ from server.session_retry import run_with_session_retry, stream_with_session_ret
 from server.formats import (
     MAX_QUEUE_SIZE,
     TokenExpiredError,
+    UpstreamTimeoutError,
     UpstreamUsageTracker,
     ClientDisconnectedError,
     _error_response,
@@ -728,6 +729,10 @@ async def _handle_stream(
         except TokenExpiredError as e:
             logger.warning("OpenAI stream token expired: %s", e)
             await _write_openai_stream_error(resp, str(e), disconnected, error_type="rate_limited", code=429)
+            return resp
+        except UpstreamTimeoutError as e:
+            logger.warning("OpenAI stream upstream timeout: %s", e)
+            await _write_openai_stream_error(resp, str(e), disconnected, error_type="timeout", code=504)
             return resp
         except Exception as e:
             logger.error("OpenAI stream error: %s", e, exc_info=True)

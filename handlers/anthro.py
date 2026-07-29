@@ -18,6 +18,7 @@ from echotools.exec.fncall.protocols.entml_think.core import (
 from server.formats import (
     TokenExpiredError,
     UpstreamUsageTracker,
+    UpstreamTimeoutError,
     ClientDisconnectedError,
     _error_response,
     _fix_tool_call_id,
@@ -644,6 +645,15 @@ async def _stream_anthropic(
         except TokenExpiredError as e:
             logger.warning("Anthropic stream token expired: %s", e)
             error_msg = json.dumps({"type": "error", "error": {"message": str(e), "type": "rate_limited"}})
+            await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
+            merged = all_tool_calls or streamed_tool_calls
+            return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker
+        except UpstreamTimeoutError as e:
+            logger.warning("Anthropic stream upstream timeout: %s", e)
+            error_msg = json.dumps({
+                "type": "error",
+                "error": {"message": str(e), "type": "timeout"},
+            })
             await _safe_write(resp, f"event: error\ndata: {error_msg}\n\n".encode("utf-8"), disconnected)
             merged = all_tool_calls or streamed_tool_calls
             return block_idx, block_type, full_answer, True, pending_tc_count, merged, usage_tracker

@@ -3,13 +3,14 @@ from __future__ import annotations
 """聊天 SSE 流解析与 session 级错误处理。"""
 
 import json
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
 
 import aiohttp
 
 from core.transport.sse import parse_sse_event
-from server.formats import TokenExpiredError, PayloadTooLargeError
+from server.formats import TokenExpiredError, PayloadTooLargeError, UpstreamTimeoutError
 from server.session_store import QwenSession, is_session_fatal_error
 
 if TYPE_CHECKING:
@@ -55,14 +56,17 @@ async def iter_sse_events(
     resp: aiohttp.ClientResponse,
     session: QwenSession,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    async for raw in resp.content:
-        line = raw.decode("utf-8", errors="replace").strip()
-        if not line.startswith("data:"):
-            check_sse_error_line(client, line, session)
-            continue
-        data_str = line[5:].strip()
-        if not data_str or data_str == "[DONE]":
-            continue
-        event = parse_sse_event(data_str)
-        if event:
-            yield event
+    try:
+        async for raw in resp.content:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                check_sse_error_line(client, line, session)
+                continue
+            data_str = line[5:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            event = parse_sse_event(data_str)
+            if event:
+                yield event
+    except asyncio.TimeoutError as e:
+        raise UpstreamTimeoutError("Upstream SSE read timed out") from e

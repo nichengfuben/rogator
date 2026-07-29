@@ -102,7 +102,7 @@ class PayloadTooLargeError(RuntimeError):
 
 
 class UpstreamTimeoutError(RuntimeError):
-    """上游 HTTP 请求超时（如 create_chat）。"""
+    """上游 HTTP / SSE 读超时。"""
 
 
 class TokenExpiredError(Exception):
