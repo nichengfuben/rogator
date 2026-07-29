@@ -1,4 +1,4 @@
-# Qwen 上游配置（由 template/configs/qwen.toml 复制；可覆盖 capabilities）
+# Qwen 上游配置（由 template/upstream/qwen.toml 复制；可覆盖 capabilities）
 
 [limits]
 qwen_send_max_chars = 1024000
@@ -7,8 +7,6 @@ qwen_send_max_chars = 1024000
 chat = true
 vision = true
 search = true
-tools = true
-native_tools = true
 count_tokens = true
 image_gen = true
 tts = true

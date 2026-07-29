@@ -15,13 +15,25 @@ else:
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TEMPLATE_DIR = PROJECT_ROOT / "template"
 TEMPLATE_NAME = "config.toml"
+UPSTREAM_CONFIG_TEMPLATE_NAME = "upstream_config.toml"
+UPSTREAM_TEMPLATE_DIR_NAME = "upstream"
 USER_CONFIG_NAME = "config.toml"
 USER_CONFIG_PATH = PROJECT_ROOT / USER_CONFIG_NAME
+USER_CONFIGS_DIR = PROJECT_ROOT / "configs"
 LEGACY_DIR_CONFIG = PROJECT_ROOT / "config" / USER_CONFIG_NAME
+LEGACY_UPSTREAM_DEFAULTS_NAME = "defaults.toml"
 
 
 def template_config_path() -> Path:
     return TEMPLATE_DIR / TEMPLATE_NAME
+
+
+def upstream_config_template_path() -> Path:
+    return TEMPLATE_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME
+
+
+def upstream_template_dir() -> Path:
+    return TEMPLATE_DIR / UPSTREAM_TEMPLATE_DIR_NAME
 
 
 def user_config_path() -> Path:

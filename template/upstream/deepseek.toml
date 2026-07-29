@@ -1,0 +1,12 @@
+# DeepSeek 上游配置（由 template/upstream/deepseek.toml 复制）
+
+[capabilities]
+chat = true
+vision = true
+search = false
+count_tokens = true
+image_gen = false
+tts = false
+
+[session]
+token_ttl_seconds = 3600

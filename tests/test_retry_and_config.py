@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from upstream.qwen.account import Account
 from dataclasses import replace
 from server.config import CONFIG, AppConfig, load_config
-from server.config.app_config import _loads_toml
+from server.config.app_config import _load_upstream_toml, _loads_toml
 from server.config.files import (
     PROJECT_ROOT,
     ensure_user_config_file,
@@ -128,6 +128,13 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cfg.shutdown_wait_active_requests, 5.0)
             self.assertEqual(cfg.shutdown_total_timeout, 8.0)
             self.assertEqual(cfg.shutdown_hard_exit_timeout, 25.0)
+
+    def test_load_upstream_toml_overlay_chain(self) -> None:
+        raw = _load_upstream_toml("qwen")
+        self.assertEqual(raw.get("limits", {}).get("qwen_send_max_chars"), 1_024_000)
+        caps = raw.get("capabilities") or {}
+        self.assertTrue(caps.get("chat"))
+        self.assertTrue(caps.get("vision"))
 
     def test_overlay_user_config_keeps_template_sections(self) -> None:
         template = {"server": {"port": 8932, "prelogin": 32}, "limits": {"max_concurrent": 32}}
