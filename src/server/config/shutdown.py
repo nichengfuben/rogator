@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import threading
 from typing import Any, Optional
 
 from echotools.logger import get_logger
@@ -11,6 +12,28 @@ from echotools.logger import get_logger
 logger = get_logger("rogator")
 
 _WIN_SHUTDOWN_SOCKET_ERRORS = frozenset({64, 10054, 995, 10038})
+_shutdown_lock = threading.Lock()
+_shutdown_signal_count = 0
+
+
+def _force_exit_after_repeat_interrupt() -> None:
+    """第二次及以上中断：避免卡在 accept/清理阶段无法退出。"""
+    logger.warning("Repeated interrupt during shutdown, forcing exit")
+    raise SystemExit(130)
+
+
+def _request_shutdown_once(state: Any, *, source: str) -> None:
+    """首次中断：仅置位 shutdown_event（不提前设 _shutdown_requested，留给 state.shutdown）。"""
+    global _shutdown_signal_count
+    with _shutdown_lock:
+        _shutdown_signal_count += 1
+        if _shutdown_signal_count > 1:
+            _force_exit_after_repeat_interrupt()
+        already_set = state.shutdown_event.is_set()
+    if already_set:
+        return
+    logger.info("%s received, shutting down...", source)
+    state.shutdown_event.set()
 
 
 def install_signal_handlers(state: Any) -> None:
@@ -20,13 +43,14 @@ def install_signal_handlers(state: Any) -> None:
     except RuntimeError:
         return
 
-    def _request_shutdown(sig_name: str) -> None:
-        logger.info("Signal %s received, shutting down...", sig_name)
-        state.shutdown_event.set()
+    def _async_handler(sig_name: str) -> None:
+        _request_shutdown_once(state, source=f"Signal {sig_name}")
 
     def _sync_sigint_handler(_signum: int, _frame: Optional[Any]) -> None:
-        logger.info("Interrupt received, shutting down...")
-        loop.call_soon_threadsafe(state.shutdown_event.set)
+        try:
+            _request_shutdown_once(state, source="Interrupt")
+        except SystemExit:
+            raise
 
     installed_async: set[int] = set()
     for sig_name in ("SIGINT", "SIGTERM"):
@@ -34,7 +58,7 @@ def install_signal_handlers(state: Any) -> None:
         if sig is None:
             continue
         try:
-            loop.add_signal_handler(sig, _request_shutdown, sig_name)
+            loop.add_signal_handler(sig, _async_handler, sig_name)
             installed_async.add(sig)
         except (NotImplementedError, RuntimeError, ValueError):
             pass
@@ -45,6 +69,12 @@ def install_signal_handlers(state: Any) -> None:
             signal.signal(sigint, _sync_sigint_handler)
         except (ValueError, OSError, AttributeError):
             pass
+
+
+def reset_shutdown_signal_state_for_tests() -> None:
+    global _shutdown_signal_count
+    with _shutdown_lock:
+        _shutdown_signal_count = 0
 
 
 def install_asyncio_exception_handler(state: Any) -> None:

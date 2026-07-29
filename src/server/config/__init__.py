@@ -23,6 +23,7 @@ from server.config.shutdown import (
     cancel_leftover_tasks,
     install_asyncio_exception_handler,
     install_signal_handlers,
+    reset_shutdown_signal_state_for_tests,
 )
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "cancel_leftover_tasks",
     "install_asyncio_exception_handler",
     "install_signal_handlers",
+    "reset_shutdown_signal_state_for_tests",
     "template_config_path",
     "user_config_path",
     "warn_if_config_version_mismatch",

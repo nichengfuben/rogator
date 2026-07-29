@@ -167,29 +167,33 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
         install_asyncio_exception_handler(state)
         while not state.shutdown_event.is_set():
             try:
-                await asyncio.wait_for(state.shutdown_event.wait(), timeout=1.0)
+                await asyncio.wait_for(state.shutdown_event.wait(), timeout=0.25)
             except asyncio.TimeoutError:
                 continue
     except KeyboardInterrupt:
         state.shutdown_event.set()
+    except SystemExit:
+        state.shutdown_event.set()
+        raise
     except Exception as e:
         logger.error("Fatal: %s", e, exc_info=True)
         raise
     finally:
+        state.shutdown_event.set()
         try:
             await asyncio.wait_for(state.shutdown(), timeout=SHUTDOWN_TOTAL_TIMEOUT)
         except (asyncio.TimeoutError, Exception):
-            pass
-        if site:
+            logger.warning("Shutdown timed out or failed, stopping HTTP site")
+        if site is not None:
             try:
-                await site.stop()
-            except OSError as exc:
+                await asyncio.wait_for(site.stop(), timeout=5.0)
+            except (asyncio.TimeoutError, OSError) as exc:
                 logger.debug("site.stop during shutdown: %s", exc)
             except Exception:
                 pass
         try:
-            await runner.cleanup()
-        except Exception:
+            await asyncio.wait_for(runner.cleanup(), timeout=5.0)
+        except (asyncio.TimeoutError, Exception):
             pass
         await _cancel_leftover_tasks()
         logger.info("Server stopped")
