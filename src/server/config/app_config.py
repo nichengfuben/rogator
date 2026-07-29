@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from server.config.files import (
+    PROJECT_ROOT,
     ensure_user_config_file,
     overlay_user_config,
     template_config_path,
@@ -17,8 +18,6 @@ if sys.version_info >= (3, 11):
     import tomllib as _toml_loader
 else:
     import tomli as _toml_loader
-
-from server.config.files import PROJECT_ROOT
 
 LOG_DIR = PROJECT_ROOT / "logs"
 
@@ -35,6 +34,7 @@ class AppConfig:
     port: int
     host: str
     prelogin: int
+    login_interval: float
     max_retry_on_error: int
     max_concurrent: int
     max_queue_size: int
@@ -43,11 +43,10 @@ class AppConfig:
     send_full_prompt: bool
     client_max_body_bytes: int
     create_chat_timeout: float
-    request_total_timeout: float
-    login_timeout: float
-    prelogin_timeout: float
+    models_refresh_interval: float
     shutdown_wait_active_requests: float
     shutdown_total_timeout: float
+    shutdown_hard_exit_timeout: float
     record_prompt: bool
     print_prompt: bool
     record_response: bool
@@ -56,6 +55,7 @@ class AppConfig:
     log_name: str
     log_color: bool
     access_log: bool
+    upstream_enabled: tuple[str, ...]
 
 
 def resolve_log_path(path: str, *, project_root: Path | None = None) -> Path:
@@ -103,6 +103,7 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         port=int(_require_get(raw, "server", "port")),
         host=str(_require_get(raw, "server", "host")),
         prelogin=int(_require_get(raw, "server", "prelogin")),
+        login_interval=float(_require_get(raw, "server", "login_interval")),
         max_retry_on_error=int(_require_get(raw, "retry", "max_retry_on_error")),
         max_concurrent=int(_require_get(raw, "limits", "max_concurrent")),
         max_queue_size=int(_require_get(raw, "limits", "max_queue_size")),
@@ -110,14 +111,13 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         model_context_length=int(_require_get(raw, "limits", "model_context_length")),
         send_full_prompt=bool(_require_get(raw, "limits", "send_full_prompt")),
         client_max_body_bytes=int(_require_get(raw, "limits", "client_max_body_bytes")),
-        request_total_timeout=float(_require_get(raw, "timeout", "request_total")),
         create_chat_timeout=float(_require_get(raw, "timeout", "create_chat")),
-        login_timeout=float(_require_get(raw, "timeout", "login")),
-        prelogin_timeout=float(_require_get(raw, "timeout", "prelogin")),
+        models_refresh_interval=float(_require_get(raw, "models", "refresh_interval")),
         shutdown_wait_active_requests=float(
             _require_get(raw, "shutdown", "wait_active_requests")
         ),
         shutdown_total_timeout=float(_require_get(raw, "shutdown", "total_timeout")),
+        shutdown_hard_exit_timeout=float(_require_get(raw, "shutdown", "hard_exit_timeout")),
         record_prompt=bool(_require_get(raw, "fncall", "record_prompt")),
         print_prompt=bool(_require_get(raw, "fncall", "print_prompt")),
         record_response=bool(_require_get(raw, "fncall", "record_response")),
@@ -126,7 +126,23 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         log_name=str(_resolve_log_field(raw, "log_name")),
         log_color=bool(_resolve_log_field(raw, "color")),
         access_log=bool(_resolve_log_field(raw, "access_log")),
+        upstream_enabled=_parse_upstream_enabled(
+            _require_get(raw, "upstream", "enabled")
+        ),
     )
+
+
+def _parse_upstream_enabled(raw: Any) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        raise ValueError("upstream.enabled 必须为字符串数组")
+    names = tuple(
+        str(item).strip().lower()
+        for item in raw
+        if str(item).strip()
+    )
+    if not names:
+        raise ValueError("upstream.enabled 不能为空")
+    return names
 
 
 def _read_config_file(path: Path) -> Dict[str, Any]:
@@ -138,17 +154,38 @@ def _read_config_file(path: Path) -> Dict[str, Any]:
         raise ValueError(f"无法解析配置文件 {path}: {exc}") from exc
 
 
+def _load_upstream_toml(name: str) -> Dict[str, Any]:
+    """template/configs/<name>.toml 为底，configs/<name>.toml 覆盖。"""
+    tpl = PROJECT_ROOT / "template" / "configs" / f"{name}.toml"
+    user = PROJECT_ROOT / "configs" / f"{name}.toml"
+    raw: Dict[str, Any] = {}
+    if tpl.is_file():
+        raw = _read_config_file(tpl)
+    if user.is_file():
+        raw = overlay_user_config(raw, _read_config_file(user)) if raw else _read_config_file(user)
+    return raw
+
+
 def load_config(
     path: Path | None = None,
     *,
     template_path: Path | None = None,
 ) -> AppConfig:
-    """加载配置：template 为底，用户 config 覆盖；缺失项取自 template，不用代码默认值。"""
+    """加载配置：template 为底，用户 config 覆盖；上游 configs 合并 Qwen 限流等。"""
     user_path = path if path is not None else ensure_user_config_file()
     tpl_path = template_path if template_path is not None else template_config_path()
     template_raw = _read_config_file(tpl_path)
     user_raw = _read_config_file(user_path)
-    return _build_app_config(overlay_user_config(template_raw, user_raw))
+    merged = overlay_user_config(template_raw, user_raw)
+    qwen_raw = _load_upstream_toml("qwen")
+    if qwen_raw:
+        limits = dict(merged.get("limits") or {})
+        q_limits = qwen_raw.get("limits") or {}
+        if isinstance(q_limits, dict):
+            for key, val in q_limits.items():
+                limits[key] = val
+        merged["limits"] = limits
+    return _build_app_config(merged)
 
 
 # 模块级单例，启动时加载

@@ -16,7 +16,7 @@ _shutdown_lock = threading.Lock()
 
 
 def _request_shutdown_once(state: Any, *, source: str) -> None:
-    """中断信号：幂等置位 shutdown_event（多次 Ctrl+C 与第一次等效）。"""
+    """中断信号：幂等置位 shutdown_event（重复 Ctrl+C 与第一次等效）。"""
     with _shutdown_lock:
         if state.shutdown_event.is_set():
             return

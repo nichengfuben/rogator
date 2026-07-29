@@ -19,6 +19,13 @@ class TestTokenEstimate(unittest.TestCase):
         self.assertEqual(estimate_tokens_from_char_count(9), 3)
         self.assertEqual(estimate_tokens_from_char_count(10), 3)
 
+    def test_stream_char_count_div_four(self) -> None:
+        from server.model.token_estimate import estimate_stream_tokens_from_char_count
+
+        self.assertEqual(estimate_stream_tokens_from_char_count(0), 0)
+        self.assertEqual(estimate_stream_tokens_from_char_count(8), 2)
+        self.assertEqual(estimate_stream_tokens_from_char_count(664430), 166107)
+
     def test_anthropic_count_tokens_includes_system_tools_and_blocks(self) -> None:
         body = {
             "model": "claude-opus-4-6",
@@ -73,8 +80,9 @@ class TestMessageUsageUsesUpstreamInput(unittest.TestCase):
         })
         self.assertEqual(tracker.anthropic_message_start_usage, {
             "input_tokens": 500,
-            "output_tokens": 7,
+            "output_tokens": 0,
         })
+        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 7})
 
 
 if __name__ == "__main__":

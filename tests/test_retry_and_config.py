@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from accounts import Account
+from upstream.qwen.account import Account
 from dataclasses import replace
 from server.config import CONFIG, AppConfig, load_config
 from server.config.app_config import _loads_toml
@@ -20,10 +20,11 @@ from server.config.files import (
     read_server_version,
     warn_if_config_version_mismatch,
 )
-from server.model.model_thinking import load_model_entml_map, resolve_qwen_thinking, uses_entml_thinking
+from server.model.model_registry import get_model_registry, load_model_registry, reload_model_registry
+from server.model.model_thinking import resolve_qwen_thinking, uses_entml_thinking
 from server.formats import UpstreamTimeoutError
 from server.retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
-from server.client.session_store import QwenSession, save_sessions, load_session_store
+from upstream.qwen.chat.store import QwenSession, save_sessions, load_session_store
 from server.formats import TokenExpiredError
 
 _PROJECT_TEMPLATE = PROJECT_ROOT / "template" / "config.toml"
@@ -72,6 +73,35 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cfg.model_context_length, 256_000)
             self.assertFalse(cfg.send_full_prompt)
             self.assertEqual(cfg.prelogin, 32)
+            self.assertEqual(cfg.login_interval, 15.0)
+
+    def test_load_config_login_interval_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(
+                tmp, "[server]\nlogin_interval = 5.0\n",
+            )
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.login_interval, 5.0)
+
+    def test_load_config_models_refresh_from_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(tmp, "[server]\nport = 8932\n")
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.models_refresh_interval, 3600.0)
+
+    def test_load_config_upstream_enabled_from_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(tmp, "[server]\nport = 8932\n")
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.upstream_enabled, ("qwen",))
+
+    def test_load_config_upstream_enabled_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(
+                tmp, '[upstream]\nenabled = ["qwen", "deepseek"]\n',
+            )
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.upstream_enabled, ("qwen", "deepseek"))
 
     def test_load_config_send_full_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +117,7 @@ class TestConfig(unittest.TestCase):
             cfg = load_config(user_path, template_path=tpl_path)
             self.assertEqual(cfg.shutdown_wait_active_requests, 3.0)
             self.assertEqual(cfg.shutdown_total_timeout, 8.0)
+            self.assertEqual(cfg.shutdown_hard_exit_timeout, 25.0)
 
     def test_load_config_shutdown_user_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,6 +127,7 @@ class TestConfig(unittest.TestCase):
             cfg = load_config(user_path, template_path=tpl_path)
             self.assertEqual(cfg.shutdown_wait_active_requests, 5.0)
             self.assertEqual(cfg.shutdown_total_timeout, 8.0)
+            self.assertEqual(cfg.shutdown_hard_exit_timeout, 25.0)
 
     def test_overlay_user_config_keeps_template_sections(self) -> None:
         template = {"server": {"port": 8932, "prelogin": 32}, "limits": {"max_concurrent": 32}}
@@ -189,13 +221,17 @@ class TestConfig(unittest.TestCase):
 
 
 class TestModelThinking(unittest.TestCase):
-    def test_entml_map(self) -> None:
+    def test_registry_entml_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp) / "map.jsonl"
-            p.write_text("qwen3.7-max:true\nqwen3.8-max-preview:false\n", encoding="utf-8")
-            m = load_model_entml_map(p)
-            self.assertTrue(m["qwen3.7-max"])
-            self.assertFalse(m["qwen3.8-max-preview"])
+            p = Path(tmp) / "registry.jsonl"
+            p.write_text(
+                "qwen3-7-max:qwen3.7-max:true\n"
+                "qwen3-8-max-preview:qwen3.8-max-preview:false\n",
+                encoding="utf-8",
+            )
+            reg = load_model_registry(p)
+            self.assertTrue(reg.by_internal["qwen3.7-max"].uses_entml)
+            self.assertFalse(reg.by_internal["qwen3.8-max-preview"].uses_entml)
 
     def test_resolve_entml_model(self) -> None:
         enabled, mode, use_entml = resolve_qwen_thinking("qwen3.7-max", "on")
@@ -285,19 +321,29 @@ class TestThinkingLevels(unittest.TestCase):
             build_openai_model_entry,
             model_supports_thinking,
         )
+        from server.model.model_registry import get_model_registry
 
-        self.assertTrue(model_supports_thinking("qwen3.7-max"))
-        self.assertTrue(model_supports_thinking("qwen3.8-max-preview"))
-        entry = build_openai_model_entry("qwen3.7-max")
+        registry = get_model_registry()
+        entry37 = registry.by_external["qwen3-7-max"]
+        entry38 = registry.by_external["qwen3-8-max-preview"]
+        self.assertTrue(model_supports_thinking(entry37))
+        self.assertTrue(model_supports_thinking(entry38))
+        entry = build_openai_model_entry(
+            "qwen3-7-max",
+            registry_entry=entry37,
+        )
         self.assertEqual(entry.get("context_length"), MODEL_CONTEXT_LENGTH)
         te = entry.get("think_efforts") or {}
         self.assertTrue(te.get("support"))
         self.assertNotIn("none", te.get("valid_efforts", []))
         self.assertEqual(te.get("off_effort"), "none")
         self.assertEqual(te.get("default_effort"), "medium")
-        entry38 = build_openai_model_entry("qwen3.8-max-preview")
-        self.assertTrue(entry38.get("always_thinking"))
-        self.assertNotIn("think_efforts", entry38)
+        entry38_out = build_openai_model_entry(
+            "qwen3-8-max-preview",
+            registry_entry=entry38,
+        )
+        self.assertTrue(entry38_out.get("always_thinking"))
+        self.assertNotIn("think_efforts", entry38_out)
 
     def test_inject_renders_thinking_behavior(self) -> None:
         from echotools.fncall import get_protocol, inject_fncall
@@ -405,61 +451,30 @@ class TestSessionStoreMeta(unittest.TestCase):
         from tests.test_session_cleanup import _make_jwt
 
         with tempfile.TemporaryDirectory() as tmp:
-            sessions_file = Path(tmp) / "sessions.json"
-            with patch("server.client.session_store.SESSIONS_FILE", str(sessions_file)):
+            sessions_file = Path(tmp) / "qwen" / "sessions.json"
+            with patch("core.session.store.sessions_file", return_value=sessions_file):
                 acc = Account(username="a@test.com", password="pw")
                 s = QwenSession(
                     account=acc, token=_make_jwt(time.time() + 3600),
                     user_id="u", login_time=time.time(),
                 )
                 save_sessions(
-                    [s], current_index=0, account_index=1,
+                    [s], current_index=0,
                     blocked_accounts={"a@test.com": time.time() + 3600},
                 )
                 loaded, meta = load_session_store()
                 self.assertEqual(len(loaded), 1)
                 self.assertEqual(meta.current_index, 0)
-                self.assertEqual(meta.account_index, 1)
                 self.assertIn("a@test.com", meta.blocked_accounts)
 
-    def test_migrate_legacy_sessions_file(self) -> None:
-        from tests.test_session_cleanup import _make_jwt
-
-        with tempfile.TemporaryDirectory() as tmp:
-            legacy = Path(tmp) / "qwen" / "sessions.json"
-            target = Path(tmp) / "sessions.json"
-            legacy.parent.mkdir(parents=True)
-            acc = Account(username="legacy@test.com", password="pw")
-            s = QwenSession(
-                account=acc, token=_make_jwt(time.time() + 3600),
-                user_id="u1", login_time=time.time(),
-            )
-            legacy.write_text(
-                json.dumps({
-                    "sessions": [s.to_dict()],
-                    "current_index": 2,
-                    "account_index": 3,
-                    "blocked_accounts": {},
-                }),
-                encoding="utf-8",
-            )
-            with patch("server.client.session_store.SESSIONS_FILE", str(target)), \
-                 patch("server.client.session_store.LEGACY_SESSIONS_FILE", str(legacy)):
-                loaded, meta = load_session_store()
-                self.assertTrue(target.exists())
-                self.assertFalse(legacy.exists())
-                self.assertEqual(len(loaded), 1)
-                self.assertEqual(meta.current_index, 2)
-                self.assertEqual(meta.account_index, 3)
-
     def test_atomic_write_falls_back_when_replace_fails(self) -> None:
-        from server.client.session_store import _atomic_write_text
+        from core.session.io import atomic_write_text
 
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "sessions.json"
             payload = '{"count": 1}'
-            with patch("server.client.session_store.os.replace", side_effect=OSError(5, "拒绝访问")):
-                _atomic_write_text(target, payload)
+            with patch("core.session.io.os.replace", side_effect=OSError(5, "拒绝访问")):
+                atomic_write_text(target, payload)
             self.assertEqual(target.read_text(encoding="utf-8"), payload)
 
 

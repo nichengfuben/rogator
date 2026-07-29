@@ -8,6 +8,7 @@ from aiohttp import web
 
 from echotools.logger import get_logger
 from server.formats import TokenExpiredError, UpstreamTimeoutError, _error_response
+from server.model.model_registry import ModelResolveError
 from state import QueueFullError
 
 logger = get_logger("rogator")
@@ -15,6 +16,8 @@ logger = get_logger("rogator")
 
 def handler_error_response(exc: BaseException, *, label: str) -> web.Response:
     """将 handler 常见异常映射为 aiohttp 响应（非流式）。"""
+    if isinstance(exc, ModelResolveError):
+        return _error_response(exc.status, exc.message, exc.error_type)
     if isinstance(exc, QueueFullError):
         return web.Response(status=503, text=str(exc))
     if isinstance(exc, asyncio.CancelledError):

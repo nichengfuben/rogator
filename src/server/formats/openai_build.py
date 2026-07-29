@@ -80,16 +80,6 @@ def build_openai_stream_usage_chunk(
     }
 
 
-def openai_stream_include_usage(body: Optional[Dict[str, Any]]) -> bool:
-    """请求是否启用了 stream_options.include_usage。"""
-    if not body:
-        return False
-    opts = body.get("stream_options")
-    if not isinstance(opts, dict):
-        return False
-    return bool(opts.get("include_usage"))
-
-
 def _assistant_message_body(
     content: str,
     reasoning: str,
@@ -184,12 +174,17 @@ def convert_to_anthropic(response: Dict[str, Any]) -> Dict[str, Any]:
     if not anth_content:
         anth_content.append({"type": "text", "text": ""})
     usage = response.get("usage", {})
+    anth_usage: Dict[str, Any] = {
+        "input_tokens": usage.get("prompt_tokens", 0),
+        "output_tokens": usage.get("completion_tokens", 0),
+    }
+    details = usage.get("prompt_tokens_details") or {}
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if cached:
+        anth_usage["cache_read_input_tokens"] = int(cached)
     return {
         "id": response.get("id", gen_msg_id()), "type": "message", "role": "assistant",
         "content": anth_content, "model": response.get("model", ""),
         "stop_reason": "tool_use" if tool_calls else "end_turn", "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
-        },
+        "usage": anth_usage,
     }

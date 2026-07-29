@@ -7,9 +7,9 @@ import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from accounts import Account
-from server.client.qwen_client import QwenClient
-from server.client.session_store import QwenSession, SessionStoreMeta
+from upstream.qwen.accounts import Account
+from upstream.qwen.client import QwenClient
+from upstream.qwen.chat.store import QwenSession, SessionStoreMeta
 from state import AppState, QueueFullError, RequestScheduler, tracked_request
 from tests.test_session_cleanup import _make_jwt
 
@@ -89,7 +89,7 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
         client._current_index = 0
         client._save_meta = MagicMock(return_value=[])
 
-        with patch("server.client.account.random.choice", return_value=client._sessions[1]):
+        with patch("upstream.qwen.account.random.choice", return_value=client._sessions[1]):
             new = await client.switch_to_next(exclude_username="a@test.com")
         self.assertIsNotNone(new)
         self.assertEqual(new.username, "b@test.com")
@@ -119,10 +119,10 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
         client.login_account = AsyncMock(side_effect=_slow_login)
 
         async def _switch() -> None:
-            with patch("server.client.account.ACCOUNTS", accounts):
+            with patch("upstream.qwen.account.ACCOUNTS", accounts):
                 await client.switch_to_next()
 
-        with patch("server.client.account.ACCOUNTS", accounts):
+        with patch("upstream.qwen.account.ACCOUNTS", accounts):
             task_a = asyncio.create_task(_switch())
             task_b = asyncio.create_task(_switch())
             await asyncio.sleep(0.05)
@@ -133,7 +133,7 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_valid_session_skips_blocking_prelogin(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("server.client.qwen_client.load_session_store", return_value=([], empty_meta)):
+        with patch("upstream.qwen.client.load_session_store", return_value=([], empty_meta)):
             client = QwenClient(MagicMock())
         client._sessions = [_session("ok")]
         client._prelogin_target = 5

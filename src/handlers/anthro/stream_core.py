@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from contextlib import aclosing
 from typing import Any, Dict, List, Optional, Tuple
 
 from server.formats import (
@@ -10,14 +8,13 @@ from server.formats import (
     UpstreamUsageTracker,
     UpstreamTimeoutError,
     _fix_tool_call_id,
-    should_emit_anthropic_message_start,
+    log_qwen_upstream_usage,
 )
 from server.records.response_record import record_raw_response
-from server.retry import stream_with_session_retry
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
-from handlers.openai import _chat_once
+from handlers.anthro.stream_content import _process_anthropic_content_events, _stream_event_loop
 from handlers.anthro.events import (
     AnthropicStreamState,
     _close_block,
@@ -27,7 +24,6 @@ from handlers.anthro.events import (
     expected_arguments_for_stream_tool,
     stream_result_tuple,
 )
-from handlers.anthro.stream_content import _process_anthropic_content_events
 from handlers.anthro.stream_tools import (
     _emit_ready_tool_calls,
     _flush_open_stream_tool,
@@ -37,15 +33,7 @@ from handlers.anthro.stream_tools import (
 logger = get_logger("rogator")
 
 
-async def _make_anthropic_chat_stream(state, messages, model, tools, req_id, protocol_options):
-    async for event in _chat_once(
-        state, messages, model, tools, req_id, protocol_options=protocol_options,
-        prompt_api="anthropic",
-    ):
-        yield event
-
-
-async def _maybe_emit_message_start(
+async def _ensure_anthropic_message_start(
     resp,
     model: str,
     msg_id: str,
@@ -61,6 +49,19 @@ async def _maybe_emit_message_start(
         disconnected,
     )
     state.message_started = True
+
+
+async def _maybe_emit_message_start(
+    resp,
+    model: str,
+    msg_id: str,
+    usage_tracker: UpstreamUsageTracker,
+    state: AnthropicStreamState,
+    disconnected: list,
+) -> None:
+    await _ensure_anthropic_message_start(
+        resp, model, msg_id, usage_tracker, state, disconnected,
+    )
 
 
 async def _handle_stream_token_expired(
@@ -254,56 +255,6 @@ def _reconcile_tool_calls(state: AnthropicStreamState) -> None:
         )
 
 
-async def _stream_event_loop(
-    resp,
-    state_obj,
-    messages,
-    model,
-    tools,
-    req_id,
-    disconnected,
-    protocol_options,
-    msg_id,
-    stream_state: AnthropicStreamState,
-    parser,
-    usage_tracker,
-    raw_recorder,
-) -> None:
-    async with aclosing(
-        stream_with_session_retry(req_id, state_obj, lambda: _make_anthropic_chat_stream(
-            state_obj, messages, model, tools, req_id, protocol_options,
-        )),
-    ) as event_stream:
-        async for event in event_stream:
-            if disconnected[0]:
-                break
-            usage_tracker.ingest_event(event)
-            raw_recorder.ingest_event(event)
-
-            if not stream_state.message_started:
-                if should_emit_anthropic_message_start(event, False):
-                    await _emit_anthropic_event(
-                        resp,
-                        _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
-                        disconnected,
-                    )
-                    stream_state.message_started = True
-                    to_process = stream_state.deferred_content + [event]
-                    stream_state.deferred_content = []
-                elif event.get("type") in ("thinking", "answer"):
-                    stream_state.deferred_content.append(event)
-                    continue
-                else:
-                    continue
-            else:
-                to_process = [event]
-
-            if not await _process_anthropic_content_events(
-                resp, to_process, parser, stream_state, disconnected,
-            ):
-                break
-
-
 async def _complete_anthropic_stream(
     resp, parser, stream_state, usage_tracker, model, msg_id, req_id, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
@@ -361,6 +312,8 @@ async def _stream_anthropic(
             return await _handle_stream_generic_error(
                 resp, stream_state, usage_tracker, e, disconnected,
             )
+        finally:
+            log_qwen_upstream_usage(req_id, usage_tracker)
 
         return await _complete_anthropic_stream(
             resp, parser, stream_state, usage_tracker, model, msg_id, req_id, disconnected,

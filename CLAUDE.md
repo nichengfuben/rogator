@@ -41,8 +41,8 @@ python main.py
 
 - `handlers/` — API endpoint handlers (OpenAI chat completions, Anthropic messages)
 - `core/` — Main QwenClient (mixin-based: AuthMixin, UploadMixin, MediaMixin, VideoGenMixin, LogsMixin), with submodules: crypto/, transport/, compat/, storage/, media/
-- `server/` — Simplified QwenClient (used by state.py), format builders, OSS upload
-- `state.py` — AppState, RequestScheduler, LongTextSplitter with resilient executor
+- `server/` — Simplified QwenClient (used by `src/state.py`), format builders, OSS upload
+- `src/state.py` — AppState, RequestScheduler, LongTextSplitter with resilient executor
 - `src/accounts.py` — Account pool loaded from `accounts.csv`, auto token refresh rotation
 - `main.py` — Entry point, aiohttp server lifecycle
 - `mvp/` — Standalone smoke-test scripts (chat.py, test_upload_analysis.py)
@@ -74,7 +74,7 @@ python main.py
 - **Long text overflow** — texts >10240 chars are split; overflow uploaded to Alibaba Cloud OSS via STS tokens. DNS fallback: `47.113.75.199`.
 - **Tool calling** — uses custom `entml` XML protocol. `inject_fncall` imported from `echotools.fncall`; `TOOL_INSTRUCTION` template in `handlers/__init__.py`.
 - **Smart proxy selection** — `ProxySelector` with persistence (`PROXY_SELECTOR_PERSIST_PATH`), uses latency heuristics for endpoint routing.
-- **Two QwenClient implementations** — `core/client.py` (main, mixin-based) vs `server/qwen_client.py` (simplified, used by state.py).
+- **Two QwenClient implementations** — `core/client.py` (main, mixin-based) vs `server/qwen_client.py` (simplified, used by `src/state.py`).
 - **Compat fallback pattern** — `core/client.py` uses `try: from src.core.X` / `except ModuleNotFoundError: from .compat.runtime` for Candidate, ModelsCache, ProxySelector.
 - **TTS & Video** — `TtsService` and `VideoService` in `core/media/` for media generation.
 - **Default model** — `qwen3.7-max` (defined in `server/formats.py`).
