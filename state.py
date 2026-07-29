@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from echotools.fncall import ToolProtocol, get_protocol
 from echotools.logger import get_logger
@@ -88,21 +89,60 @@ class RequestScheduler:
             await asyncio.sleep(0.1)
         return self._pending == 0
 
-    async def submit(self, coro_factory) -> Any:
+    async def _reserve_pending(self) -> None:
         async with self._lock:
             if self._shutting_down:
                 raise QueueFullError("Shutting down")
             if self._pending >= MAX_QUEUE_SIZE:
                 raise QueueFullError("Queue full")
             self._pending += 1
+
+    async def _release_pending(self) -> None:
+        async with self._lock:
+            self._pending = max(0, self._pending - 1)
+
+    async def acquire_slot(self) -> None:
+        """占用并发槽（流式请求在 prepare 前调用，结束时 release_slot）。"""
+        await self._reserve_pending()
+        try:
+            if self._semaphore is not None:
+                await self._semaphore.acquire()
+        except BaseException:
+            await self._release_pending()
+            raise
+
+    async def release_slot(self) -> None:
+        if self._semaphore is not None:
+            self._semaphore.release()
+        await self._release_pending()
+
+    async def submit(self, coro_factory) -> Any:
+        await self._reserve_pending()
         try:
             if self._semaphore is not None:
                 async with self._semaphore:
                     return await coro_factory()
             return await coro_factory()
         finally:
-            async with self._lock:
-                self._pending = max(0, self._pending - 1)
+            await self._release_pending()
+
+
+@asynccontextmanager
+async def tracked_request(state: "AppState", req_id: str) -> AsyncIterator[None]:
+    """注册活跃任务并占用调度槽，供流式 handler 使用。"""
+    task = asyncio.current_task()
+    if task is None:
+        raise RuntimeError("tracked_request requires a running task")
+    await state.tracker.register(req_id, task)
+    slot_acquired = False
+    try:
+        await state.scheduler.acquire_slot()
+        slot_acquired = True
+        yield
+    finally:
+        if slot_acquired:
+            await state.scheduler.release_slot()
+        await state.tracker.unregister(req_id)
 
 
 class ActiveRequestTracker:
@@ -268,7 +308,13 @@ class AppState:
             if not task.done():
                 task.cancel()
         if self._bg_tasks:
-            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._bg_tasks, return_exceptions=True),
+                    timeout=2.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Shutdown: background tasks did not exit within 2.0s")
         self.scheduler.mark_shutting_down()
         cancelled = await self.tracker.cancel_all()
         if cancelled:

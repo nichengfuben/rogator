@@ -231,6 +231,7 @@ async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_ur
             f"{auth_base_url}/api/v2/user",
             headers={"Authorization": f"Bearer {token}", "User-Agent": DEFAULT_USER_AGENT},
             ssl=False,
+            timeout=aiohttp.ClientTimeout(total=15),
         ) as ur:
             if ur.status == 200:
                 return str((await ur.json()).get("data", {}).get("id", ""))

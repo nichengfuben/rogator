@@ -71,7 +71,8 @@ class SessionLoginMixin:
                         return None
                     user_id = await fetch_user_id(session, token, AUTH_BASE_URL)
                     qs = QwenSession(account=account, token=token, user_id=user_id or account.username[:12])
-                    replace_or_append(self._sessions, qs)
+                    async with self._lock:
+                        replace_or_append(self._sessions, qs)
                     self._persist_sessions()
                     logger.info("Logged in: %s (total: %d)", account.username[:6], len(self._sessions))
                     return qs
@@ -133,64 +134,84 @@ class SessionLoginMixin:
             return account
         return None
 
+    def _valid_sessions(
+        self,
+        *,
+        exclude_username: Optional[str] = None,
+    ) -> List[QwenSession]:
+        return [
+            s for s in self._sessions
+            if s.is_valid and not s.is_expired()
+            and not self._is_account_blocked(s.username)
+            and (exclude_username is None or s.username != exclude_username)
+        ]
+
+    def _select_valid_session(
+        self,
+        *,
+        exclude_username: Optional[str] = None,
+    ) -> Optional[QwenSession]:
+        valid = self._valid_sessions(exclude_username=exclude_username)
+        if not valid:
+            return None
+        selected = random.choice(valid)
+        idx = self._index_of_username(selected.username)
+        if idx is not None:
+            self._current_index = idx
+        return selected
+
     async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[QwenSession]:
         async with self._lock:
             self.prune_expired_sessions()
-            await self._ensure_cleanup()
 
-            valid_indices = [
-                i for i, s in enumerate(self._sessions)
-                if s.is_valid and not s.is_expired()
-                and (exclude_username is None or s.username != exclude_username)
-            ]
-            if valid_indices:
-                idx = random.choice(valid_indices)
-                self._current_index = idx
+        await self._ensure_cleanup()
+
+        async with self._lock:
+            session = self._select_valid_session(exclude_username=exclude_username)
+            if session is not None:
                 self._save_meta()
-                return self._sessions[idx]
-
+                return session
             skip = {exclude_username} if exclude_username else set()
-            for _ in range(len(ACCOUNTS)):
-                account = self._pick_account_for_login(skip=skip)
-                if account is None:
-                    break
-                qs = await self.login_account(account)
-                if qs and qs.username != exclude_username:
-                    idx = self._index_of_username(qs.username)
-                    self._current_index = idx if idx is not None else 0
-                    return qs
-                skip.add(account.username)
+            account = self._pick_account_for_login(skip=skip)
 
-            await self.ensure_prelogin()
-            valid_indices = [
-                i for i, s in enumerate(self._sessions)
-                if s.is_valid and not s.is_expired()
-                and (exclude_username is None or s.username != exclude_username)
-            ]
-            if valid_indices:
-                idx = random.choice(valid_indices)
-                self._current_index = idx
-                self._save_meta()
-                return self._sessions[idx]
+        if account is None:
+            async with self._lock:
+                session = self._select_valid_session(exclude_username=exclude_username)
+                if session is not None:
+                    self._save_meta()
+                    return session
             return None
 
-    async def get_valid_session(self) -> Optional[QwenSession]:
+        skip = {exclude_username} if exclude_username else set()
+        skip.add(account.username)
+        for _ in range(len(ACCOUNTS)):
+            qs = await self.login_account(account)
+            if qs and qs.username != exclude_username:
+                async with self._lock:
+                    idx = self._index_of_username(qs.username)
+                    self._current_index = idx if idx is not None else 0
+                return qs
+            async with self._lock:
+                account = self._pick_account_for_login(skip=skip)
+            if account is None:
+                break
+            skip.add(account.username)
+
+        async with self._lock:
+            session = self._select_valid_session(exclude_username=exclude_username)
+            if session is not None:
+                self._save_meta()
+                return session
+        return None
+
+    async def get_valid_session(self, *, exclude_username: Optional[str] = None) -> Optional[QwenSession]:
         self.prune_expired_sessions()
         await self._ensure_cleanup()
-        if valid_session_count(self._sessions) < self._prelogin_target:
-            await self.ensure_prelogin()
-        session = self.current_session
-        if session:
-            return session
-        valid = [s for s in self._sessions if s.is_valid and not s.is_expired()]
-        if valid:
-            selected = random.choice(valid)
-            idx = self._index_of_username(selected.username)
-            if idx is not None:
-                self._current_index = idx
-                self._save_meta()
-            return selected
-        return await self.switch_to_next()
+        async with self._lock:
+            session = self._select_valid_session(exclude_username=exclude_username)
+            if session is not None:
+                return session
+        return await self.switch_to_next(exclude_username=exclude_username)
 
     def prune_expired_sessions(self) -> List[str]: ...
 

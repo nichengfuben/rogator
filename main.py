@@ -170,7 +170,10 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
             await asyncio.wait_for(runner.cleanup(), timeout=5.0)
         except (asyncio.TimeoutError, Exception):
             pass
-        await _cancel_leftover_tasks()
+        try:
+            await asyncio.wait_for(_cancel_leftover_tasks(), timeout=6.0)
+        except asyncio.TimeoutError:
+            logger.warning("Shutdown: cancel_leftover_tasks exceeded 6.0s")
         logger.info("Server stopped")
 
 
