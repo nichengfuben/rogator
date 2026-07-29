@@ -9,9 +9,14 @@ from typing import Any, Dict
 
 from server.config.files import (
     PROJECT_ROOT,
+    LEGACY_UPSTREAM_DEFAULTS_NAME,
+    UPSTREAM_CONFIG_TEMPLATE_NAME,
+    USER_CONFIGS_DIR,
     ensure_user_config_file,
     overlay_user_config,
     template_config_path,
+    upstream_config_template_path,
+    upstream_template_dir,
 )
 
 if sys.version_info >= (3, 11):
@@ -154,15 +159,26 @@ def _read_config_file(path: Path) -> Dict[str, Any]:
         raise ValueError(f"无法解析配置文件 {path}: {exc}") from exc
 
 
+def _overlay_if_exists(
+    base: Dict[str, Any],
+    path: Path,
+) -> Dict[str, Any]:
+    if not path.is_file():
+        return base
+    overlay = _read_config_file(path)
+    return overlay_user_config(base, overlay) if base else overlay
+
+
 def _load_upstream_toml(name: str) -> Dict[str, Any]:
-    """template/configs/<name>.toml 为底，configs/<name>.toml 覆盖。"""
-    tpl = PROJECT_ROOT / "template" / "configs" / f"{name}.toml"
-    user = PROJECT_ROOT / "configs" / f"{name}.toml"
+    """``template/upstream_config.toml`` → ``configs/upstream_config.toml`` → ``template/upstream/<name>.toml`` → ``configs/<name>.toml``。"""
     raw: Dict[str, Any] = {}
-    if tpl.is_file():
-        raw = _read_config_file(tpl)
-    if user.is_file():
-        raw = overlay_user_config(raw, _read_config_file(user)) if raw else _read_config_file(user)
+    raw = _overlay_if_exists(raw, upstream_config_template_path())
+    raw = _overlay_if_exists(raw, USER_CONFIGS_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME)
+    legacy_defaults = USER_CONFIGS_DIR / LEGACY_UPSTREAM_DEFAULTS_NAME
+    if legacy_defaults.is_file():
+        raw = _overlay_if_exists(raw, legacy_defaults)
+    raw = _overlay_if_exists(raw, upstream_template_dir() / f"{name}.toml")
+    raw = _overlay_if_exists(raw, USER_CONFIGS_DIR / f"{name}.toml")
     return raw
 
 
