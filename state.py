@@ -230,7 +230,7 @@ class AppState:
         self._bg_tasks.append(asyncio.create_task(self._models_refresh_loop()))
 
     async def shutdown(self) -> None:
-        if self._shutdown_requested:
+        if getattr(self, "_shutdown_complete", False):
             return
         self._shutdown_requested = True
         self.shutdown_event.set()
@@ -245,3 +245,4 @@ class AppState:
             await asyncio.sleep(SHUTDOWN_CANCEL_GRACE)
         await self.scheduler.wait_idle(timeout=SHUTDOWN_WAIT_IDLE_TIMEOUT)
         self.client._persist_sessions()
+        self._shutdown_complete = True
