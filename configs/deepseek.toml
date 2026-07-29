@@ -1,0 +1,13 @@
+# DeepSeek 上游配置
+
+[capabilities]
+chat = true
+vision = true
+search = false
+count_tokens = true
+image_gen = false
+tts = false
+
+[session]
+# 非 JWT token 按 login_time + TTL 判定过期（提前 30s 清理，与 Qwen JWT 策略一致）
+token_ttl_seconds = 3600

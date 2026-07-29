@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from upstream.qwen.accounts import Account
+from upstream.qwen.account import Account
 from server.records.login_history import LoginHistoryStore, format_utc8
 
 
@@ -23,9 +23,9 @@ def _accounts(n: int, *, prefix: str = "u") -> list[Account]:
 class TestLoginHistoryStore(unittest.TestCase):
     def test_record_flush_persists_utc8_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "login_history.json"
-            with patch("server.records.login_history.LOGIN_HISTORY_FILE", str(path)):
-                store = LoginHistoryStore()
+            path = Path(tmp) / "qwen" / "login_history.json"
+            with patch("server.records.login_history.login_history_path", return_value=path):
+                store = LoginHistoryStore("qwen")
                 ts = 1722239280.0
                 store.record("a@test.com", at=ts)
                 store.flush()
@@ -38,18 +38,21 @@ class TestLoginHistoryStore(unittest.TestCase):
 
     def test_flush_skips_when_clean(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "login_history.json"
-            with patch("server.records.login_history.LOGIN_HISTORY_FILE", str(path)):
-                store = LoginHistoryStore()
+            path = Path(tmp) / "deepseek" / "login_history.json"
+            with patch("server.records.login_history.login_history_path", return_value=path):
+                store = LoginHistoryStore("deepseek")
                 store.flush()
                 self.assertFalse(path.exists())
 
 
 class TestPickAccount(unittest.TestCase):
     def setUp(self) -> None:
-        self._patch = patch("server.records.login_history.LOGIN_HISTORY_FILE", "/nonexistent")
+        self._patch = patch(
+            "server.records.login_history.login_history_path",
+            return_value=Path("/nonexistent/qwen/login_history.json"),
+        )
         self._patch.start()
-        self.store = LoginHistoryStore()
+        self.store = LoginHistoryStore("qwen")
 
     def tearDown(self) -> None:
         self._patch.stop()
@@ -91,6 +94,27 @@ class TestPickAccount(unittest.TestCase):
         )
         self.assertIsNotNone(picked)
         self.assertEqual(picked.username, accounts[0].username)
+
+
+class TestLoginHistoryPerUpstream(unittest.TestCase):
+    def test_qwen_and_deepseek_histories_are_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            qwen_path = Path(tmp) / "qwen" / "login_history.json"
+            ds_path = Path(tmp) / "deepseek" / "login_history.json"
+
+            def _path(upstream: str) -> Path:
+                return qwen_path if upstream == "qwen" else ds_path
+
+            with patch("server.records.login_history.login_history_path", side_effect=_path):
+                qwen_store = LoginHistoryStore("qwen")
+                ds_store = LoginHistoryStore("deepseek")
+                qwen_store.record("a@test.com", at=100.0)
+                qwen_store.flush()
+                self.assertIsNone(ds_store.last_login_unix("a@test.com"))
+                ds_store.record("b@test.com", at=200.0)
+                ds_store.flush()
+                self.assertEqual(qwen_store.last_login_unix("a@test.com"), 100.0)
+                self.assertIsNone(qwen_store.last_login_unix("b@test.com"))
 
 
 if __name__ == "__main__":

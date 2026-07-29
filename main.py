@@ -119,13 +119,16 @@ def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: i
     logger.info("  Listen      : %s:%d", host, port)
     logger.info("  Model       : %s", state.model)
     logger.info("  Protocol    : %s", state.protocol.id)
-    logger.info("  Sessions    : %d (max 12h)", state.client.session_count)
+    qwen = state._clients.get("qwen")
+    session_count = qwen.session_count if qwen is not None else 0
+    logger.info("  Upstreams   : %s", ", ".join(state._registry.names()))
+    logger.info("  Sessions    : %d (max 12h, qwen)", session_count)
     logger.info("  Models      : %d", len(state._models))
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
     logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)
     logger.info("  Access log  : %s", CONFIG.access_log)
     logger.info("  Models refresh: every %ds", int(CONFIG.models_refresh_interval))
-    logger.info("  Cleanup     : background prelogin + %ds session maintenance", int(CLEANUP_INTERVAL))
+    logger.info("  Cleanup     : background session pool + %ds maintenance", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
 
@@ -209,8 +212,10 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
         await runner.setup()
         site = web.TCPSite(runner, host, port)
         await site.start()
+        logger.info("Listening on http://%s:%d (session login in background)", host, port)
         _install_signal_handlers(state)
         install_asyncio_exception_handler(state)
+        state.start_background_tasks()
         while not state.shutdown_event.is_set():
             try:
                 await asyncio.wait_for(state.shutdown_event.wait(), timeout=0.25)
@@ -233,6 +238,12 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
 # 异步入口
 # ============================================================
 
+def _apply_session_pool_targets(state: AppState, target: int) -> None:
+    for client in state._clients.values():
+        if hasattr(client, "_prelogin_target"):
+            client._prelogin_target = target
+
+
 async def main_async() -> None:
     """服务器异步主入口（配置来自 config.toml + template/config.toml）。"""
     cfg = load_config()
@@ -248,14 +259,18 @@ async def main_async() -> None:
     app = web.Application(client_max_size=cfg.client_max_body_bytes)
     setup_routes(app)
     state = get_state()
-    state.client._prelogin_target = prelogin_count
+    _apply_session_pool_targets(state, prelogin_count)
+    for name, client in state._clients.items():
+        cleanup = getattr(client, "cleanup_expired_sessions", None)
+        if callable(cleanup):
+            removed = cleanup()
+            if removed:
+                logger.info(
+                    "Startup cleanup [%s]: removed %d expired/invalid session(s)",
+                    name,
+                    len(removed),
+                )
 
-    # 启动时立即清理过期/失效 session 并落盘
-    removed = state.client.cleanup_expired_sessions()
-    if removed:
-        logger.info("Startup cleanup: removed %d expired/invalid session(s)", len(removed))
-
-    state.start_background_tasks()
     _print_startup_info(state, host, port, prelogin_count)
     await _run_server(app, state, host, port)
 

@@ -3,15 +3,15 @@ from __future__ import annotations
 """Select an upstream by capabilities + model ownership, then random among matches."""
 
 import random
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional, Sequence, Set
 
-from core.errors import CapabilityError, ModelNotAvailableError
-from core.registry import UpstreamModule, UpstreamRegistry, get_registry
+from core.types import CapabilityError, ModelNotAvailableError
+from core.registry import UpstreamModule, UpstreamRegistry, get_registry, _PLATFORM_CAPS
 
 
 def _caps_ok(mod: UpstreamModule, required: Iterable[str]) -> bool:
     for key in required:
-        if key == "thinking":
+        if key in _PLATFORM_CAPS:
             continue
         if not mod.capabilities.get(key, False):
             return False
@@ -84,3 +84,64 @@ def create_client_for_request(
         registry=registry,
     )
     return mod.create_client(splitter)
+
+
+def _required_capabilities(
+    tools: Optional[List[Dict[str, Any]]],
+    messages: Sequence[Dict[str, Any]],
+) -> tuple[str, ...]:
+    caps: List[str] = ["chat"]
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in ("image_url", "image"):
+                    caps.append("vision")
+                    break
+    return tuple(dict.fromkeys(caps))
+
+
+def resolve_upstream(
+    state: Any,
+    model: str,
+    messages: Sequence[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+) -> tuple[UpstreamModule, Any]:
+    caps = _required_capabilities(tools, messages)
+    mod = select_upstream(
+        model_id=model,
+        required_capabilities=caps,
+        models_by_upstream=state._models_by_upstream(),
+        registry=state._registry,
+    )
+    client = state.client_for(model, caps, upstream_name=mod.name)
+    return mod, client
+
+
+async def stream_openai_chat(
+    state: Any,
+    messages: List[Dict[str, Any]],
+    model: str,
+    tools: Optional[List[Dict[str, Any]]],
+    req_id: str,
+    *,
+    protocol_options: Optional[Dict[str, Any]] = None,
+    prompt_api: str = "openai",
+    files: Optional[List[Any]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    mod, client = resolve_upstream(state, model, messages, tools)
+    stream_fn = getattr(mod.module, "stream_openai_chat", None)
+    if not callable(stream_fn):
+        raise RuntimeError(f"upstream {mod.name} missing stream_openai_chat()")
+    async for event in stream_fn(
+        state,
+        client,
+        messages,
+        model,
+        tools,
+        req_id,
+        protocol_options=protocol_options,
+        prompt_api=prompt_api,
+        files=files,
+    ):
+        yield event

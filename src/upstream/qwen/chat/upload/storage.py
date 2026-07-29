@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Final, Optional, Tuple
 
-from upstream.qwen.accounts import Account
+from upstream.qwen.account import Account
 from upstream.qwen.chat.routes import (
     COOKIE_REFRESH_INTERVAL,
     GENERATED_IMAGE_DIR,

@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from upstream.qwen.accounts import Account
+from upstream.qwen.account import Account
 from upstream.qwen.chat.store import QwenSession, clean_expired, SessionStoreMeta
 from upstream.qwen.client import QwenClient
 
@@ -77,7 +77,7 @@ class TestSessionExpiry(unittest.TestCase):
 
     def test_prune_expired_on_get_valid_session(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("upstream.qwen.client.load_session_store", return_value=([], empty_meta)):
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
             client = QwenClient(MagicMock())
         client._sessions = [
             _session(-5, name="old@test.com"),
@@ -85,7 +85,7 @@ class TestSessionExpiry(unittest.TestCase):
         ]
         client._current_index = 0
         client._prelogin_target = 0
-        client.ensure_prelogin = AsyncMock()
+        client.replenish_sessions = AsyncMock()
         client._ensure_cleanup = AsyncMock()
 
         import asyncio
@@ -132,16 +132,18 @@ class TestSessionCleanupLoop(unittest.IsolatedAsyncioTestCase):
         state._shutdown_requested = False
         state.client = MagicMock()
         state.client.cleanup_expired_sessions = MagicMock(return_value=["gone"])
-        state.client.ensure_prelogin = AsyncMock()
+        state.client.replenish_sessions = AsyncMock()
 
-        task = asyncio.create_task(state._session_cleanup_loop(interval=0.01))
+        from state_sched import session_cleanup_loop
+
+        task = asyncio.create_task(session_cleanup_loop(state, interval=0.01))
         await asyncio.sleep(0.05)
         state._shutdown_requested = True
         state.shutdown_event.set()
         await task
 
         self.assertGreaterEqual(state.client.cleanup_expired_sessions.call_count, 1)
-        self.assertGreaterEqual(state.client.ensure_prelogin.await_count, 1)
+        self.assertGreaterEqual(state.client.replenish_sessions.await_count, 1)
 
 
 if __name__ == "__main__":

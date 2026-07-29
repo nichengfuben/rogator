@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Thin helper: prefer ``core.registry.load_upstreams``."""
+"""上游注册表加载入口。"""
 
 from core.registry import UpstreamRegistry, load_upstreams
 

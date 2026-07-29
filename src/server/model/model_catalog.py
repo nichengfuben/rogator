@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """OpenAI /v1/models 元数据（Kimi Code think_efforts 等）。"""
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from server.model.model_registry import ModelRegistryEntry
 from server.model.model_thinking import always_qwen_thinking
@@ -61,6 +61,7 @@ def build_openai_model_entry(
     registry_entry: ModelRegistryEntry,
     meta_by_id: Optional[Mapping[str, Any]] = None,
     created: int = 1700000000,
+    owned_by: str = "qwen",
 ) -> Dict[str, Any]:
     internal_id = registry_entry.internal_id
     meta = _resolve_model_meta(internal_id, meta_by_id)
@@ -70,7 +71,7 @@ def build_openai_model_entry(
         "id": external_id,
         "object": "model",
         "created": created,
-        "owned_by": "qwen",
+        "owned_by": owned_by,
         "context_length": meta.context_length,
         "capabilities": capabilities_for_api(meta.capabilities),
         "modality": list(meta.modality),
@@ -88,6 +89,7 @@ def build_openai_models_list(
     *,
     meta_by_id: Optional[Mapping[str, Any]] = None,
     created: int = 1700000000,
+    owner_of: Optional[Callable[[str], str]] = None,
 ) -> List[Dict[str, Any]]:
     return [
         build_openai_model_entry(
@@ -95,6 +97,7 @@ def build_openai_models_list(
             registry_entry=entry,
             meta_by_id=meta_by_id,
             created=created,
+            owned_by=owner_of(entry.internal_id) if owner_of else "qwen",
         )
         for entry in registry_entries
     ]

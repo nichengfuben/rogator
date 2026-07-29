@@ -39,16 +39,14 @@ python main.py
 
 ## Architecture
 
-- `handlers/` — API endpoint handlers (OpenAI chat completions, Anthropic messages)
-- `core/` — Main QwenClient (mixin-based: AuthMixin, UploadMixin, MediaMixin, VideoGenMixin, LogsMixin), with submodules: crypto/, transport/, compat/, storage/, media/
-- `server/` — Simplified QwenClient (used by `src/state.py`), format builders, OSS upload
-- `src/state.py` — AppState, RequestScheduler, LongTextSplitter with resilient executor
-- `src/accounts.py` — Account pool loaded from `accounts.csv`, auto token refresh rotation
-- `main.py` — Entry point, aiohttp server lifecycle
-- `mvp/` — Standalone smoke-test scripts (chat.py, test_upload_analysis.py)
-- `achecker.py` — Project compliance checker (dir children, file lines, function length, nesting depth)
-- `amerger.py` — File content merge utility (all text files → single document)
-- Data directory: `persist/qwen/` (models cache, state persistence)
+- `handlers/` — OpenAI / Anthropic 协议适配
+- `core/` — 平台核心：upstream registry、dispatch（能力+模型过滤后随机选上游）、共享错误/HTTP/SSE
+- `upstream/qwen/` — Qwen 上游（client、账号、auth、chat、media）
+- `server/` — 全局配置、formats、model registry/catalog、records、retry（无 client）
+- `src/state.py` — AppState、调度器；经 core 缓存上游客户端
+- `main.py` — aiohttp 入口
+- `achecker.py` / `amerger.py` — 合规检查与合并工具
+- 数据：`persist/`（全局 registry）+ `persist/qwen/`（账号、sessions、login_history）
 
 ## Dependencies
 
@@ -59,24 +57,22 @@ python main.py
 
 - **Chinese** comments and docstrings throughout
 - Type hints everywhere; `from __future__ import annotations` in all files
-- Mixin-based class composition (see core/client.py)
+- Mixin-based class composition in upstream clients
 - `async/await` throughout — no sync blocking calls
 - Constants: `UPPER_CASE` with `Final` annotations
 - Logger: `echotools.logger.get_logger("rogator")`
 - Section separators: `# ==== blocks`
-- achecker.py enforces: max 7 children per dir, 200–400 line files (hard max 800), 50-line functions, depth 4 nesting
+- achecker.py enforces: max 7 children per dir, ≤400 line files (hard max 800), 50-line functions, depth 4 nesting
 
 ## Key Gotchas
 
 - **No system role in Qwen** — system messages are folded into the last user message. Don't pass system messages directly.
 - **Baxia anti-bot** — requests require `bx-ua` and `bx-umidtoken` headers (Alibaba fingerprinting). Override via `QWEN_BX_UMIDTOKEN` env var.
 - **SSL disabled** (`ssl=False`) on all outbound requests.
-- **Long text overflow** — texts >10240 chars are split; overflow uploaded to Alibaba Cloud OSS via STS tokens. DNS fallback: `47.113.75.199`.
-- **Tool calling** — uses custom `entml` XML protocol. `inject_fncall` imported from `echotools.fncall`; `TOOL_INSTRUCTION` template in `handlers/__init__.py`.
-- **Smart proxy selection** — `ProxySelector` with persistence (`PROXY_SELECTOR_PERSIST_PATH`), uses latency heuristics for endpoint routing.
-- **Two QwenClient implementations** — `core/client.py` (main, mixin-based) vs `server/qwen_client.py` (simplified, used by `src/state.py`).
-- **Compat fallback pattern** — `core/client.py` uses `try: from src.core.X` / `except ModuleNotFoundError: from .compat.runtime` for Candidate, ModelsCache, ProxySelector.
-- **TTS & Video** — `TtsService` and `VideoService` in `core/media/` for media generation.
-- **Default model** — `qwen3.7-max` (defined in `server/formats.py`).
+- **Long text overflow** — inject 后超长由 splitter / OSS 处理。
+- **Tool calling** — entml 协议；网关 `thinking` 恒 true（core 硬编码，与上游无关）。
+- **TTS & Video** — `upstream/qwen/media/`。
+- **Default model** — `qwen3.7-max`（`server/formats`）。
+- **Accounts** — `persist/qwen/accounts.csv`（`upstream.qwen.accounts`）。
 
 @AGENTS.md
