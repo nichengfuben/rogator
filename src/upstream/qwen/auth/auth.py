@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from upstream.qwen.accounts import Account
+from upstream.qwen.account import Account
 from .crypto import (
     BASE_URL,
     build_headers,

@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from upstream.qwen.accounts import Account
+from upstream.qwen.account import Account
 from upstream.qwen.client import QwenClient
 from upstream.qwen.chat.store import QwenSession, valid_session_count, SessionStoreMeta
 from tests.test_session_cleanup import _make_jwt
@@ -33,7 +33,7 @@ class TestSwitchAccount(unittest.IsolatedAsyncioTestCase):
         client._current_index = 0
         client._save_meta = MagicMock(return_value=[])
 
-        with patch("upstream.qwen.account.random.choice", return_value=client._sessions[1]):
+        with patch("core.session.pool.random.choice", return_value=client._sessions[1]):
             new = await client.switch_to_next(exclude_username="a@test.com")
         self.assertIsNotNone(new)
         self.assertEqual(new.username, "b@test.com")
@@ -45,7 +45,7 @@ class TestSwitchAccount(unittest.IsolatedAsyncioTestCase):
         client._blocked_accounts = {"only@test.com": time.time() + 3600}
         client._save_meta = MagicMock(return_value=[])
 
-        with patch("upstream.qwen.account.ACCOUNTS", [Account(username="only@test.com", password="pw")]):
+        with patch("core.session.pool.accounts_for_upstream", return_value=[Account(username="only@test.com", password="pw")]):
             picked = client._pick_account_for_login()
         self.assertIsNone(picked)
 
@@ -53,7 +53,7 @@ class TestSwitchAccount(unittest.IsolatedAsyncioTestCase):
 class TestPrelogin(unittest.IsolatedAsyncioTestCase):
     async def test_prelogin_fills_to_target(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("upstream.qwen.client.load_session_store", return_value=([], empty_meta)):
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
             client = QwenClient(MagicMock())
         client._sessions = []
         client._prelogin_target = 2
@@ -76,7 +76,7 @@ class TestPrelogin(unittest.IsolatedAsyncioTestCase):
             Account(username="a@test.com", password="pw"),
             Account(username="b@test.com", password="pw"),
         ]
-        with patch("upstream.qwen.account.ACCOUNTS", stub_accounts):
+        with patch("core.session.pool.accounts_for_upstream", return_value=stub_accounts):
             await client.prelogin_accounts(2)
         self.assertEqual(valid_session_count(client._sessions), 2)
 

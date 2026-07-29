@@ -53,7 +53,7 @@ STS_TOKEN_PATHS: Final[List[str]] = [
 VIDEO_CDN_BASE: Final[str] = "https://cdn.qwenlm.ai/output"
 
 PERSIST_PATH: Final[str] = "persist/qwen/state.json"
-MODELS_PERSIST_PATH: Final[str] = "persist/models.json"
+MODELS_PERSIST_PATH: Final[str] = "persist/qwen/models.json"
 TASK_TIMERS_PATH: Final[str] = "persist/qwen/task_timers.json"
 PROXY_SELECTOR_PERSIST_PATH: Final[str] = "persist/qwen/proxy_selector.json"
 GENERATED_IMAGE_DIR: Final[str] = "persist/qwen/generated_images"

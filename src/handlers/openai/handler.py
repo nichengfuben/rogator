@@ -12,7 +12,7 @@ from echotools.logger import get_logger
 
 from handlers import get_state
 from handlers.api_errors import handler_error_response
-from handlers.openai.chat import _chat_once, _process_openai_non_stream
+from handlers.openai.chat import _chat_once, _process_openai_non_stream, _resolve_retry_client
 from handlers.openai.protocol import _build_protocol_options
 from handlers.openai.stream_tools import (
     _emit_chunk,
@@ -233,6 +233,8 @@ def _resolve_all_tool_calls(
 
 
 async def _run_openai_event_stream(st: OpenAIStreamState, state, messages, model, tools, protocol_options) -> None:
+    retry_client = _resolve_retry_client(state, model, messages, tools)
+
     async def _make_stream():
         async for event in _chat_once(
             state, messages, model, tools, st.req_id, protocol_options=protocol_options,
@@ -241,7 +243,9 @@ async def _run_openai_event_stream(st: OpenAIStreamState, state, messages, model
             yield event
 
     with record_raw_response(st.req_id) as raw_recorder:
-        async with aclosing(stream_with_session_retry(st.req_id, state, _make_stream)) as event_stream:
+        async with aclosing(
+            stream_with_session_retry(st.req_id, state, _make_stream, client=retry_client),
+        ) as event_stream:
             async for event in event_stream:
                 if st.disconnected[0]:
                     break

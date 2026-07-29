@@ -14,7 +14,11 @@ RESTART_DELAY: float = 1.0
 DEFAULT_MODEL: str = "qwen3-7-max"
 TOKEN_EXPIRE_HOURS: int = 12
 TOKEN_EXPIRE_SECONDS: int = TOKEN_EXPIRE_HOURS * 3600
-MODELS_CACHE_FILE: str = "persist/models.json"
+def models_cache_path(upstream: str = "qwen") -> str:
+    return f"persist/{upstream.strip().lower()}/models.json"
+
+
+MODELS_CACHE_FILE: str = models_cache_path("qwen")
 DATA_DIR: str = "persist/qwen"
 SHUTDOWN_CANCEL_GRACE: float = 0.3
 SHUTDOWN_WAIT_IDLE_TIMEOUT: float = 3.0
@@ -41,19 +45,19 @@ DEFAULT_MODELS: List[str] = [
 ]
 CAPABILITIES: Dict[str, bool] = {
     "chat": True, "vision": True,
-    "search": True, "tools": True, "native_tools": True,
+    "search": True,
     "count_tokens": True, "image_gen": True, "tts": True,
 }
 # 256K = 256 × 1024 tokens；/v1/models 无上游元数据时的 per-model 默认上下文
 DEFAULT_MODEL_CONTEXT_LENGTH: int = 256 * 1024
-# 全模态能力底；增量拉取时上游有的键覆盖（thinking 不进持久化底）
+# 全模态能力底；增量拉取时上游有的键覆盖（thinking/tools/native_tools 不进持久化底）
 DEFAULT_MODEL_CAPABILITIES: Dict[str, bool] = {
     **CAPABILITIES,
     "document": True,
     "video": True,
     "audio": True,
 }
-# 持久化/内存元数据用的能力底（thinking 由 /v1/models 组装时现场补 true）
+# 持久化/内存元数据用的能力底（thinking/tools/native_tools 由 /v1/models 组装时现场补 true）
 PERSISTED_MODEL_CAPABILITIES: Dict[str, bool] = dict(DEFAULT_MODEL_CAPABILITIES)
 DEFAULT_MODEL_MODALITY: List[str] = ["text", "image", "video", "audio"]
 KEEPALIVE_INTERVAL: float = 5.0

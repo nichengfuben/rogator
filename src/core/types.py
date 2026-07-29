@@ -18,3 +18,23 @@ class UpstreamInfo(TypedDict, total=False):
     name: str
     capabilities: Dict[str, bool]
     models: List[str]
+
+
+class UpstreamError(RuntimeError):
+    """Generic upstream failure."""
+
+
+class RateLimitError(UpstreamError):
+    """Upstream rate limited."""
+
+
+class AuthError(UpstreamError):
+    """Upstream authentication failed."""
+
+
+class ModelNotAvailableError(UpstreamError):
+    """No upstream has the requested model (and capabilities)."""
+
+
+class CapabilityError(UpstreamError):
+    """No upstream satisfies requested capabilities."""

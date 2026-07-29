@@ -77,12 +77,21 @@ async def _switch_session_after_token_error(
     *,
     retries: int,
     limit: int,
+    client: Any | None = None,
 ) -> None:
-    old_name = state.client.current_session_username
+    retry_client = client if client is not None else state.client
+    switch = getattr(retry_client, "switch_to_next", None)
+    if not callable(switch):
+        if _is_shutting_down(state):
+            raise asyncio.CancelledError("Shutting down") from exc
+        _log_retry_exhausted(req_id, retries, limit, exc)
+        raise exc
+    old_name = getattr(retry_client, "current_session_username", None)
+    block = getattr(retry_client, "block_account", None)
     block_seconds = parse_rate_limit_block_seconds(str(exc))
-    if old_name and "Rate limited" in str(exc):
-        state.client.block_account(old_name, block_seconds)
-    new_session = await state.client.switch_to_next(exclude_username=old_name)
+    if old_name and block and callable(block) and "Rate limited" in str(exc):
+        block(old_name, block_seconds)
+    new_session = await switch(exclude_username=old_name)
     if new_session is None or retries > limit:
         if _is_shutting_down(state):
             raise asyncio.CancelledError("Shutting down") from exc
@@ -117,6 +126,7 @@ async def run_with_session_retry(
     func: Callable[[], Awaitable[T]],
     *,
     max_retry: Optional[int] = None,
+    client: Any | None = None,
 ) -> T:
     """非流式换号重试。"""
     limit = CONFIG.max_retry_on_error if max_retry is None else max_retry
@@ -128,7 +138,9 @@ async def run_with_session_retry(
         except TokenExpiredError as exc:
             _raise_if_shutting_down(state)
             retries += 1
-            await _switch_session_after_token_error(req_id, state, exc, retries=retries, limit=limit)
+            await _switch_session_after_token_error(
+                req_id, state, exc, retries=retries, limit=limit, client=client,
+            )
         except PayloadTooLargeError as exc:
             _raise_if_shutting_down(state)
             retries += 1
@@ -178,6 +190,7 @@ async def stream_with_session_retry(
     make_stream: Callable[[], AsyncGenerator[dict, None]],
     *,
     max_retry: Optional[int] = None,
+    client: Any | None = None,
 ) -> AsyncGenerator[dict, None]:
     """流式换号重试：失败则整段重开。"""
     limit = CONFIG.max_retry_on_error if max_retry is None else max_retry
@@ -200,7 +213,9 @@ async def stream_with_session_retry(
                 inner = None
                 _raise_if_shutting_down(state)
                 retries += 1
-                await _switch_session_after_token_error(req_id, state, exc, retries=retries, limit=limit)
+                await _switch_session_after_token_error(
+                req_id, state, exc, retries=retries, limit=limit, client=client,
+            )
             except PayloadTooLargeError as exc:
                 await _close_async_generator(inner)
                 inner = None

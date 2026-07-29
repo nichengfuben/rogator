@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from upstream.qwen.accounts import Account
+from upstream.qwen.account import Account
 from upstream.qwen.client import QwenClient
 from upstream.qwen.chat.store import QwenSession, SessionStoreMeta
 from state import AppState, QueueFullError, RequestScheduler, tracked_request
@@ -89,7 +89,7 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
         client._current_index = 0
         client._save_meta = MagicMock(return_value=[])
 
-        with patch("upstream.qwen.account.random.choice", return_value=client._sessions[1]):
+        with patch("core.session.pool.random.choice", return_value=client._sessions[1]):
             new = await client.switch_to_next(exclude_username="a@test.com")
         self.assertIsNotNone(new)
         self.assertEqual(new.username, "b@test.com")
@@ -119,10 +119,10 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
         client.login_account = AsyncMock(side_effect=_slow_login)
 
         async def _switch() -> None:
-            with patch("upstream.qwen.account.ACCOUNTS", accounts):
+            with patch("core.session.pool.accounts_for_upstream", return_value=accounts):
                 await client.switch_to_next()
 
-        with patch("upstream.qwen.account.ACCOUNTS", accounts):
+        with patch("core.session.pool.accounts_for_upstream", return_value=accounts):
             task_a = asyncio.create_task(_switch())
             task_b = asyncio.create_task(_switch())
             await asyncio.sleep(0.05)
@@ -133,16 +133,16 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_valid_session_skips_blocking_prelogin(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("upstream.qwen.client.load_session_store", return_value=([], empty_meta)):
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
             client = QwenClient(MagicMock())
         client._sessions = [_session("ok")]
         client._prelogin_target = 5
-        client.ensure_prelogin = AsyncMock()
+        client.replenish_sessions = AsyncMock()
         client._ensure_cleanup = AsyncMock()
 
         session = await client.get_valid_session()
         self.assertIsNotNone(session)
-        client.ensure_prelogin.assert_not_called()
+        client.replenish_sessions.assert_not_called()
 
 
 if __name__ == "__main__":

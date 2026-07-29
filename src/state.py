@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-"""Core state, scheduler, and resilient execution for the Qwen adapter."""
+"""Core state and application lifecycle."""
 
 import asyncio
 import time
-from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from echotools.fncall import ToolProtocol, get_protocol
 from echotools.logger import get_logger
@@ -14,31 +13,31 @@ from server.config import CONFIG
 from server.formats import (
     MAX_CONCURRENT,
     MAX_QUEUE_SIZE,
-    MAX_REQUEST_RESTARTS,
-    RESTART_DELAY,
     SHUTDOWN_CANCEL_GRACE,
     DEFAULT_MODEL,
-    TokenExpiredError,
 )
-from upstream.qwen.chat.store import CLEANUP_INTERVAL, valid_session_count, QwenSession
+from core.session.store import valid_session_count
 from core.dispatch import select_upstream
-from core.registry import load_upstreams, get_registry
+from core.registry import load_upstreams
+from state_sched import (
+    ActiveRequestTracker,
+    RequestScheduler,
+    models_refresh_loop,
+    run_resilient,
+    start_background_tasks,
+    tracked_request,
+)
 
 logger = get_logger("rogator")
 
-
-# ============================================================
-# 自定义异常
-# ============================================================
+_run_resilient = run_resilient
+MAX_QUEUE_SIZE = CONFIG.max_queue_size
 
 
 class QueueFullError(Exception):
     pass
 
 
-# 启动时从 config.toml 覆盖部分常量
-MAX_CONCURRENT = CONFIG.max_concurrent
-MAX_QUEUE_SIZE = CONFIG.max_queue_size
 QWEN_SEND_MAX_CHARS = CONFIG.qwen_send_max_chars
 MODEL_CONTEXT_LENGTH = CONFIG.model_context_length
 
@@ -54,10 +53,7 @@ class LongTextSplitter:
         self.send_full_prompt = send_full_prompt
 
     def split(self, text: str):
-        """Inject 后整段 prompt 超限：尾部 max_chars → send，剩余前缀 → 附件。
-
-        ``send_full_prompt=True`` 时不截断、不上传附件，原样发送。
-        """
+        """Inject 后整段 prompt 超限：尾部 max_chars → send，剩余前缀 → 附件。"""
         if self.send_full_prompt or len(text) <= self.max_chars:
             return text, None, None
         send_text = text[-self.max_chars:]
@@ -66,163 +62,6 @@ class LongTextSplitter:
         return send_text, filename, remaining_text.encode("utf-8")
 
 
-# ============================================================
-# 调度器
-# ============================================================
-
-class RequestScheduler:
-    def __init__(self, max_concurrent: int, max_queue: int) -> None:
-        self._semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent != -1 else None
-        self._pending: int = 0
-        self._lock = asyncio.Lock()
-        self._shutting_down: bool = False
-
-    @property
-    def pending(self) -> int:
-        return self._pending
-
-    def mark_shutting_down(self) -> None:
-        self._shutting_down = True
-
-    async def wait_idle(self, timeout: float = 30.0) -> bool:
-        start = time.time()
-        while self._pending > 0 and (time.time() - start) < timeout:
-            await asyncio.sleep(0.1)
-        return self._pending == 0
-
-    async def _reserve_pending(self) -> None:
-        async with self._lock:
-            if self._shutting_down:
-                raise QueueFullError("Shutting down")
-            if self._pending >= MAX_QUEUE_SIZE:
-                raise QueueFullError("Queue full")
-            self._pending += 1
-
-    async def _release_pending(self) -> None:
-        async with self._lock:
-            self._pending = max(0, self._pending - 1)
-
-    async def acquire_slot(self) -> None:
-        """占用并发槽（流式请求在 prepare 前调用，结束时 release_slot）。"""
-        await self._reserve_pending()
-        try:
-            if self._semaphore is not None:
-                await self._semaphore.acquire()
-        except BaseException:
-            await self._release_pending()
-            raise
-
-    async def release_slot(self) -> None:
-        if self._semaphore is not None:
-            self._semaphore.release()
-        await self._release_pending()
-
-    async def submit(self, coro_factory) -> Any:
-        await self._reserve_pending()
-        try:
-            if self._semaphore is not None:
-                async with self._semaphore:
-                    return await coro_factory()
-            return await coro_factory()
-        finally:
-            await self._release_pending()
-
-
-@asynccontextmanager
-async def tracked_request(state: "AppState", req_id: str) -> AsyncIterator[None]:
-    """注册活跃任务并占用调度槽，供流式 handler 使用。"""
-    task = asyncio.current_task()
-    if task is None:
-        raise RuntimeError("tracked_request requires a running task")
-    await state.tracker.register(req_id, task)
-    slot_acquired = False
-    try:
-        await state.scheduler.acquire_slot()
-        slot_acquired = True
-        yield
-    finally:
-        if slot_acquired:
-            await state.scheduler.release_slot()
-        await state.tracker.unregister(req_id)
-
-
-class ActiveRequestTracker:
-    def __init__(self) -> None:
-        self._tasks: Dict[str, asyncio.Task] = {}
-        self._lock = asyncio.Lock()
-
-    async def register(self, req_id: str, task: asyncio.Task) -> None:
-        async with self._lock:
-            self._tasks[req_id] = task
-
-    async def unregister(self, req_id: str) -> None:
-        async with self._lock:
-            self._tasks.pop(req_id, None)
-
-    async def cancel_all(self) -> int:
-        current = asyncio.current_task()
-        async with self._lock:
-            targets = [t for t in self._tasks.values() if t is not current and not t.done()]
-            for t in targets:
-                t.cancel()
-            self._tasks = {r: t for r, t in self._tasks.items() if t is current}
-            return len(targets)
-
-    @property
-    def count(self) -> int:
-        return len(self._tasks)
-
-
-# ============================================================
-# 弹性执行
-# ============================================================
-
-async def _run_resilient(req_id: str, state: "AppState", func) -> Any:
-    attempts = 0
-    last_error: Optional[Exception] = None
-    while True:
-        if state.is_shutting_down:
-            raise asyncio.CancelledError("Shutting down")
-        task = asyncio.current_task()
-        await state.tracker.register(req_id, task)
-        try:
-            return await func()
-        except asyncio.CancelledError:
-            if state.is_shutting_down:
-                raise
-            attempts += 1
-            logger.debug("Resilient: %s cancelled (restart #%d)", req_id, attempts)
-        except TokenExpiredError as e:
-            logger.warning("Token expired for %s: %s", req_id, e)
-            new_session = await state.client.switch_to_next()
-            if new_session is None:
-                raise RuntimeError("All sessions expired, no valid session available") from e
-            logger.info("Switched to session %s, retrying %s", new_session.username[:6], req_id)
-            attempts += 1
-        except Exception as e:
-            last_error = e
-            attempts += 1
-            error_str = str(e)
-            logger.debug("Resilient retry %s #%d: %s", req_id, attempts, error_str[:200])
-            if "401" in error_str or "unauthorized" in error_str.lower():
-                await state.client.switch_to_next()
-        finally:
-            await state.tracker.unregister(req_id)
-        if MAX_REQUEST_RESTARTS != -1 and attempts >= MAX_REQUEST_RESTARTS:
-            raise RuntimeError(f"Max restarts ({MAX_REQUEST_RESTARTS}) exceeded for {req_id}") from last_error
-        delay = RESTART_DELAY * (2 ** (attempts - 1))
-        try:
-            await asyncio.wait_for(state.shutdown_event.wait(), timeout=delay)
-        except asyncio.TimeoutError:
-            pass
-        else:
-            raise asyncio.CancelledError("Shutting down")
-
-
-# ============================================================
-# 应用状态
-# ============================================================
-
 class AppState:
     def __init__(self) -> None:
         self.shutdown_event = asyncio.Event()
@@ -230,41 +69,87 @@ class AppState:
         self.splitter = LongTextSplitter(send_full_prompt=CONFIG.send_full_prompt)
         self._registry = load_upstreams()
         self._clients: Dict[str, Any] = {}
+        self._models_inventory: Dict[str, set[str]] = {}
         self._models: List[str] = []
-        # 启动时按默认模型选出上游并缓存客户端（单上游时即 qwen）
-        self.client = self.client_for(DEFAULT_MODEL, ("chat",))
+        for name, mod in self._registry.modules.items():
+            client = mod.create_client(self.splitter)
+            self._clients[name] = client
+            self._models_inventory[name] = set(client.load_models_cache())
+        self._rebuild_unified_models()
+        self.client = self._clients.get("qwen") or self.client_for(DEFAULT_MODEL, ("chat",))
         self.scheduler = RequestScheduler(MAX_CONCURRENT, MAX_QUEUE_SIZE)
         self.tracker = ActiveRequestTracker()
         self.protocol: ToolProtocol = get_protocol("entml")
-        self._models = self.client.load_models_cache()
         self.model: str = DEFAULT_MODEL
         self._bg_tasks: List[asyncio.Task] = []
 
+    def _rebuild_unified_models(self) -> None:
+        ordered: List[str] = []
+        seen: set[str] = set()
+        for name in self._registry.names():
+            for model_id in self._models_inventory.get(name, ()):
+                if model_id not in seen:
+                    ordered.append(model_id)
+                    seen.add(model_id)
+        self._models = ordered
+
+    def owner_of_model(self, internal_id: str) -> str:
+        for name, owned in self._models_inventory.items():
+            if internal_id in owned:
+                return name
+        return "unknown"
+
+    def merged_model_meta(self) -> Dict[str, Any]:
+        meta: Dict[str, Any] = {}
+        for client in self._clients.values():
+            client_meta = getattr(client, "_model_meta", None)
+            if isinstance(client_meta, dict):
+                meta.update(client_meta)
+        return meta
+
+    def models_fetch_timestamp(self) -> float:
+        times = [
+            float(getattr(c, "_models_fetch_time", 0.0) or 0.0)
+            for c in self._clients.values()
+        ]
+        return max(times) if times else 0.0
+
     def _models_by_upstream(self) -> Dict[str, set[str]]:
-        """当前已知模型库存（按上游）；冷启动空集时 dispatch 放行。"""
-        out: Dict[str, set[str]] = {}
-        for name in self._clients:
-            out[name] = set(self._models)
-        return out
+        return dict(self._models_inventory)
 
     def client_for(
         self,
         model_id: str,
         required_capabilities: tuple[str, ...] = ("chat",),
+        *,
+        upstream_name: Optional[str] = None,
     ) -> Any:
-        """按能力+模型过滤后随机选上游，缓存每上游单一 client 实例。"""
-        mod = select_upstream(
-            model_id=model_id,
-            required_capabilities=required_capabilities,
-            models_by_upstream=self._models_by_upstream(),
-            registry=self._registry,
-        )
+        if upstream_name:
+            mod = self._registry.get(upstream_name)
+        else:
+            mod = select_upstream(
+                model_id=model_id,
+                required_capabilities=required_capabilities,
+                models_by_upstream=self._models_by_upstream(),
+                registry=self._registry,
+            )
         cached = self._clients.get(mod.name)
         if cached is not None:
             return cached
         client = mod.create_client(self.splitter)
         self._clients[mod.name] = client
+        self._models_inventory.setdefault(mod.name, set(client.load_models_cache()))
+        self._rebuild_unified_models()
         return client
+
+    async def startup_upstreams(self) -> None:
+        """轻量上游初始化（不登录）；登录由后台 ``upstream_bootstrap`` 负责。"""
+        for name, client in self._clients.items():
+            startup = getattr(client, "startup", None)
+            if callable(startup):
+                await startup()
+                self._models_inventory[name] = set(client.load_models_cache())
+        self._rebuild_unified_models()
 
     @property
     def is_shutting_down(self) -> bool:
@@ -272,83 +157,47 @@ class AppState:
 
     async def refresh_models(self, *, require_session: bool = False, force: bool = False) -> None:
         try:
-            if not force and not self.client.models_refresh_due(CONFIG.models_refresh_interval):
-                age = time.time() - self.client._models_fetch_time
-                logger.debug(
-                    "Refresh models skipped: cache fresh (%.0fs ago, interval=%.0fs)",
-                    age,
-                    CONFIG.models_refresh_interval,
-                )
-                return
-            if require_session and valid_session_count(self.client._sessions) == 0:
-                logger.debug("Refresh models skipped: no valid session")
-                return
-            models = await self.client.fetch_models(use_cache=not force)
-            if models:
-                self._models = list(models)
-                logger.info("Refreshed models: %d", len(self._models))
+            updated = False
+            qwen = self._clients.get("qwen")
+            if qwen is not None:
+                if not force and not qwen.models_refresh_due(CONFIG.models_refresh_interval):
+                    logger.debug(
+                        "Refresh models skipped: cache fresh (%.0fs ago, interval=%.0fs)",
+                        time.time() - qwen._models_fetch_time,
+                        CONFIG.models_refresh_interval,
+                    )
+                elif require_session and valid_session_count(qwen._sessions) == 0:
+                    logger.debug("Refresh models skipped: no valid session")
+                else:
+                    models = await qwen.fetch_models(use_cache=not force)
+                    if models:
+                        self._models_inventory["qwen"] = set(models)
+                        updated = True
+                        logger.info("Refreshed qwen models: %d", len(models))
+            for name, client in self._clients.items():
+                if name == "qwen":
+                    continue
+                fetch = getattr(client, "fetch_models", None)
+                if not callable(fetch):
+                    continue
+                if not force and hasattr(client, "models_refresh_due"):
+                    if not client.models_refresh_due(CONFIG.models_refresh_interval):
+                        continue
+                models = await fetch(use_cache=not force)
+                if models:
+                    self._models_inventory[name] = set(models)
+                    updated = True
+                    logger.info("Refreshed %s models: %d", name, len(models))
+            if updated:
+                self._rebuild_unified_models()
         except Exception as e:
             logger.warning("Refresh models failed: %s", e)
 
-    async def _models_refresh_loop(self) -> None:
-        interval = max(0.0, CONFIG.models_refresh_interval)
-        if interval <= 0:
-            return
-        while not self.is_shutting_down:
-            await self.refresh_models(require_session=True)
-            try:
-                await asyncio.wait_for(self.shutdown_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                continue
-
-    async def _session_cleanup_loop(self, interval: float = CLEANUP_INTERVAL) -> None:
-        """后台定时清理过期 session；有效数低于 prelogin 时自动补登。"""
-        while not self.is_shutting_down:
-            try:
-                self.client.cleanup_expired_sessions()
-                await self.client.ensure_prelogin()
-                await asyncio.wait_for(self.shutdown_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                continue
-
-    async def _background_initial_prelogin(self) -> None:
-        """后台补登至 prelogin 目标，不阻塞 HTTP 监听启动。"""
-        import random
-
-        target = self.client._prelogin_target
-        logger.info("Prelogin %d accounts (background)...", target)
-        try:
-            while not self.is_shutting_down:
-                if valid_session_count(self.client._sessions) >= target:
-                    break
-                await self.client.ensure_prelogin()
-                if valid_session_count(self.client._sessions) >= target:
-                    break
-                try:
-                    await asyncio.wait_for(
-                        self.shutdown_event.wait(),
-                        timeout=max(0.0, CONFIG.login_interval),
-                    )
-                except asyncio.TimeoutError:
-                    continue
-            if self.client.session_count > 0:
-                await self.refresh_models()
-                random.shuffle(self.client._sessions)
-                logger.info(
-                    "Prelogin background ready: %d session(s) (target=%d)",
-                    valid_session_count(self.client._sessions),
-                    target,
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error("Background prelogin failed: %s", e)
-
     def start_background_tasks(self) -> None:
-        self.client.cleanup_expired_sessions()
-        self._bg_tasks.append(asyncio.create_task(self._background_initial_prelogin()))
-        self._bg_tasks.append(asyncio.create_task(self._session_cleanup_loop()))
-        self._bg_tasks.append(asyncio.create_task(self._models_refresh_loop()))
+        qwen = self._clients.get("qwen")
+        if qwen is not None:
+            self.client = qwen
+        self._bg_tasks.extend(start_background_tasks(self))
 
     async def shutdown(self) -> None:
         if getattr(self, "_shutdown_complete", False):
@@ -386,5 +235,18 @@ class AppState:
                 )
             await self.tracker.cancel_all()
             await asyncio.sleep(SHUTDOWN_CANCEL_GRACE)
-        self.client._persist_sessions()
+        qwen = self._clients.get("qwen")
+        if qwen is not None and hasattr(qwen, "_persist_sessions"):
+            qwen._persist_sessions()
+        for client in self._clients.values():
+            persist = getattr(client, "_persist_sessions", None)
+            if callable(persist) and client is not qwen:
+                persist()
+        for client in self._clients.values():
+            shutdown = getattr(client, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    await shutdown()
+                except Exception as exc:
+                    logger.debug("Upstream shutdown failed: %s", exc)
         self._shutdown_complete = True
