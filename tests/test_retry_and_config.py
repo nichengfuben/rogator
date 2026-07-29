@@ -81,6 +81,22 @@ class TestConfig(unittest.TestCase):
             cfg = load_config(user_path, template_path=tpl_path)
             self.assertTrue(cfg.send_full_prompt)
 
+    def test_load_config_shutdown_wait_from_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(tmp, "[server]\nport = 8932\n")
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.shutdown_wait_active_requests, 3.0)
+            self.assertEqual(cfg.shutdown_total_timeout, 8.0)
+
+    def test_load_config_shutdown_user_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(
+                tmp, "[shutdown]\nwait_active_requests = 5.0\n",
+            )
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.shutdown_wait_active_requests, 5.0)
+            self.assertEqual(cfg.shutdown_total_timeout, 8.0)
+
     def test_overlay_user_config_keeps_template_sections(self) -> None:
         template = {"server": {"port": 8932, "prelogin": 32}, "limits": {"max_concurrent": 32}}
         user = {"server": {"port": 9000}}

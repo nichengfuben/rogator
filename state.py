@@ -16,11 +16,10 @@ from server.formats import (
     MAX_REQUEST_RESTARTS,
     RESTART_DELAY,
     SHUTDOWN_CANCEL_GRACE,
-    SHUTDOWN_WAIT_IDLE_TIMEOUT,
     DEFAULT_MODEL,
     TokenExpiredError,
 )
-from server.client.session_store import CLEANUP_INTERVAL, QwenSession
+from server.client.session_store import CLEANUP_INTERVAL, valid_session_count, QwenSession
 from server.client.qwen_client import QwenClient
 
 logger = get_logger("rogator")
@@ -224,8 +223,39 @@ class AppState:
             except asyncio.TimeoutError:
                 continue
 
+    async def _background_initial_prelogin(self) -> None:
+        """后台补登至 prelogin 目标，不阻塞 HTTP 监听启动。"""
+        import random
+
+        target = self.client._prelogin_target
+        logger.info("Prelogin %d accounts (background)...", target)
+        try:
+            while not self.is_shutting_down:
+                if valid_session_count(self.client._sessions) >= target:
+                    break
+                await self.client.ensure_prelogin()
+                if valid_session_count(self.client._sessions) >= target:
+                    break
+                try:
+                    await asyncio.wait_for(self.shutdown_event.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    continue
+            if self.client.session_count > 0:
+                await self.refresh_models()
+                random.shuffle(self.client._sessions)
+                logger.info(
+                    "Prelogin background ready: %d session(s) (target=%d)",
+                    valid_session_count(self.client._sessions),
+                    target,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Background prelogin failed: %s", e)
+
     def start_background_tasks(self) -> None:
         self.client.cleanup_expired_sessions()
+        self._bg_tasks.append(asyncio.create_task(self._background_initial_prelogin()))
         self._bg_tasks.append(asyncio.create_task(self._session_cleanup_loop()))
         self._bg_tasks.append(asyncio.create_task(self._models_refresh_loop()))
 
@@ -242,7 +272,18 @@ class AppState:
         self.scheduler.mark_shutting_down()
         cancelled = await self.tracker.cancel_all()
         if cancelled:
+            logger.info("Shutdown: cancelled %d active stream/request task(s)", cancelled)
             await asyncio.sleep(SHUTDOWN_CANCEL_GRACE)
-        await self.scheduler.wait_idle(timeout=SHUTDOWN_WAIT_IDLE_TIMEOUT)
+        idle = await self.scheduler.wait_idle(timeout=CONFIG.shutdown_wait_active_requests)
+        if not idle:
+            remaining = self.tracker.count
+            if remaining:
+                logger.warning(
+                    "Shutdown: %d request(s) still active after %.1fs, forcing cancel",
+                    remaining,
+                    CONFIG.shutdown_wait_active_requests,
+                )
+            await self.tracker.cancel_all()
+            await asyncio.sleep(SHUTDOWN_CANCEL_GRACE)
         self.client._persist_sessions()
         self._shutdown_complete = True
