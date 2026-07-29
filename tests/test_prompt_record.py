@@ -144,6 +144,16 @@ def test_load_config_debug_log_name(tmp_path) -> None:
     cfg = load_config(cfg_path)
     assert cfg.log_level == "INFO"
     assert cfg.log_name == "rogator-test"
+    assert cfg.access_log is True
+
+
+def test_load_config_access_log_flag(tmp_path) -> None:
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text("[debug]\naccess_log = false\n", encoding="utf-8")
+    from server.config import load_config
+
+    cfg = load_config(cfg_path)
+    assert cfg.access_log is False
 
 
 def test_resolve_log_file_path_format(tmp_path, monkeypatch) -> None:

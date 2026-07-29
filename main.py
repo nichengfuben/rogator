@@ -168,6 +168,7 @@ def _print_startup_info(state: AppState, port: int, prelogin_count: int) -> None
     logger.info("  Models      : %d", len(state._models))
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
     logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)
+    logger.info("  Access log  : %s", CONFIG.access_log)
     logger.info("  Cleanup     : startup + background (%ds, auto prelogin)", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
@@ -198,7 +199,10 @@ async def _prelogin_accounts(state: AppState, count: int) -> None:
 
 async def _run_server(app: web.Application, state: AppState, port: int) -> None:
     """启动 web 服务器并等待关机信号。"""
-    runner = web.AppRunner(app)
+    runner_kwargs: dict = {}
+    if not CONFIG.access_log:
+        runner_kwargs["access_log"] = None
+    runner = web.AppRunner(app, **runner_kwargs)
     site: Optional[web.TCPSite] = None
     try:
         await runner.setup()

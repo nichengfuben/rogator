@@ -42,3 +42,5 @@ level = "INFO"
 color = true
 log_to_file = true
 log_name = "rogator"
+# HTTP 访问日志（aiohttp access log）；false 关闭
+access_log = true

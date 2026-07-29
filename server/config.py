@@ -47,6 +47,7 @@ class AppConfig:
     log_to_file: bool = True
     log_name: str = "rogator"
     log_color: bool = True
+    access_log: bool = True
 
 
 def resolve_log_path(path: str, *, project_root: Path | None = None) -> Path:
@@ -107,6 +108,11 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
             _deep_get(raw, "debug", "color")
             if _deep_get(raw, "debug", "color") is not None
             else _deep_get(raw, "logging", "color", default=True)
+        ),
+        access_log=bool(
+            _deep_get(raw, "debug", "access_log")
+            if _deep_get(raw, "debug", "access_log") is not None
+            else _deep_get(raw, "logging", "access_log", default=True)
         ),
     )
 
