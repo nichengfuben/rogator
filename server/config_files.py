@@ -77,10 +77,10 @@ def warn_if_config_version_mismatch(user_path: Path, logger: Any) -> None:
         return
     if tpl_ver is None:
         return
-    if usr_ver != tpl_ver:
+    if usr_ver is not None and usr_ver != tpl_ver:
         logger.warning(
             "config/config.toml 版本 (%s) 与 template/config.toml (%s) 不一致；"
             "请对照 template 自行更新本地配置（不会自动修改 config.toml）",
-            usr_ver or "(未设置)",
+            usr_ver,
             tpl_ver,
         )

@@ -9,13 +9,13 @@ import asyncio
 import signal
 import socket
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 from aiohttp import web
 
 from server.config import CONFIG, load_config
 from server.config_files import user_config_path, warn_if_config_version_mismatch
-from server.logging_setup import setup_logging
+from server.logging_setup import setup_logging, shutdown_logging, resolve_access_log
 
 # ============================================================
 # echotools 日志：控制台 + logs/rogator.log
@@ -123,23 +123,38 @@ def _validate_config(port: int, prelogin_count: int) -> None:
 
 
 def _install_signal_handlers(state: AppState) -> None:
-    """注册系统信号处理器。"""
+    """注册系统信号处理器（Unix/macOS 用 asyncio；Windows 回退 signal.signal）。"""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
 
-    def _handle(sig_name: str) -> None:
-        logger.info("Signal %s received", sig_name)
+    def _request_shutdown(sig_name: str) -> None:
+        logger.info("Signal %s received, shutting down...", sig_name)
         state.shutdown_event.set()
 
+    def _sync_sigint_handler(_signum: int, _frame: Optional[Any]) -> None:
+        logger.info("Interrupt received, shutting down...")
+        loop.call_soon_threadsafe(state.shutdown_event.set)
+
+    installed_async: set[int] = set()
     for sig_name in ("SIGINT", "SIGTERM"):
         sig = getattr(signal, sig_name, None)
-        if sig:
-            try:
-                loop.add_signal_handler(sig, _handle, sig_name)
-            except (NotImplementedError, RuntimeError):
-                pass
+        if sig is None:
+            continue
+        try:
+            loop.add_signal_handler(sig, _request_shutdown, sig_name)
+            installed_async.add(sig)
+        except (NotImplementedError, RuntimeError, ValueError):
+            pass
+
+    sigint = getattr(signal, "SIGINT", None)
+    if sigint is not None and sigint not in installed_async:
+        # Windows 及不支持 add_signal_handler 的环境
+        try:
+            signal.signal(sigint, _sync_sigint_handler)
+        except (ValueError, OSError, AttributeError):
+            pass
 
 
 async def _cancel_leftover_tasks() -> None:
@@ -199,10 +214,10 @@ async def _prelogin_accounts(state: AppState, count: int) -> None:
 
 async def _run_server(app: web.Application, state: AppState, port: int) -> None:
     """启动 web 服务器并等待关机信号。"""
-    runner_kwargs: dict = {}
-    if not CONFIG.access_log:
-        runner_kwargs["access_log"] = None
-    runner = web.AppRunner(app, **runner_kwargs)
+    runner = web.AppRunner(
+        app,
+        access_log=resolve_access_log(CONFIG.access_log),
+    )
     site: Optional[web.TCPSite] = None
     try:
         await runner.setup()
@@ -280,6 +295,7 @@ def main() -> None:
     """服务器主入口。"""
     args = parse_args()
     setup_logging(args.log_level)
+    exit_code = 0
     try:
         asyncio.run(main_async(
             port=args.port,
@@ -287,10 +303,13 @@ def main() -> None:
             prelogin_count=args.prelogin,
         ))
     except KeyboardInterrupt:
-        pass
+        logger.info("Shutdown requested (keyboard interrupt)")
     except Exception as e:
         logger.error("Fatal: %s", e, exc_info=True)
-        sys.exit(1)
+        exit_code = 1
+    finally:
+        shutdown_logging()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

@@ -90,6 +90,25 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(args[1], "1.0.0")
             self.assertEqual(args[2], "2.0.0")
 
+    def test_warn_config_version_missing_silent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tpl_dir = root / "template"
+            cfg_dir = root / "config"
+            tpl_dir.mkdir()
+            cfg_dir.mkdir()
+            tpl_dir.joinpath("config.toml").write_text(
+                '[server]\nversion = "2.0.0"\n', encoding="utf-8",
+            )
+            cfg_dir.joinpath("config.toml").write_text(
+                '[server]\nport = 8932\n', encoding="utf-8",
+            )
+            mock_logger = MagicMock()
+            with patch("server.config_files.TEMPLATE_DIR", tpl_dir), \
+                 patch("server.config_files.CONFIG_DIR", cfg_dir):
+                warn_if_config_version_mismatch(cfg_dir / "config.toml", mock_logger)
+            mock_logger.warning.assert_not_called()
+
     def test_warn_config_version_match_silent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
