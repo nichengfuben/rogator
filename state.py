@@ -134,15 +134,14 @@ async def tracked_request(state: "AppState", req_id: str) -> AsyncIterator[None]
     if task is None:
         raise RuntimeError("tracked_request requires a running task")
     await state.tracker.register(req_id, task)
+    slot_acquired = False
     try:
         await state.scheduler.acquire_slot()
-    except QueueFullError:
-        await state.tracker.unregister(req_id)
-        raise
-    try:
+        slot_acquired = True
         yield
     finally:
-        await state.scheduler.release_slot()
+        if slot_acquired:
+            await state.scheduler.release_slot()
         await state.tracker.unregister(req_id)
 
 

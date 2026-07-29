@@ -61,6 +61,23 @@ class TestTrackedRequest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.scheduler.pending, 0)
         self.assertEqual(state.tracker.count, 0)
 
+    async def test_tracked_request_unregisters_when_cancelled_during_acquire(self) -> None:
+        state = AppState()
+        state.scheduler = RequestScheduler(max_concurrent=0, max_queue=10)
+        req_id = "req-track-cancel"
+
+        async def _wait_slot() -> None:
+            async with tracked_request(state, req_id):
+                pass
+
+        task = asyncio.create_task(_wait_slot())
+        await asyncio.sleep(0.05)
+        self.assertEqual(state.tracker.count, 1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertEqual(state.tracker.count, 0)
+
 
 class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
     async def test_switch_excludes_failed_username(self) -> None:
