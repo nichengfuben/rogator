@@ -14,10 +14,8 @@ for _entry in (_root / "src", _root):
         sys.path.insert(0, _path)
 import path_setup  # noqa: F401
 
-import argparse
 import asyncio
 import socket
-import sys
 from typing import Optional
 
 from aiohttp import web
@@ -67,11 +65,6 @@ logger.info(
 # 全局常量
 # ============================================================
 
-PORT: int = CONFIG.port
-HOST: str = CONFIG.host
-PRELOGIN_ACCOUNT_COUNT: int = CONFIG.prelogin
-PRELOGIN_TIMEOUT: float = CONFIG.prelogin_timeout
-
 APP_NAME: str = "Rogator"
 APP_VERSION: str = "2.2.1"
 APP_DESCRIPTION: str = "Qwen 长文本处理适配服务器"
@@ -84,44 +77,14 @@ BANNER_WIDTH: int = 70
 
 
 # ============================================================
-# CLI 参数解析
-# ============================================================
-
-def parse_args() -> argparse.Namespace:
-    """解析命令行参数。"""
-    parser = argparse.ArgumentParser(
-        prog=APP_NAME,
-        description=APP_DESCRIPTION,
-    )
-    parser.add_argument(
-        "--port", type=int, default=PORT,
-        help=f"服务器监听端口 (默认: {PORT})",
-    )
-    parser.add_argument(
-        "--host", type=str, default=HOST,
-        help=f"服务器监听地址 (默认: {HOST})",
-    )
-    parser.add_argument(
-        "--prelogin", type=int, default=PRELOGIN_ACCOUNT_COUNT,
-        help=f"预登录账户数 (默认: {PRELOGIN_ACCOUNT_COUNT})",
-    )
-    parser.add_argument(
-        "--log-level", type=str, default=CONFIG.log_level,
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help=f"日志级别 (默认: {CONFIG.log_level})",
-    )
-    return parser.parse_args()
-
-
-# ============================================================
 # 启动辅助函数
 # ============================================================
 
-def _check_port_in_use(port: int) -> bool:
+def _check_port_in_use(host: str, port: int) -> bool:
     """检查端口是否被占用。"""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        s.bind(("0.0.0.0", port))
+        s.bind((host, port))
         s.close()
         return False
     except OSError:
@@ -148,12 +111,12 @@ async def _cancel_leftover_tasks() -> None:
 # 启动流程函数
 # ============================================================
 
-def _print_startup_info(state: AppState, port: int, prelogin_count: int) -> None:
+def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: int) -> None:
     """打印启动信息横幅。"""
     logger.info("=" * BANNER_WIDTH)
     logger.info("%s - Qwen Server", APP_NAME)
     logger.info("  Version     : %s", APP_VERSION)
-    logger.info("  Port        : %d", port)
+    logger.info("  Listen      : %s:%d", host, port)
     logger.info("  Model       : %s", state.model)
     logger.info("  Protocol    : %s", state.protocol.id)
     logger.info("  Sessions    : %d (max 12h)", state.client.session_count)
@@ -172,12 +135,12 @@ async def _prelogin_accounts(state: AppState, count: int) -> None:
     try:
         await asyncio.wait_for(
             state.client.prelogin_accounts(count),
-            timeout=PRELOGIN_TIMEOUT,
+            timeout=CONFIG.prelogin_timeout,
         )
     except asyncio.TimeoutError:
         logger.warning(
             "Prelogin timed out after %ds, continuing anyway",
-            int(PRELOGIN_TIMEOUT),
+            int(CONFIG.prelogin_timeout),
         )
     except Exception as e:
         logger.error("Prelogin failed: %s", e)
@@ -189,7 +152,7 @@ async def _prelogin_accounts(state: AppState, count: int) -> None:
         random.shuffle(state.client._sessions)
 
 
-async def _run_server(app: web.Application, state: AppState, port: int) -> None:
+async def _run_server(app: web.Application, state: AppState, host: str, port: int) -> None:
     """启动 web 服务器并等待关机信号。"""
     runner = web.AppRunner(
         app,
@@ -198,7 +161,7 @@ async def _run_server(app: web.Application, state: AppState, port: int) -> None:
     site: Optional[web.TCPSite] = None
     try:
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", port)
+        site = web.TCPSite(runner, host, port)
         await site.start()
         _install_signal_handlers(state)
         install_asyncio_exception_handler(state)
@@ -236,22 +199,19 @@ async def _run_server(app: web.Application, state: AppState, port: int) -> None:
 # 异步入口
 # ============================================================
 
-async def main_async(
-    port: int = PORT,
-    host: str = HOST,
-    prelogin_count: int | None = None,
-) -> None:
-    """服务器异步主入口。"""
+async def main_async() -> None:
+    """服务器异步主入口（配置来自 config.toml + template/config.toml）。"""
     cfg = load_config()
-    if prelogin_count is None:
-        prelogin_count = cfg.prelogin
+    port = cfg.port
+    host = cfg.host
+    prelogin_count = cfg.prelogin
     _validate_config(port, prelogin_count)
 
-    if _check_port_in_use(port):
-        logger.error("Port %d already in use!", port)
+    if _check_port_in_use(host, port):
+        logger.error("Port %s:%d already in use!", host, port)
         sys.exit(1)
 
-    app = web.Application(client_max_size=CONFIG.client_max_body_bytes)
+    app = web.Application(client_max_size=cfg.client_max_body_bytes)
     setup_routes(app)
     state = get_state()
     state.client._prelogin_target = prelogin_count
@@ -263,8 +223,8 @@ async def main_async(
 
     await _prelogin_accounts(state, prelogin_count)
     state.start_background_tasks()
-    _print_startup_info(state, port, prelogin_count)
-    await _run_server(app, state, port)
+    _print_startup_info(state, host, port, prelogin_count)
+    await _run_server(app, state, host, port)
 
 
 # ============================================================
@@ -273,15 +233,9 @@ async def main_async(
 
 def main() -> None:
     """服务器主入口。"""
-    args = parse_args()
-    setup_logging(args.log_level)
     exit_code = 0
     try:
-        asyncio.run(main_async(
-            port=args.port,
-            host=args.host,
-            prelogin_count=args.prelogin,
-        ))
+        asyncio.run(main_async())
     except KeyboardInterrupt:
         logger.info("Shutdown requested (keyboard interrupt)")
     except Exception as e:

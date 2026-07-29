@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""根目录 config.toml 与 template/ 路径及首次引导（不合并、不写回本地 config）。"""
+"""根目录 config.toml 与 template/ 路径、首次引导及加载时 overlay（不写回本地 config）。"""
 
 import shutil
 import sys
@@ -32,6 +32,21 @@ def _loads_toml(text: str) -> Dict[str, Any]:
     if sys.version_info >= (3, 11):
         return _toml_loader.loads(text)
     return _toml_loader.loads(text.encode("utf-8"))
+
+
+def overlay_user_config(
+    template_raw: Dict[str, Any],
+    user_raw: Dict[str, Any],
+) -> Dict[str, Any]:
+    """加载策略：以 template 为底，用户 config.toml 覆盖同路径键（仅内存，不改文件）。"""
+    merged: Dict[str, Any] = dict(template_raw)
+    for key, value in user_raw.items():
+        base = merged.get(key)
+        if isinstance(base, dict) and isinstance(value, dict):
+            merged[key] = overlay_user_config(base, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def read_server_version(path: Path) -> str | None:

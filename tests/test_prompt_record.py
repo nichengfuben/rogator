@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
@@ -121,9 +122,10 @@ def test_load_config_fncall_flags(tmp_path) -> None:
         "[fncall]\nrecord_prompt = true\nprint_prompt = true\n",
         encoding="utf-8",
     )
+    tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
     from server.config import load_config
 
-    cfg = load_config(cfg_path)
+    cfg = load_config(cfg_path, template_path=tpl_path)
     assert cfg.record_prompt is True
     assert cfg.print_prompt is True
 
@@ -139,9 +141,10 @@ def test_load_config_debug_log_name(tmp_path) -> None:
         '[debug]\nlevel = "INFO"\nlog_name = "rogator-test"\n',
         encoding="utf-8",
     )
+    tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
     from server.config import load_config
 
-    cfg = load_config(cfg_path)
+    cfg = load_config(cfg_path, template_path=tpl_path)
     assert cfg.log_level == "INFO"
     assert cfg.log_name == "rogator-test"
     assert cfg.access_log is True
@@ -150,9 +153,10 @@ def test_load_config_debug_log_name(tmp_path) -> None:
 def test_load_config_access_log_flag(tmp_path) -> None:
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text("[debug]\naccess_log = false\n", encoding="utf-8")
+    tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
     from server.config import load_config
 
-    cfg = load_config(cfg_path)
+    cfg = load_config(cfg_path, template_path=tpl_path)
     assert cfg.access_log is False
 
 

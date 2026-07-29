@@ -34,7 +34,7 @@ Long term maintainability is a core priority. If you add new functionality, firs
 ## Running
 
 ```
-python main.py [--port 8932] [--host 0.0.0.0] [--prelogin 1] [--log-level DEBUG]
+python main.py
 ```
 
 ## Architecture
