@@ -13,27 +13,15 @@ logger = get_logger("rogator")
 
 _WIN_SHUTDOWN_SOCKET_ERRORS = frozenset({64, 10054, 995, 10038})
 _shutdown_lock = threading.Lock()
-_shutdown_signal_count = 0
-
-
-def _force_exit_after_repeat_interrupt() -> None:
-    """第二次及以上中断：避免卡在 accept/清理阶段无法退出。"""
-    logger.warning("Repeated interrupt during shutdown, forcing exit")
-    raise SystemExit(130)
 
 
 def _request_shutdown_once(state: Any, *, source: str) -> None:
-    """首次中断：仅置位 shutdown_event（不提前设 _shutdown_requested，留给 state.shutdown）。"""
-    global _shutdown_signal_count
+    """中断信号：幂等置位 shutdown_event（多次 Ctrl+C 与第一次等效）。"""
     with _shutdown_lock:
-        _shutdown_signal_count += 1
-        if _shutdown_signal_count > 1:
-            _force_exit_after_repeat_interrupt()
-        already_set = state.shutdown_event.is_set()
-    if already_set:
-        return
-    logger.info("%s received, shutting down...", source)
-    state.shutdown_event.set()
+        if state.shutdown_event.is_set():
+            return
+        logger.info("%s received, shutting down...", source)
+        state.shutdown_event.set()
 
 
 def install_signal_handlers(state: Any) -> None:
@@ -47,10 +35,7 @@ def install_signal_handlers(state: Any) -> None:
         _request_shutdown_once(state, source=f"Signal {sig_name}")
 
     def _sync_sigint_handler(_signum: int, _frame: Optional[Any]) -> None:
-        try:
-            _request_shutdown_once(state, source="Interrupt")
-        except SystemExit:
-            raise
+        _request_shutdown_once(state, source="Interrupt")
 
     installed_async: set[int] = set()
     for sig_name in ("SIGINT", "SIGTERM"):
@@ -72,9 +57,8 @@ def install_signal_handlers(state: Any) -> None:
 
 
 def reset_shutdown_signal_state_for_tests() -> None:
-    global _shutdown_signal_count
-    with _shutdown_lock:
-        _shutdown_signal_count = 0
+    """测试钩子（保留 API；信号处理已幂等，无需重置状态）。"""
+    return
 
 
 def install_asyncio_exception_handler(state: Any) -> None:
@@ -105,11 +89,26 @@ def install_asyncio_exception_handler(state: Any) -> None:
     loop.set_exception_handler(_handler)
 
 
-async def cancel_leftover_tasks() -> None:
-    """取消并回收遗留 asyncio 任务。"""
+_LEFTOVER_TASK_CANCEL_TIMEOUT = 5.0
+
+
+async def cancel_leftover_tasks(*, timeout: float = _LEFTOVER_TASK_CANCEL_TIMEOUT) -> None:
+    """取消并回收遗留 asyncio 任务（有超时，避免 gather 永久阻塞）。"""
     current = asyncio.current_task()
     tasks = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
     for task in tasks:
         task.cancel()
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    if not tasks:
+        return
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        remaining = sum(1 for t in tasks if not t.done())
+        logger.warning(
+            "Shutdown: %d leftover task(s) still running after %.1fs cancel wait",
+            remaining,
+            timeout,
+        )

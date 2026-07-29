@@ -43,6 +43,7 @@ from server.formats import (
 from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.records.response_record import record_raw_response
 from server.retry import stream_with_session_retry
+from state import QueueFullError, tracked_request
 
 logger = get_logger("rogator")
 
@@ -281,43 +282,47 @@ async def _handle_stream(
     request, state, messages, model, req_id, tools, protocol_options=None, *,
     include_usage: bool = False,
 ):
-    resp = web.StreamResponse(
-        status=200,
-        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
-                 "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
-    await resp.prepare(request)
-    st = OpenAIStreamState(
-        model=model,
-        chunk_id=_gen_chatcmpl_id(),
-        resp=resp,
-        disconnected=[False],
-        include_usage=include_usage,
-        parser=FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options),
-        req_id=req_id,
-    )
-
     try:
-        early = await _run_openai_stream_guarded(
-            st, state, messages, model, tools, protocol_options, req_id, resp,
-        )
-        if early is not None:
-            return early
-        if st.disconnected[0]:
-            logger.info("Client disconnected during stream %s", req_id)
-            return resp
-        return await _finish_openai_stream(st, resp, model, include_usage)
-    except asyncio.CancelledError:
-        logger.info("OpenAI stream cancelled during shutdown %s", req_id)
-        raise
-    except UpstreamTimeoutError as e:
-        logger.warning("OpenAI stream upstream timeout (uncaught path) %s: %s", req_id, e)
-        await _write_openai_stream_error(resp, str(e), st.disconnected, error_type="timeout", code=504)
-        return resp
-    except Exception as e:
-        logger.error("OpenAI stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
-        await _write_openai_stream_error(resp, str(e), st.disconnected)
-        return resp
+        async with tracked_request(state, req_id):
+            resp = web.StreamResponse(
+                status=200,
+                headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+                         "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            )
+            await resp.prepare(request)
+            st = OpenAIStreamState(
+                model=model,
+                chunk_id=_gen_chatcmpl_id(),
+                resp=resp,
+                disconnected=[False],
+                include_usage=include_usage,
+                parser=FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options),
+                req_id=req_id,
+            )
+
+            try:
+                early = await _run_openai_stream_guarded(
+                    st, state, messages, model, tools, protocol_options, req_id, resp,
+                )
+                if early is not None:
+                    return early
+                if st.disconnected[0]:
+                    logger.info("Client disconnected during stream %s", req_id)
+                    return resp
+                return await _finish_openai_stream(st, resp, model, include_usage)
+            except asyncio.CancelledError:
+                logger.info("OpenAI stream cancelled during shutdown %s", req_id)
+                raise
+            except UpstreamTimeoutError as e:
+                logger.warning("OpenAI stream upstream timeout (uncaught path) %s: %s", req_id, e)
+                await _write_openai_stream_error(resp, str(e), st.disconnected, error_type="timeout", code=504)
+                return resp
+            except Exception as e:
+                logger.error("OpenAI stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
+                await _write_openai_stream_error(resp, str(e), st.disconnected)
+                return resp
+    except QueueFullError as exc:
+        return handler_error_response(exc, label="OpenAI stream")
 
 
 async def openai_chat_handler(request: web.Request) -> web.StreamResponse:

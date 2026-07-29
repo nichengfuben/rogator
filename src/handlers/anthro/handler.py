@@ -40,6 +40,7 @@ from handlers.anthro.normalize import (
     _normalize_anthropic_tools,
 )
 from handlers.anthro.stream_core import _stream_anthropic
+from state import QueueFullError, tracked_request
 
 logger = get_logger("rogator")
 
@@ -82,39 +83,43 @@ async def _emit_anthropic_handler_stream_error(
 
 
 async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None):
-    resp = web.StreamResponse(
-        status=200,
-        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
-                 "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
-    await resp.prepare(request)
-    disconnected = [False]
-    msg_id = _gen_msg_id()
     try:
-        block_idx, block_type, _full_answer, early_return, pending_tc_count, all_tool_calls, usage_tracker = await _stream_anthropic(
-            resp, state, messages, model, tools, req_id, disconnected, protocol_options,
-            msg_id=msg_id,
-        )
-    except asyncio.CancelledError:
-        logger.info("Anthropic stream cancelled during shutdown %s", req_id)
-        raise
-    except UpstreamTimeoutError as e:
-        logger.warning("Anthropic stream upstream timeout (uncaught path) %s: %s", req_id, e)
-        await _emit_anthropic_handler_stream_error(resp, req_id, e, disconnected, error_type="timeout")
-        return resp
-    except Exception as e:
-        logger.error("Anthropic stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
-        await _emit_anthropic_handler_stream_error(resp, req_id, e, disconnected)
-        return resp
-    if disconnected[0] or early_return:
-        logger.info("Anthropic client disconnected or early return %s", req_id)
-        return resp
-    await _send_post_stream(
-        resp, block_type, block_idx, all_tool_calls, disconnected,
-        already_sent_tc_count=pending_tc_count,
-        usage=usage_tracker.anthropic_message_delta_usage,
-    )
-    return resp
+        async with tracked_request(state, req_id):
+            resp = web.StreamResponse(
+                status=200,
+                headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+                         "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+            )
+            await resp.prepare(request)
+            disconnected = [False]
+            msg_id = _gen_msg_id()
+            try:
+                block_idx, block_type, _full_answer, early_return, pending_tc_count, all_tool_calls, usage_tracker = await _stream_anthropic(
+                    resp, state, messages, model, tools, req_id, disconnected, protocol_options,
+                    msg_id=msg_id,
+                )
+            except asyncio.CancelledError:
+                logger.info("Anthropic stream cancelled during shutdown %s", req_id)
+                raise
+            except UpstreamTimeoutError as e:
+                logger.warning("Anthropic stream upstream timeout (uncaught path) %s: %s", req_id, e)
+                await _emit_anthropic_handler_stream_error(resp, req_id, e, disconnected, error_type="timeout")
+                return resp
+            except Exception as e:
+                logger.error("Anthropic stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
+                await _emit_anthropic_handler_stream_error(resp, req_id, e, disconnected)
+                return resp
+            if disconnected[0] or early_return:
+                logger.info("Anthropic client disconnected or early return %s", req_id)
+                return resp
+            await _send_post_stream(
+                resp, block_type, block_idx, all_tool_calls, disconnected,
+                already_sent_tc_count=pending_tc_count,
+                usage=usage_tracker.anthropic_message_delta_usage,
+            )
+            return resp
+    except QueueFullError as exc:
+        return handler_error_response(exc, label="Anthropic stream")
 
 
 async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse:
