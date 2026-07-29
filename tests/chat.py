@@ -20,13 +20,10 @@ if __package__ in {None, ""}:
         if s not in sys.path:
             sys.path.insert(0, s)
     import path_setup  # noqa: F401
-    from core.transport.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
-    from core.crypto.crypto import build_headers, build_login_headers, hash_password
-    from core.transport.sse import parse_sse_event
-else:
-    from ..core.transport.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
-    from ..core.crypto.crypto import build_headers, build_login_headers, hash_password
-    from ..core.transport.sse import parse_sse_event
+
+from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
+from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
+from upstream.qwen.chat.sse import parse_sse_event
 
 
 def get_credentials() -> Tuple[str, str]:

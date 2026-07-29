@@ -34,14 +34,14 @@ async def _upload_base64_images(state, session, image_uris: List[str]) -> List[A
     return files
 
 
-async def _upload_remote_images(state, session, image_urls: List[str]) -> List[Any]:
+async def _upload_remote_media(state, session, media_urls: List[str]) -> List[Any]:
     files: List[Any] = []
-    for image_url in image_urls:
+    for media_url in media_urls:
         try:
-            _, image_obj = await state.client.upload_file_from_url(session, image_url)
-            files.append(image_obj)
+            _, media_obj = await state.client.upload_file_from_url(session, media_url)
+            files.append(media_obj)
         except Exception as e:
-            logger.debug("Remote image upload failed: %s", e)
+            logger.debug("Remote media upload failed: %s", e)
     return files
 
 
@@ -59,11 +59,11 @@ async def _upload_text_attachment(
 
 
 async def _collect_uploaded_files(
-    state, session, messages, image_uris, image_urls, filename, file_bytes,
+    state, session, messages, image_uris, media_urls, filename, file_bytes,
 ) -> List[Any]:
     files: List[Any] = []
     files.extend(await _upload_base64_images(state, session, image_uris))
-    files.extend(await _upload_remote_images(state, session, image_urls))
+    files.extend(await _upload_remote_media(state, session, media_urls))
     files.extend(await _upload_text_attachment(state, session, filename, file_bytes))
     return files
 
@@ -89,7 +89,7 @@ async def _prepare_stream(
         raise TokenExpiredError("No valid session available")
 
     image_uris = state.client.extract_base64_images(messages)
-    image_urls = state.client.extract_image_urls(messages)
+    media_urls = state.client.extract_remote_media_urls(messages)
     user_system_prompt, messages = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
     injected = inject_fncall_for_request(
@@ -107,7 +107,7 @@ async def _prepare_stream(
     final_messages = injected
     send_text, filename, file_bytes = state.splitter.split(full_content)
     files = await _collect_uploaded_files(
-        state, session, messages, image_uris, image_urls, filename, file_bytes,
+        state, session, messages, image_uris, media_urls, filename, file_bytes,
     )
     final_messages[0]["content"] = send_text
     chat_id = await state.client.create_chat(session, model)

@@ -47,8 +47,11 @@ warn_if_config_version_mismatch(user_config_path(), logger)
 from handlers import get_state, setup_routes
 from handlers.fncall_inject import prompt_dump_dir
 from server.records.response_record import response_dump_dir
-from server.client.session_store import CLEANUP_INTERVAL
+from upstream.qwen.chat.store import CLEANUP_INTERVAL
+from core.registry import load_upstreams
 from state import AppState
+
+load_upstreams()
 
 if _LOG_FILE is not None:
     logger.info("file logging enabled path=%s", _LOG_FILE)
@@ -121,6 +124,7 @@ def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: i
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
     logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)
     logger.info("  Access log  : %s", CONFIG.access_log)
+    logger.info("  Models refresh: every %ds", int(CONFIG.models_refresh_interval))
     logger.info("  Cleanup     : background prelogin + %ds session maintenance", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)

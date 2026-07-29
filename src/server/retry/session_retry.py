@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable, Opti
 
 from server.config import CONFIG
 from server.formats import PayloadTooLargeError, TokenExpiredError, UpstreamTimeoutError
-from server.client.session_store import mask_username
+from upstream.qwen.chat.store import mask_username
 
 if TYPE_CHECKING:
     from state import AppState

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from contextlib import aclosing
 from typing import Any, Dict, List, Optional, Tuple
 
 from server.formats import (
@@ -11,14 +9,12 @@ from server.formats import (
     UpstreamTimeoutError,
     _fix_tool_call_id,
     log_qwen_upstream_usage,
-    should_emit_anthropic_message_start,
 )
 from server.records.response_record import record_raw_response
-from server.retry import stream_with_session_retry
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
-from handlers.openai import _chat_once
+from handlers.anthro.stream_content import _process_anthropic_content_events, _stream_event_loop
 from handlers.anthro.events import (
     AnthropicStreamState,
     _close_block,
@@ -28,7 +24,6 @@ from handlers.anthro.events import (
     expected_arguments_for_stream_tool,
     stream_result_tuple,
 )
-from handlers.anthro.stream_content import _process_anthropic_content_events
 from handlers.anthro.stream_tools import (
     _emit_ready_tool_calls,
     _flush_open_stream_tool,
@@ -36,14 +31,6 @@ from handlers.anthro.stream_tools import (
 )
 
 logger = get_logger("rogator")
-
-
-async def _make_anthropic_chat_stream(state, messages, model, tools, req_id, protocol_options):
-    async for event in _chat_once(
-        state, messages, model, tools, req_id, protocol_options=protocol_options,
-        prompt_api="anthropic",
-    ):
-        yield event
 
 
 async def _ensure_anthropic_message_start(
@@ -266,64 +253,6 @@ def _reconcile_tool_calls(state: AnthropicStreamState) -> None:
             state.pending_tc_count,
             min(len(state.all_tool_calls), state.stream_tool_blocks_sent),
         )
-
-
-async def _stream_event_loop(
-    resp,
-    state_obj,
-    messages,
-    model,
-    tools,
-    req_id,
-    disconnected,
-    protocol_options,
-    msg_id,
-    stream_state: AnthropicStreamState,
-    parser,
-    usage_tracker,
-    raw_recorder,
-) -> None:
-    async with aclosing(
-        stream_with_session_retry(req_id, state_obj, lambda: _make_anthropic_chat_stream(
-            state_obj, messages, model, tools, req_id, protocol_options,
-        )),
-    ) as event_stream:
-        async for event in event_stream:
-            if disconnected[0]:
-                break
-            etype = event.get("type")
-            if etype == "prompt_meta":
-                usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
-                await _ensure_anthropic_message_start(
-                    resp, model, msg_id, usage_tracker, stream_state, disconnected,
-                )
-                continue
-
-            usage_tracker.ingest_event(event)
-            raw_recorder.ingest_event(event)
-
-            content = event.get("content", "")
-            if content and etype in ("thinking", "answer"):
-                usage_tracker.add_output_chars(len(content))
-
-            if not stream_state.message_started:
-                if etype in ("response_created",):
-                    continue
-                if should_emit_anthropic_message_start(event, False) or etype in ("thinking", "answer"):
-                    await _ensure_anthropic_message_start(
-                        resp, model, msg_id, usage_tracker, stream_state, disconnected,
-                    )
-                    to_process = stream_state.deferred_content + [event]
-                    stream_state.deferred_content = []
-                else:
-                    continue
-            else:
-                to_process = [event]
-
-            if not await _process_anthropic_content_events(
-                resp, to_process, parser, stream_state, disconnected,
-            ):
-                break
 
 
 async def _complete_anthropic_stream(

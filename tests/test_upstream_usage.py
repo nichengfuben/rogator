@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from core.transport.sse import parse_sse_event
+from upstream.qwen.chat.sse import parse_sse_event
 from server.formats import (
     UpstreamUsageTracker,
     build_openai_chunk,

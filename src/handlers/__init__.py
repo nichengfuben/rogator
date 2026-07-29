@@ -143,222 +143,26 @@ def get_state() -> AppState:
 
 
 # ============================================================
-# Health / Admin handlers
-# ============================================================
-
-async def health_handler(request: web.Request) -> web.Response:
-    state = get_state()
-    return _json_response({
-        "status": "shutting_down" if state.is_shutting_down else "ok",
-        "platform": "rogator",
-        "timestamp": int(__import__("time").time()),
-    })
-
-
-async def list_models_handler(request: web.Request) -> web.Response:
-    from server.model.model_catalog import build_openai_models_list
-
-    state = get_state()
-    return _json_response({
-        "object": "list",
-        "data": build_openai_models_list(state._models),
-    })
-
-
-async def anthropic_list_models_handler(request: web.Request) -> web.Response:
-    from server.model.model_catalog import model_context_length
-
-    state = get_state()
-    now = int(__import__("time").time())
-    ctx = model_context_length()
-    return _json_response({
-        "type": "list",
-        "data": [
-            {
-                "type": "model",
-                "id": m,
-                "display_name": m,
-                "created_at": now,
-                "context_length": ctx,
-            }
-            for m in state._models
-        ],
-        "has_more": False,
-    })
-
-
-async def anthropic_root_handler(request: web.Request) -> web.Response:
-    return web.Response(
-        status=200,
-        headers={
-            "Content-Type": "application/json",
-            "Anthropic-Version": "2023-06-01",
-        },
-        text=json.dumps({
-            "type": "message",
-            "version": "2023-06-01",
-            "status": "ok",
-            "endpoints": ["/v1/messages", "/anthropic/v1/messages"],
-        }),
-    )
-
-
-async def count_tokens_handler(request: web.Request) -> web.Response:
-    """估算 Anthropic ``POST /v1/messages/count_tokens`` 的 input_tokens。
-
-    按 inject 后 prompt 字符 // 3 估算，与正式对话上游 usage 口径更接近。
-    正式对话的 input/output 仍以 chat.qwen.ai 上游 usage 为准。
-    """
-    try:
-        body = await read_request_json(request)
-    except ClientDisconnectedError:
-        logger.info("Client disconnected while reading body from %s", request.remote)
-        return client_disconnected_response()
-    except (json.JSONDecodeError, ValueError):
-        return _json_response({"input_tokens": 0})
-    state = get_state()
-    model = str(body.get("model") or state.model)
-    try:
-        from handlers.anthro.normalize import _build_anthropic_protocol_options
-
-        protocol_options = _build_anthropic_protocol_options(body)
-    except ValueError:
-        protocol_options = None
-    try:
-        tokens = estimate_anthropic_injected_input_tokens(
-            body,
-            protocol=state.protocol,
-            model=model,
-            protocol_options=protocol_options,
-        )
-    except Exception:
-        logger.debug("count_tokens inject estimate failed, falling back to raw body", exc_info=True)
-        tokens = estimate_anthropic_request_input_tokens(body)
-    return _json_response({"input_tokens": tokens})
-
-
-def _estimate_tokens_from_chars(total_chars: int) -> int:
-    from server.model.token_estimate import estimate_tokens_from_char_count
-
-    return estimate_tokens_from_char_count(total_chars)
-
-
-async def audio_speech_handler(request: web.Request) -> web.Response:
-    """OpenAI 兼容的 TTS 端点，委托给 QwenClient.synthesize_tts。"""
-    state = get_state()
-    try:
-        body = await read_request_json(request)
-    except ClientDisconnectedError:
-        logger.info("Client disconnected while reading body from %s", request.remote)
-        return client_disconnected_response()
-    except (json.JSONDecodeError, ValueError):
-        return _error_response(400, "Invalid JSON body")
-    text = body.get("input", "")
-    if not text:
-        return _error_response(400, "Missing required field: input")
-    model = body.get("model") or state.model
-    session = await state.client.get_valid_session()
-    if not session:
-        return _error_response(503, "No valid Qwen session available")
-    local_path = await state.client.synthesize_tts(text, session.token, model=model)
-    if not local_path:
-        return _error_response(502, "TTS synthesis failed")
-    from pathlib import Path
-    audio_bytes = Path(local_path).read_bytes()
-    return web.Response(body=audio_bytes, content_type="audio/wav")
-
-
-async def images_generations_handler(request: web.Request) -> web.Response:
-    """OpenAI 兼容的图片生成端点（图生图/图生视频前置帧），委托给 QwenClient.generate_video。"""
-    state = get_state()
-    try:
-        body = await read_request_json(request)
-    except ClientDisconnectedError:
-        logger.info("Client disconnected while reading body from %s", request.remote)
-        return client_disconnected_response()
-    except (json.JSONDecodeError, ValueError):
-        return _error_response(400, "Invalid JSON body")
-    prompt = body.get("prompt", "")
-    image_url = body.get("image") or body.get("image_url", "")
-    if not prompt or not image_url:
-        return _error_response(400, "Missing required fields: prompt, image")
-    model = body.get("model") or state.model
-    size = body.get("size", "16:9")
-    session = await state.client.get_valid_session()
-    if not session:
-        return _error_response(503, "No valid Qwen session available")
-    result = await state.client.generate_video(
-        prompt, image_url, session.token, session.user_id, model=model, size=size,
-    )
-    if not result.get("success"):
-        return _error_response(502, result.get("error", "Generation failed"))
-    return _json_response({
-        "created": int(__import__("time").time()),
-        "data": [{"url": result.get("video_url", ""), "local_path": result.get("local_path", "")}],
-    })
-
-
-async def capabilities_handler(request: web.Request) -> web.Response:
-    from server.formats import CAPABILITIES
-    return _json_response({
-        "platform": "rogator",
-        "capabilities": CAPABILITIES,
-        "protocol": "entml",
-    })
-
-
-async def status_handler(request: web.Request) -> web.Response:
-    state = get_state()
-    return _json_response({
-        "status": "shutting_down" if state.is_shutting_down else "running",
-        "sessions": {"total": state.client.session_count},
-        "scheduler": {"pending": state.scheduler.pending, "active": state.tracker.count},
-        "models": {"count": len(state._models), "default": state.model},
-    })
-
-
-async def admin_refresh_models_handler(request: web.Request) -> web.Response:
-    state = get_state()
-    await state.refresh_models()
-    return _json_response({
-        "status": "ok",
-        "models": state._models,
-        "count": len(state._models),
-    })
-
-
-async def admin_switch_session_handler(request: web.Request) -> web.Response:
-    state = get_state()
-    old = (
-        state.client.current_session.username[:6]
-        if state.client.current_session else "none"
-    )
-    new = await state.client.switch_to_next()
-    return _json_response({
-        "status": "ok",
-        "previous": old,
-        "current": new.username[:6] if new else "none",
-    })
-
-
-async def admin_sessions_handler(request: web.Request) -> web.Response:
-    state = get_state()
-    return _json_response({
-        "sessions": [
-            {"username": s.username[:6] + "***", "valid": s.is_valid}
-            for s in state.client._sessions
-        ],
-        "total": state.client.session_count,
-    })
-
-
-# ============================================================
 # 路由
 # ============================================================
 
 def setup_routes(app: web.Application) -> None:
     from handlers.anthro import anthropic_messages_handler
     from handlers.openai import openai_chat_handler
+    from handlers.platform_handlers import (
+        admin_refresh_models_handler,
+        admin_sessions_handler,
+        admin_switch_session_handler,
+        anthropic_list_models_handler,
+        anthropic_root_handler,
+        audio_speech_handler,
+        capabilities_handler,
+        count_tokens_handler,
+        health_handler,
+        images_generations_handler,
+        list_models_handler,
+        status_handler,
+    )
 
     routes = [
         ("GET", "/", health_handler),

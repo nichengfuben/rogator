@@ -22,7 +22,7 @@ Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 An
 
 ### 1. 准备账号
 
-账号从本地 `accounts.csv` 加载（`src/accounts.py` / `accounts.csv` 均已 gitignore）。CSV 列格式：
+账号从 `persist/qwen/accounts.csv` 加载（由 `upstream.qwen.accounts` 读取；根目录旧 `accounts.csv` 仅作兼容回退）。CSV 列格式：
 
 ```csv
 email,password,name
@@ -64,6 +64,9 @@ port = 8932
 host = "0.0.0.0"
 prelogin = 3          # 启动时预登录账号数；运行中不足时自动补登
 login_interval = 15.0 # 连续预登录之间的间隔（秒）
+
+[models]
+refresh_interval = 3600.0  # 后台定时刷新模型列表（秒）
 
 [retry]
 max_retry_on_error = 3   # 限流/过期等可恢复错误时的换号重试次数
@@ -227,12 +230,10 @@ python scripts/build_prompt_preview.py
 
 | 文件 | 说明 |
 |------|------|
-| `persist/sessions.json` | 会话池、`current_index`、`blocked_accounts` |
-| `persist/login_history.json` | 各账号最近一次成功登录时间（UTC+8） |
-| `persist/model_entml_thinking.jsonl` | 模型 → entml 思考映射（可提交 git） |
-| `persist/qwen/models.json` | 模型列表缓存 |
-
-首次启动若存在旧路径 `persist/qwen/sessions.json`，会自动迁移至 `persist/sessions.json`。
+| `persist/qwen/sessions.json` | 会话池、`current_index`、`blocked_accounts` |
+| `persist/qwen/login_history.json` | 各账号最近一次成功登录时间（UTC+8） |
+| `persist/model_registry.jsonl` | API 外键 → 上游内键 → entml 开关（可提交 git） |
+| `persist/models.json` | 上游模型列表与能力 meta 缓存 |
 
 换号重试逻辑见 `server/session_retry.py`：捕获 `TokenExpiredError`（含限流）→ 封禁当前账号 → 切换下一可用 session → 最多重试 `max_retry_on_error` 次。
 
@@ -248,19 +249,23 @@ python scripts/build_prompt_preview.py
 ```
 .
 ├── main.py                 # 入口：aiohttp 生命周期、预登录
-├── config.toml             # 本地运行时配置（gitignore）
-├── template/config.toml    # 配置模板（提交仓库）
-├── state.py                # AppState、RequestScheduler、长文本分割
-├── accounts.csv            # 本地账号 CSV（gitignore，需自行创建）
+├── config.toml             # 全局运行时配置（含 [upstream].enabled，gitignore）
+├── configs/                # 各上游专属配置（qwen.toml、deepseek.toml 等）
+├── template/
+│   ├── config.toml         # 全局配置模板
+│   └── configs/            # 上游配置模板
 ├── src/
 │   ├── path_setup.py       # 注入 src/ 与根目录到 sys.path
-│   ├── accounts.py           # 从 accounts.csv 加载账号
-│   ├── handlers/           # OpenAI / Anthropic 路由
-│   └── server/             # Qwen 客户端、配置、格式转换
-├── persist/                # 运行时数据（部分 gitignore）
+│   ├── state.py            # AppState、调度器；经 core 选上游客户端
+│   ├── core/               # 平台核心：registry / dispatch / 共享错误与传输
+│   ├── upstream/           # 多上游实现（qwen/…）
+│   ├── handlers/           # OpenAI / Anthropic 协议适配
+│   └── server/             # 配置、格式、模型 registry、records、retry
+├── persist/
+│   ├── model_registry.jsonl
+│   └── qwen/               # 账号、sessions、login_history 等
 ├── scripts/
-│   └── build_prompt_preview.py
-└── tests/                  # pytest 单元测试（含 conftest.py）
+└── tests/
 ```
 
 ## 测试

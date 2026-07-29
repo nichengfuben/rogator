@@ -135,7 +135,17 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
         return _error_response(400, "Invalid JSON body")
     raw_messages = body.get("messages", [])
     system = body.get("system")
-    model = body.get("model", state.model)
+    requested_model = body.get("model", state.model)
+    try:
+        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
+
+        model = resolve_handler_model(state, str(requested_model))
+    except Exception as exc:
+        from server.model.model_registry import ModelResolveError
+
+        if isinstance(exc, ModelResolveError):
+            return model_resolve_error_response(exc)
+        raise
     stream = body.get("stream", False)
     tools = _normalize_anthropic_tools(body.get("tools", []) or [])
     messages = _normalize_anthropic_messages(raw_messages)

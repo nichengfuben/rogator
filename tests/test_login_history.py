@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from accounts import Account
-from server.client.login_history import LoginHistoryStore, format_utc8
+from upstream.qwen.accounts import Account
+from server.records.login_history import LoginHistoryStore, format_utc8
 
 
 def _accounts(n: int, *, prefix: str = "u") -> list[Account]:
@@ -24,7 +24,7 @@ class TestLoginHistoryStore(unittest.TestCase):
     def test_record_flush_persists_utc8_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "login_history.json"
-            with patch("server.client.login_history.LOGIN_HISTORY_FILE", str(path)):
+            with patch("server.records.login_history.LOGIN_HISTORY_FILE", str(path)):
                 store = LoginHistoryStore()
                 ts = 1722239280.0
                 store.record("a@test.com", at=ts)
@@ -39,7 +39,7 @@ class TestLoginHistoryStore(unittest.TestCase):
     def test_flush_skips_when_clean(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "login_history.json"
-            with patch("server.client.login_history.LOGIN_HISTORY_FILE", str(path)):
+            with patch("server.records.login_history.LOGIN_HISTORY_FILE", str(path)):
                 store = LoginHistoryStore()
                 store.flush()
                 self.assertFalse(path.exists())
@@ -47,7 +47,7 @@ class TestLoginHistoryStore(unittest.TestCase):
 
 class TestPickAccount(unittest.TestCase):
     def setUp(self) -> None:
-        self._patch = patch("server.client.login_history.LOGIN_HISTORY_FILE", "/nonexistent")
+        self._patch = patch("server.records.login_history.LOGIN_HISTORY_FILE", "/nonexistent")
         self._patch.start()
         self.store = LoginHistoryStore()
 

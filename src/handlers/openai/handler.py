@@ -353,7 +353,17 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     except json.JSONDecodeError:
         return _error_response(400, "Invalid JSON body")
     messages = body.get("messages", [])
-    model = body.get("model", state.model)
+    requested_model = body.get("model", state.model)
+    try:
+        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
+
+        model = resolve_handler_model(state, str(requested_model))
+    except Exception as exc:
+        from server.model.model_registry import ModelResolveError
+
+        if isinstance(exc, ModelResolveError):
+            return model_resolve_error_response(exc)
+        raise
     stream = body.get("stream", False)
     tools = body.get("tools", [])
     if not messages:

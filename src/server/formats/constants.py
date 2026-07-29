@@ -11,11 +11,11 @@ MODELS_FETCH_TIMEOUT: float = 60.0
 LOGIN_TIMEOUT: float = 30.0
 MAX_REQUEST_RESTARTS: int = 3
 RESTART_DELAY: float = 1.0
-DEFAULT_MODEL: str = "qwen3.7-max"
+DEFAULT_MODEL: str = "qwen3-7-max"
 TOKEN_EXPIRE_HOURS: int = 12
 TOKEN_EXPIRE_SECONDS: int = TOKEN_EXPIRE_HOURS * 3600
+MODELS_CACHE_FILE: str = "persist/models.json"
 DATA_DIR: str = "persist/qwen"
-MODELS_CACHE_FILE: str = f"{DATA_DIR}/models.json"
 SHUTDOWN_CANCEL_GRACE: float = 0.3
 SHUTDOWN_WAIT_IDLE_TIMEOUT: float = 3.0
 SHUTDOWN_TOTAL_TIMEOUT: float = 8.0
@@ -30,32 +30,32 @@ DEFAULT_MODELS: List[str] = [
     "qwen3.6-plus",
     "qwen3.5-plus",
     "qwen3.5-397b-a17b",
-    "qwen3-max",
     "qwen3-max-2026-01-23",
     "qwen3-235b-a22b",
-    "qwen3-30b-a3b",
     "qwen3-vl-30b-a3b",
     "qwen3-vl-32b",
     "qwen3-vl-plus",
     "qwen3-coder-plus",
-    "qwen3-coder-30b-a3b-instruct",
-    "qwen3-omni-flash",
     "qwen3-omni-flash-2025-12-01",
-    "qwen2.5-72b-instruct",
-    "qwen2.5-vl-32b-instruct",
-    "qwen2.5-omni-7b",
-    "qwen2.5-coder-32b-instruct",
-    "qwen-max-latest",
     "qwen-plus-2025-07-28",
-    "qwen-plus-2025-09-11",
-    "qwen-plus-2025-01-25",
-    "qwen-turbo-2025-02-11",
 ]
 CAPABILITIES: Dict[str, bool] = {
-    "chat": True, "vision": True, "thinking": True,
+    "chat": True, "vision": True,
     "search": True, "tools": True, "native_tools": True,
     "count_tokens": True, "image_gen": True, "tts": True,
 }
+# 256K = 256 × 1024 tokens；/v1/models 无上游元数据时的 per-model 默认上下文
+DEFAULT_MODEL_CONTEXT_LENGTH: int = 256 * 1024
+# 全模态能力底；增量拉取时上游有的键覆盖（thinking 不进持久化底）
+DEFAULT_MODEL_CAPABILITIES: Dict[str, bool] = {
+    **CAPABILITIES,
+    "document": True,
+    "video": True,
+    "audio": True,
+}
+# 持久化/内存元数据用的能力底（thinking 由 /v1/models 组装时现场补 true）
+PERSISTED_MODEL_CAPABILITIES: Dict[str, bool] = dict(DEFAULT_MODEL_CAPABILITIES)
+DEFAULT_MODEL_MODALITY: List[str] = ["text", "image", "video", "audio"]
 KEEPALIVE_INTERVAL: float = 5.0
 
 
