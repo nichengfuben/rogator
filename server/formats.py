@@ -420,14 +420,10 @@ class UpstreamUsageTracker:
 
     @property
     def anthropic_message_start_usage(self) -> Dict[str, int]:
-        """Deprecated: use ``anthropic_message_start_usage_for``."""
-        return self.anthropic_message_start_usage_for(0)
-
-    def anthropic_message_start_usage_for(self, estimated_input_tokens: int) -> Dict[str, int]:
-        """Anthropic message_start：input 用估算，output 用上游快照。"""
+        """Anthropic message_start：上游 input/output 快照。"""
         out = self._usage["completion_tokens"]
         return {
-            "input_tokens": max(0, estimated_input_tokens),
+            "input_tokens": self._usage["prompt_tokens"],
             "output_tokens": max(1, out) if self._seen else 0,
         }
 
@@ -436,26 +432,11 @@ class UpstreamUsageTracker:
         """Anthropic message_delta：官方仅含累计 output_tokens（上游）。"""
         return {"output_tokens": self._usage["completion_tokens"]}
 
-    def client_openai_usage(self, estimated_input_tokens: int) -> Optional[Dict[str, Any]]:
-        """OpenAI usage：prompt 用估算，completion 用上游；无上游时不返回。"""
-        if not self._seen:
-            return None
-        prompt = max(0, estimated_input_tokens)
-        completion = self._usage["completion_tokens"]
-        result: Dict[str, Any] = {
-            "prompt_tokens": prompt,
-            "completion_tokens": completion,
-            "total_tokens": prompt + completion,
-        }
-        if self._cached_tokens:
-            result["prompt_tokens_details"] = {"cached_tokens": self._cached_tokens}
-        return result
-
     def openai_stream_usage(self) -> Optional[Dict[str, Any]]:
-        """Deprecated: use ``client_openai_usage`` with estimated input."""
+        """流式 finish chunk：无上游用量时不伪造零值。"""
         if not self._seen:
             return None
-        return dict(self.openai_usage)
+        return self.openai_usage
 
 
 def _build_openai_message(

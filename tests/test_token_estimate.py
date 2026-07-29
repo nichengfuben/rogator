@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""count_tokens 与 input/output token 策略测试。"""
+"""count_tokens 预检估算测试（正式对话 usage 见 test_upstream_usage）。"""
 
 import json
 import unittest
@@ -52,33 +52,29 @@ class TestTokenEstimate(unittest.TestCase):
         self.assertEqual(estimate_openai_request_input_tokens(body), raw_len // 3)
 
 
-class TestClientUsageMerge(unittest.TestCase):
-    def test_output_from_upstream_input_from_estimate(self) -> None:
+class TestMessageUsageUsesUpstreamInput(unittest.TestCase):
+    def test_openai_usage_prompt_from_upstream(self) -> None:
         tracker = UpstreamUsageTracker()
         tracker.ingest_event({
             "type": "usage",
             "data": {"input_tokens": 9999, "output_tokens": 42},
         })
-        usage = tracker.client_openai_usage(estimated_input_tokens=100)
+        usage = tracker.openai_stream_usage()
         self.assertIsNotNone(usage)
         assert usage is not None
-        self.assertEqual(usage["prompt_tokens"], 100)
+        self.assertEqual(usage["prompt_tokens"], 9999)
         self.assertEqual(usage["completion_tokens"], 42)
-        self.assertEqual(usage["total_tokens"], 142)
 
-    def test_anthropic_message_start_uses_estimate_and_upstream_output(self) -> None:
+    def test_anthropic_message_start_both_from_upstream(self) -> None:
         tracker = UpstreamUsageTracker()
         tracker.ingest_event({
             "type": "usage",
             "data": {"input_tokens": 500, "output_tokens": 7},
         })
-        start = tracker.anthropic_message_start_usage_for(estimated_input_tokens=50)
-        self.assertEqual(start, {"input_tokens": 50, "output_tokens": 7})
-
-    def test_message_delta_output_only_from_upstream(self) -> None:
-        tracker = UpstreamUsageTracker()
-        tracker.ingest_event({"type": "usage", "data": {"output_tokens": 15}})
-        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 15})
+        self.assertEqual(tracker.anthropic_message_start_usage, {
+            "input_tokens": 500,
+            "output_tokens": 7,
+        })
 
 
 if __name__ == "__main__":

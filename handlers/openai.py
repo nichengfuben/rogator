@@ -42,7 +42,6 @@ from server.formats import (
     openai_stream_include_usage,
     read_request_json,
 )
-from server.token_estimate import estimate_openai_request_input_tokens
 from state import AppState, QueueFullError
 
 logger = get_logger("rogator")
@@ -331,10 +330,7 @@ async def _chat_once(
         yield event
 
 
-async def _process_openai_non_stream(
-    state, messages, model, req_id, tools, protocol_options=None, *,
-    estimated_input_tokens: int = 0,
-):
+async def _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options=None):
     """非流式处理 - 含换号重试"""
     async def _run():
         response_parts = []
@@ -366,7 +362,7 @@ async def _process_openai_non_stream(
             reasoning = f"{reasoning}\n{entml_thinking}".strip() if reasoning else entml_thinking
         return build_openai_response(
             model, display_text, reasoning=reasoning, tool_calls=tool_calls,
-            usage=usage_tracker.client_openai_usage(estimated_input_tokens),
+            usage=usage_tracker.openai_stream_usage(),
         )
 
     return await run_with_session_retry(req_id, state, _run)
@@ -597,29 +593,18 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
         len(messages), model, stream, len(tools), req_level, qwen_thinking,
     )
     req_id = _gen_request_id()
-    estimated_input_tokens = estimate_openai_request_input_tokens(body)
     if not stream:
-        return await _handle_non_stream(
-            state, messages, model, req_id, tools, protocol_options,
-            estimated_input_tokens=estimated_input_tokens,
-        )
+        return await _handle_non_stream(state, messages, model, req_id, tools, protocol_options)
     return await _handle_stream(
         request, state, messages, model, req_id, tools, protocol_options,
         include_usage=openai_stream_include_usage(body),
-        estimated_input_tokens=estimated_input_tokens,
     )
 
 
-async def _handle_non_stream(
-    state, messages, model, req_id, tools, protocol_options=None, *,
-    estimated_input_tokens: int = 0,
-):
+async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
     try:
         result = await state.scheduler.submit(
-            lambda: _process_openai_non_stream(
-                state, messages, model, req_id, tools, protocol_options,
-                estimated_input_tokens=estimated_input_tokens,
-            ))
+            lambda: _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options))
         return _json_response(result)
     except QueueFullError as e:
         return web.Response(status=503, text=str(e))
@@ -636,7 +621,6 @@ async def _handle_non_stream(
 async def _handle_stream(
     request, state, messages, model, req_id, tools, protocol_options=None, *,
     include_usage: bool = False,
-    estimated_input_tokens: int = 0,
 ):
     resp = web.StreamResponse(
         status=200,
@@ -823,7 +807,7 @@ async def _handle_stream(
         await _send_stream_finish(
             resp, model, chunk_id, all_tool_calls, disconnected,
             already_sent_tc_count=pending_tc_index,
-            usage=usage_tracker.client_openai_usage(estimated_input_tokens),
+            usage=usage_tracker.openai_stream_usage(),
             include_usage=include_usage,
         )
         return resp

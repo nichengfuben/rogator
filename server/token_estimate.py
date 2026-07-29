@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Token 估算：输入 len//3；输出 token 由上游 usage 提供。"""
+"""Token 估算：仅用于 ``POST /v1/messages/count_tokens`` 预检（无上游可调用）。"""
 
 import json
 from typing import Any, Dict, List

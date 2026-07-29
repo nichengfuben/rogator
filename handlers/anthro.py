@@ -30,7 +30,6 @@ from server.formats import (
     read_request_json,
     should_emit_anthropic_message_start,
 )
-from server.token_estimate import estimate_anthropic_request_input_tokens
 from state import AppState, QueueFullError
 from echotools.fncall import FncallStreamParser
 
@@ -473,7 +472,7 @@ async def _close_streaming_tool_block(
 
 async def _stream_anthropic(
     resp, state, messages, model, tools, req_id, disconnected, protocol_options=None,
-    *, msg_id: str, estimated_input_tokens: int = 0,
+    *, msg_id: str,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
     block_idx = -1
     block_type: Optional[str] = None
@@ -622,13 +621,7 @@ async def _stream_anthropic(
                         if should_emit_anthropic_message_start(event, False):
                             await _emit_anthropic_event(
                                 resp,
-                                _message_start_event(
-                                    model,
-                                    msg_id,
-                                    usage_tracker.anthropic_message_start_usage_for(
-                                        estimated_input_tokens,
-                                    ),
-                                ),
+                                _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
                                 disconnected,
                             )
                             message_started = True
@@ -784,11 +777,7 @@ async def _stream_anthropic(
         if not message_started and not disconnected[0]:
             await _emit_anthropic_event(
                 resp,
-                _message_start_event(
-                    model,
-                    msg_id,
-                    usage_tracker.anthropic_message_start_usage_for(estimated_input_tokens),
-                ),
+                _message_start_event(model, msg_id, usage_tracker.anthropic_message_start_usage),
                 disconnected,
             )
             message_started = True
@@ -932,27 +921,20 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
         len(messages), model, stream, len(tools), req_level, qwen_thinking,
     )
     req_id = _gen_request_id()
-    estimated_input_tokens = estimate_anthropic_request_input_tokens(body)
     if not stream:
         return await _handle_non_stream(
             state, messages, model, req_id, tools, protocol_options,
-            estimated_input_tokens=estimated_input_tokens,
         )
     return await _handle_stream(
         request, state, messages, model, req_id, tools, protocol_options,
-        estimated_input_tokens=estimated_input_tokens,
     )
 
 
-async def _handle_non_stream(
-    state, messages, model, req_id, tools, protocol_options=None, *,
-    estimated_input_tokens: int = 0,
-):
+async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
     try:
         result = await state.scheduler.submit(
             lambda: _process_openai_non_stream(
                 state, messages, model, req_id, tools, protocol_options,
-                estimated_input_tokens=estimated_input_tokens,
             )
         )
         return _json_response(convert_to_anthropic(result))
@@ -968,10 +950,7 @@ async def _handle_non_stream(
         return _error_response(500, str(e))
 
 
-async def _handle_stream(
-    request, state, messages, model, req_id, tools, protocol_options=None, *,
-    estimated_input_tokens: int = 0,
-):
+async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None):
     resp = web.StreamResponse(
         status=200,
         headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
@@ -983,7 +962,6 @@ async def _handle_stream(
     block_idx, block_type, _full_answer, early_return, pending_tc_count, all_tool_calls, usage_tracker = await _stream_anthropic(
         resp, state, messages, model, tools, req_id, disconnected, protocol_options,
         msg_id=msg_id,
-        estimated_input_tokens=estimated_input_tokens,
     )
     if disconnected[0] or early_return:
         logger.info("Anthropic client disconnected or early return %s", req_id)
