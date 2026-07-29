@@ -46,6 +46,8 @@ class AppConfig:
     request_total_timeout: float
     login_timeout: float
     prelogin_timeout: float
+    shutdown_wait_active_requests: float
+    shutdown_total_timeout: float
     record_prompt: bool
     print_prompt: bool
     record_response: bool
@@ -112,6 +114,10 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         create_chat_timeout=float(_require_get(raw, "timeout", "create_chat")),
         login_timeout=float(_require_get(raw, "timeout", "login")),
         prelogin_timeout=float(_require_get(raw, "timeout", "prelogin")),
+        shutdown_wait_active_requests=float(
+            _require_get(raw, "shutdown", "wait_active_requests")
+        ),
+        shutdown_total_timeout=float(_require_get(raw, "shutdown", "total_timeout")),
         record_prompt=bool(_require_get(raw, "fncall", "record_prompt")),
         print_prompt=bool(_require_get(raw, "fncall", "print_prompt")),
         record_response=bool(_require_get(raw, "fncall", "record_response")),

@@ -69,8 +69,6 @@ APP_NAME: str = "Rogator"
 APP_VERSION: str = "2.2.1"
 APP_DESCRIPTION: str = "Qwen 长文本处理适配服务器"
 SHUTDOWN_CANCEL_GRACE: float = 0.3
-SHUTDOWN_WAIT_IDLE_TIMEOUT: float = 10.0
-SHUTDOWN_TOTAL_TIMEOUT: float = 15.0
 
 # 显示参数
 BANNER_WIDTH: int = 70
@@ -124,32 +122,9 @@ def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: i
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
     logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)
     logger.info("  Access log  : %s", CONFIG.access_log)
-    logger.info("  Cleanup     : startup + background (%ds, auto prelogin)", int(CLEANUP_INTERVAL))
+    logger.info("  Cleanup     : background prelogin + %ds session maintenance", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
-
-
-async def _prelogin_accounts(state: AppState, count: int) -> None:
-    """预登录账户并刷新模型列表。"""
-    logger.info("Prelogin %d accounts...", count)
-    try:
-        await asyncio.wait_for(
-            state.client.prelogin_accounts(count),
-            timeout=CONFIG.prelogin_timeout,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(
-            "Prelogin timed out after %ds, continuing anyway",
-            int(CONFIG.prelogin_timeout),
-        )
-    except Exception as e:
-        logger.error("Prelogin failed: %s", e)
-
-    if state.client.session_count > 0:
-        await state.refresh_models()
-        # 随机打乱 session 顺序
-        import random
-        random.shuffle(state.client._sessions)
 
 
 async def _run_server(app: web.Application, state: AppState, host: str, port: int) -> None:
@@ -181,7 +156,7 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
     finally:
         state.shutdown_event.set()
         try:
-            await asyncio.wait_for(state.shutdown(), timeout=SHUTDOWN_TOTAL_TIMEOUT)
+            await asyncio.wait_for(state.shutdown(), timeout=CONFIG.shutdown_total_timeout)
         except (asyncio.TimeoutError, Exception):
             logger.warning("Shutdown timed out or failed, stopping HTTP site")
         if site is not None:
@@ -225,7 +200,6 @@ async def main_async() -> None:
     if removed:
         logger.info("Startup cleanup: removed %d expired/invalid session(s)", len(removed))
 
-    await _prelogin_accounts(state, prelogin_count)
     state.start_background_tasks()
     _print_startup_info(state, host, port, prelogin_count)
     await _run_server(app, state, host, port)

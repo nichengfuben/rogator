@@ -86,6 +86,10 @@ request_total = 600.0
 create_chat = 15.0
 login = 30.0
 prelogin = 120.0
+
+[shutdown]
+wait_active_requests = 3.0   # 关机等待在途请求/流式（秒），超时强制 cancel
+total_timeout = 8.0            # state.shutdown 总超时（秒）
 ```
 
 监听地址、端口、预登录数量等均来自 `config.toml`（未写项取自 `template/config.toml`）。
@@ -96,7 +100,7 @@ prelogin = 120.0
 python main.py
 ```
 
-启动流程：加载/迁移会话 → 清理过期 session → 预登录至 `prelogin` 数量 → 刷新模型列表 → 监听 HTTP。
+启动流程：加载/迁移会话 → 清理过期 session → **立即监听 HTTP**（预登录在后台补至 `prelogin` 数量）→ 模型列表在首批 session 就绪后刷新。
 
 运行中后台每 60s 清理过期 session，有效数低于 `prelogin` 时自动补登（无需等待新请求）。
 
