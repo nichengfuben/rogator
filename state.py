@@ -277,7 +277,10 @@ class AppState:
                 if valid_session_count(self.client._sessions) >= target:
                     break
                 try:
-                    await asyncio.wait_for(self.shutdown_event.wait(), timeout=2.0)
+                    await asyncio.wait_for(
+                        self.shutdown_event.wait(),
+                        timeout=max(0.0, CONFIG.login_interval),
+                    )
                 except asyncio.TimeoutError:
                     continue
             if self.client.session_count > 0:
@@ -302,6 +305,10 @@ class AppState:
     async def shutdown(self) -> None:
         if getattr(self, "_shutdown_complete", False):
             return
+        logger.info(
+            "Shutdown: stopping background tasks and active requests (target=%d)...",
+            self.tracker.count,
+        )
         self._shutdown_requested = True
         self.shutdown_event.set()
         for task in self._bg_tasks:

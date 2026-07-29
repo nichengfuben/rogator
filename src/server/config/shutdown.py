@@ -3,6 +3,7 @@ from __future__ import annotations
 """跨平台优雅关机：信号、asyncio 异常过滤、遗留任务清理。"""
 
 import asyncio
+import os
 import signal
 import threading
 from typing import Any, Optional
@@ -15,11 +16,17 @@ _WIN_SHUTDOWN_SOCKET_ERRORS = frozenset({64, 10054, 995, 10038})
 _shutdown_lock = threading.Lock()
 
 
+def _force_exit_after_repeat_interrupt() -> None:
+    """第二次及以上中断：os._exit 立即终止（Windows 信号线程里 SystemExit 无效）。"""
+    logger.warning("Repeated interrupt during shutdown, forcing exit")
+    os._exit(130)
+
+
 def _request_shutdown_once(state: Any, *, source: str) -> None:
-    """中断信号：幂等置位 shutdown_event（多次 Ctrl+C 与第一次等效）。"""
+    """中断信号：首次置位 shutdown_event；重复中断强制退出。"""
     with _shutdown_lock:
         if state.shutdown_event.is_set():
-            return
+            _force_exit_after_repeat_interrupt()
         logger.info("%s received, shutting down...", source)
         state.shutdown_event.set()
 

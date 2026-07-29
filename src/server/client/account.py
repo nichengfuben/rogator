@@ -15,6 +15,7 @@ import aiohttp
 from accounts import ACCOUNTS, Account
 from core.crypto.crypto import build_headers, build_login_headers, hash_password
 from core.transport.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
+from server.client.login_history import LoginHistoryStore
 from server.client.session_store import (
     QwenSession,
     fetch_user_id,
@@ -30,10 +31,11 @@ logger = logging.getLogger("rogator")
 class SessionLoginMixin:
     _sessions: List[QwenSession]
     _current_index: int
-    _account_index: int
     _blocked_accounts: Dict[str, float]
     _lock: asyncio.Lock
     _prelogin_target: int
+    _login_interval: float
+    _login_history: LoginHistoryStore
 
     def _save_meta(self) -> List[str]: ...
 
@@ -73,6 +75,7 @@ class SessionLoginMixin:
                     qs = QwenSession(account=account, token=token, user_id=user_id or account.username[:12])
                     async with self._lock:
                         replace_or_append(self._sessions, qs)
+                    self._login_history.record(account.username)
                     self._persist_sessions()
                     logger.info("Logged in: %s (total: %d)", account.username[:6], len(self._sessions))
                     return qs
@@ -93,7 +96,8 @@ class SessionLoginMixin:
         if need <= 0:
             return
         logged = 0
-        for _ in range(need):
+        interval = max(0.0, self._login_interval)
+        for attempt in range(need):
             account = self._pick_account_for_login()
             if account is None:
                 break
@@ -104,6 +108,9 @@ class SessionLoginMixin:
                 logger.info("Prelogin account %s OK", mask_username(account.username))
             else:
                 logger.warning("Prelogin account %s failed", mask_username(account.username))
+            if interval > 0 and attempt < need - 1:
+                logger.debug("Prelogin waiting %.1fs before next login", interval)
+                await asyncio.sleep(interval)
         if logged:
             logger.info(
                 "Prelogin done: %d new, %d total ready (target=%d)",
@@ -115,24 +122,22 @@ class SessionLoginMixin:
     async def ensure_prelogin(self) -> None:
         await self.prelogin_accounts(self._prelogin_target)
 
+    def _active_usernames(self) -> set[str]:
+        return {s.username for s in self._sessions if s.is_valid and not s.is_expired()}
+
     def _pick_account_for_login(self, *, skip: Optional[set[str]] = None) -> Optional[Account]:
         if not ACCOUNTS:
             return None
         skip = skip or set()
-        active = {s.username for s in self._sessions if s.is_valid and not s.is_expired()}
-        n = len(ACCOUNTS)
-        for offset in range(n):
-            idx = (self._account_index + offset) % n
-            account = ACCOUNTS[idx]
-            if account.username in skip:
-                continue
-            if account.username in active:
-                continue
-            if self._is_account_blocked(account.username):
-                continue
-            self._account_index = (idx + 1) % n
-            return account
-        return None
+
+        def eligible(account: Account) -> bool:
+            return (
+                account.username not in skip
+                and account.username not in self._active_usernames()
+                and not self._is_account_blocked(account.username)
+            )
+
+        return self._login_history.pick_account(ACCOUNTS, eligible=eligible)
 
     def _valid_sessions(
         self,
@@ -161,6 +166,8 @@ class SessionLoginMixin:
         return selected
 
     async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[QwenSession]:
+        skip: set[str] = {exclude_username} if exclude_username else set()
+
         async with self._lock:
             self.prune_expired_sessions()
 
@@ -171,7 +178,6 @@ class SessionLoginMixin:
             if session is not None:
                 self._save_meta()
                 return session
-            skip = {exclude_username} if exclude_username else set()
             account = self._pick_account_for_login(skip=skip)
 
         if account is None:
@@ -182,7 +188,6 @@ class SessionLoginMixin:
                     return session
             return None
 
-        skip = {exclude_username} if exclude_username else set()
         skip.add(account.username)
         for _ in range(len(ACCOUNTS)):
             qs = await self.login_account(account)

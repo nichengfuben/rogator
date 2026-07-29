@@ -13,6 +13,7 @@ import aiohttp
 from core.crypto.crypto import build_headers
 from core.transport.chat_session import ChatSession
 from core.transport.routes import BASE_URL, CHAT_PATH
+from server.client.login_history import LoginHistoryStore
 from server.client.account import ModelsFetchMixin, SessionLoginMixin
 from server.client.chat import create_chat_for_session, handle_chat_error, iter_sse_events
 from core.media.tts import TtsService
@@ -52,20 +53,20 @@ class QwenClient(UploadMixin, SessionLoginMixin, ModelsFetchMixin):
         sessions, meta = load_session_store()
         self._sessions: List[QwenSession] = sessions
         self._current_index: int = meta.current_index
-        self._account_index: int = meta.account_index
         self._blocked_accounts: Dict[str, float] = dict(meta.blocked_accounts)
+        self._login_history = LoginHistoryStore()
         self._lock = asyncio.Lock()
         self._models: List[str] = list(DEFAULT_MODELS)
         self._models_fetch_time: float = 0
         self._models_cache_ttl: float = 300
         self._last_cleanup: float = 0.0
         self._prelogin_target: int = CONFIG.prelogin
+        self._login_interval: float = CONFIG.login_interval
 
     def _save_meta(self) -> List[str]:
         return save_sessions(
             self._sessions,
             current_index=self._current_index,
-            account_index=self._account_index,
             blocked_accounts=self._blocked_accounts,
         )
 
@@ -129,8 +130,9 @@ class QwenClient(UploadMixin, SessionLoginMixin, ModelsFetchMixin):
         return removed
 
     def _persist_sessions(self) -> List[str]:
-        """清理并持久化 session 池，同步修正 current_index。"""
+        """清理并持久化 session 池与登录历史，同步修正 current_index。"""
         previous_username = self._session_username_at_current()
+        self._login_history.flush()
         removed = self._save_meta()
         self._fix_current_index(previous_username)
         return removed

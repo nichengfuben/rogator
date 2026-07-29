@@ -15,7 +15,10 @@ for _entry in (_root / "src", _root):
 import path_setup  # noqa: F401
 
 import asyncio
+import contextlib
+import os
 import socket
+import time
 from typing import Optional
 
 from aiohttp import web
@@ -101,10 +104,6 @@ def _install_signal_handlers(state: AppState) -> None:
     install_signal_handlers(state)
 
 
-async def _cancel_leftover_tasks() -> None:
-    await cancel_leftover_tasks()
-
-
 # ============================================================
 # 启动流程函数
 # ============================================================
@@ -125,6 +124,74 @@ def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: i
     logger.info("  Cleanup     : background prelogin + %ds session maintenance", int(CLEANUP_INTERVAL))
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
+
+
+async def _shutdown_step(
+    label: str,
+    coro,
+    *,
+    timeout: float,
+    deadline: float,
+) -> None:
+    """单步关机；受整段硬 deadline 与各步 timeout 双重约束。"""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        logger.warning("Shutdown: hard deadline reached, skipping %s", label)
+        return
+    logger.info("Shutdown: %s...", label)
+    try:
+        await asyncio.wait_for(coro, timeout=min(timeout, remaining))
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown: %s timed out (%.1fs cap)", label, timeout)
+    except Exception as exc:
+        logger.warning("Shutdown: %s failed: %s", label, exc)
+
+
+async def _hard_exit_watchdog(deadline: float) -> None:
+    delay = deadline - time.monotonic()
+    if delay > 0:
+        await asyncio.sleep(delay)
+    logger.error(
+        "Shutdown: exceeded hard exit timeout (%.1fs), forcing exit",
+        CONFIG.shutdown_hard_exit_timeout,
+    )
+    os._exit(1)
+
+
+async def _graceful_shutdown(state: AppState, runner: web.AppRunner, site: Optional[web.TCPSite]) -> None:
+    deadline = time.monotonic() + CONFIG.shutdown_hard_exit_timeout
+    watchdog = asyncio.create_task(_hard_exit_watchdog(deadline))
+    try:
+        await _shutdown_step(
+            "draining active requests",
+            state.shutdown(),
+            timeout=CONFIG.shutdown_total_timeout,
+            deadline=deadline,
+        )
+        if site is not None:
+            await _shutdown_step(
+                "stopping HTTP site",
+                site.stop(),
+                timeout=5.0,
+                deadline=deadline,
+            )
+        await _shutdown_step(
+            "cleaning up HTTP runner",
+            runner.cleanup(),
+            timeout=5.0,
+            deadline=deadline,
+        )
+        await _shutdown_step(
+            "cancelling leftover tasks",
+            cancel_leftover_tasks(),
+            timeout=6.0,
+            deadline=deadline,
+        )
+    finally:
+        watchdog.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watchdog
+    logger.info("Server stopped")
 
 
 async def _run_server(app: web.Application, state: AppState, host: str, port: int) -> None:
@@ -155,26 +222,7 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
         raise
     finally:
         state.shutdown_event.set()
-        try:
-            await asyncio.wait_for(state.shutdown(), timeout=CONFIG.shutdown_total_timeout)
-        except (asyncio.TimeoutError, Exception):
-            logger.warning("Shutdown timed out or failed, stopping HTTP site")
-        if site is not None:
-            try:
-                await asyncio.wait_for(site.stop(), timeout=5.0)
-            except (asyncio.TimeoutError, OSError) as exc:
-                logger.debug("site.stop during shutdown: %s", exc)
-            except Exception:
-                pass
-        try:
-            await asyncio.wait_for(runner.cleanup(), timeout=5.0)
-        except (asyncio.TimeoutError, Exception):
-            pass
-        try:
-            await asyncio.wait_for(_cancel_leftover_tasks(), timeout=6.0)
-        except asyncio.TimeoutError:
-            logger.warning("Shutdown: cancel_leftover_tasks exceeded 6.0s")
-        logger.info("Server stopped")
+        await _graceful_shutdown(state, runner, site)
 
 
 # ============================================================

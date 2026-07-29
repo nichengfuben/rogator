@@ -25,23 +25,32 @@ class TestShutdownSignals(unittest.TestCase):
         self.assertTrue(state.shutdown_event.is_set())
         log.info.assert_called_once()
 
-    def test_repeat_interrupt_is_noop(self) -> None:
+    def test_repeat_interrupt_forces_exit(self) -> None:
         state = MagicMock()
         state.shutdown_event = asyncio.Event()
         with patch("server.config.shutdown.logger") as log:
-            _request_shutdown_once(state, source="Interrupt")
-            _request_shutdown_once(state, source="Interrupt")
-            _request_shutdown_once(state, source="Signal SIGINT")
+            with patch("server.config.shutdown.os._exit") as force_exit:
+                force_exit.side_effect = SystemExit(130)
+                _request_shutdown_once(state, source="Interrupt")
+                with self.assertRaises(SystemExit):
+                    _request_shutdown_once(state, source="Interrupt")
+                force_exit.assert_called_once_with(130)
         self.assertTrue(state.shutdown_event.is_set())
-        log.info.assert_called_once()
+        self.assertEqual(log.info.call_count, 1)
+        log.warning.assert_called_once()
 
-    def test_repeat_while_event_already_set_is_noop(self) -> None:
+    def test_repeat_while_event_already_set_forces_exit(self) -> None:
         state = MagicMock()
         state.shutdown_event = asyncio.Event()
         state.shutdown_event.set()
         with patch("server.config.shutdown.logger") as log:
-            _request_shutdown_once(state, source="Interrupt")
+            with patch("server.config.shutdown.os._exit") as force_exit:
+                force_exit.side_effect = SystemExit(130)
+                with self.assertRaises(SystemExit):
+                    _request_shutdown_once(state, source="Interrupt")
+                force_exit.assert_called_once_with(130)
         log.info.assert_not_called()
+        log.warning.assert_called_once()
 
 
 if __name__ == "__main__":

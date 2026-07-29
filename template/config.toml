@@ -8,6 +8,8 @@ version = "2.2.2"
 port = 8932
 host = "0.0.0.0"
 prelogin = 32
+# 预登录/换号连续登录之间的间隔（秒），避免短时间内大量 signin
+login_interval = 15.0
 
 [retry]
 # 换号 / 上游超时重试次数（不含首次尝试）
@@ -26,16 +28,15 @@ send_full_prompt = false
 client_max_body_bytes = 33554432
 
 [timeout]
-request_total = 600.0
 create_chat = 15.0
-login = 30.0
-prelogin = 120.0
 
 [shutdown]
 # 关机时等待在途流式/请求结束的最长时间（秒），超时后强制 cancel
 wait_active_requests = 3.0
-# main 中整段 state.shutdown 的上限（秒）
+# main 中 state.shutdown() 的上限（秒）
 total_timeout = 8.0
+# finally 整段清理（HTTP stop、cleanup、cancel tasks）的硬性上限；超时 os._exit
+hard_exit_timeout = 25.0
 
 [fncall]
 # record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt

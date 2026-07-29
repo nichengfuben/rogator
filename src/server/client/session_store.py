@@ -139,7 +139,6 @@ class SessionStoreMeta:
     """sessions.json 元数据（索引、封禁账号）。"""
 
     current_index: int = 0
-    account_index: int = 0
     blocked_accounts: Dict[str, float] = field(default_factory=dict)
 
 
@@ -153,7 +152,6 @@ def load_session_store() -> tuple[List[QwenSession], SessionStoreMeta]:
             return [], meta
         data = json.loads(p.read_text(encoding="utf-8"))
         meta.current_index = int(data.get("current_index", 0))
-        meta.account_index = int(data.get("account_index", 0))
         raw_blocked = data.get("blocked_accounts") or {}
         if isinstance(raw_blocked, dict):
             meta.blocked_accounts = {
@@ -193,7 +191,6 @@ def save_sessions(
     sessions: List[QwenSession],
     *,
     current_index: int = 0,
-    account_index: int = 0,
     blocked_accounts: Optional[Dict[str, float]] = None,
 ) -> List[str]:
     """清理过期/失效 session 后原子写入磁盘，原地更新列表并返回被移除的 username。"""
@@ -211,7 +208,6 @@ def save_sessions(
     payload = json.dumps({
         "sessions": [s.to_dict() for s in sessions],
         "current_index": current_index,
-        "account_index": account_index,
         "blocked_accounts": blocked,
         "updated_at": int(now),
         "count": len(sessions),

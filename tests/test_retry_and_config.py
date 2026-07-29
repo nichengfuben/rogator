@@ -72,6 +72,15 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(cfg.model_context_length, 256_000)
             self.assertFalse(cfg.send_full_prompt)
             self.assertEqual(cfg.prelogin, 32)
+            self.assertEqual(cfg.login_interval, 15.0)
+
+    def test_load_config_login_interval_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(
+                tmp, "[server]\nlogin_interval = 5.0\n",
+            )
+            cfg = load_config(user_path, template_path=tpl_path)
+            self.assertEqual(cfg.login_interval, 5.0)
 
     def test_load_config_send_full_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +96,7 @@ class TestConfig(unittest.TestCase):
             cfg = load_config(user_path, template_path=tpl_path)
             self.assertEqual(cfg.shutdown_wait_active_requests, 3.0)
             self.assertEqual(cfg.shutdown_total_timeout, 8.0)
+            self.assertEqual(cfg.shutdown_hard_exit_timeout, 25.0)
 
     def test_load_config_shutdown_user_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,6 +106,7 @@ class TestConfig(unittest.TestCase):
             cfg = load_config(user_path, template_path=tpl_path)
             self.assertEqual(cfg.shutdown_wait_active_requests, 5.0)
             self.assertEqual(cfg.shutdown_total_timeout, 8.0)
+            self.assertEqual(cfg.shutdown_hard_exit_timeout, 25.0)
 
     def test_overlay_user_config_keeps_template_sections(self) -> None:
         template = {"server": {"port": 8932, "prelogin": 32}, "limits": {"max_concurrent": 32}}
@@ -413,13 +424,12 @@ class TestSessionStoreMeta(unittest.TestCase):
                     user_id="u", login_time=time.time(),
                 )
                 save_sessions(
-                    [s], current_index=0, account_index=1,
+                    [s], current_index=0,
                     blocked_accounts={"a@test.com": time.time() + 3600},
                 )
                 loaded, meta = load_session_store()
                 self.assertEqual(len(loaded), 1)
                 self.assertEqual(meta.current_index, 0)
-                self.assertEqual(meta.account_index, 1)
                 self.assertIn("a@test.com", meta.blocked_accounts)
 
     def test_migrate_legacy_sessions_file(self) -> None:
@@ -438,7 +448,6 @@ class TestSessionStoreMeta(unittest.TestCase):
                 json.dumps({
                     "sessions": [s.to_dict()],
                     "current_index": 2,
-                    "account_index": 3,
                     "blocked_accounts": {},
                 }),
                 encoding="utf-8",
@@ -450,7 +459,6 @@ class TestSessionStoreMeta(unittest.TestCase):
                 self.assertFalse(legacy.exists())
                 self.assertEqual(len(loaded), 1)
                 self.assertEqual(meta.current_index, 2)
-                self.assertEqual(meta.account_index, 3)
 
     def test_atomic_write_falls_back_when_replace_fails(self) -> None:
         from server.client.session_store import _atomic_write_text

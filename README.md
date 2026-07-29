@@ -63,6 +63,7 @@ version = "2.2.1"
 port = 8932
 host = "0.0.0.0"
 prelogin = 3          # 启动时预登录账号数；运行中不足时自动补登
+login_interval = 15.0 # 连续预登录之间的间隔（秒）
 
 [retry]
 max_retry_on_error = 3   # 限流/过期等可恢复错误时的换号重试次数
@@ -90,6 +91,7 @@ prelogin = 120.0
 [shutdown]
 wait_active_requests = 3.0   # 关机等待在途请求/流式（秒），超时强制 cancel
 total_timeout = 8.0            # state.shutdown 总超时（秒）
+hard_exit_timeout = 25.0       # 整段关机清理硬上限（秒），超时 os._exit
 ```
 
 监听地址、端口、预登录数量等均来自 `config.toml`（未写项取自 `template/config.toml`）。
@@ -225,7 +227,8 @@ python scripts/build_prompt_preview.py
 
 | 文件 | 说明 |
 |------|------|
-| `persist/sessions.json` | 会话池、`current_index`、`account_index`、`blocked_accounts` |
+| `persist/sessions.json` | 会话池、`current_index`、`blocked_accounts` |
+| `persist/login_history.json` | 各账号最近一次成功登录时间（UTC+8） |
 | `persist/model_entml_thinking.jsonl` | 模型 → entml 思考映射（可提交 git） |
 | `persist/qwen/models.json` | 模型列表缓存 |
 

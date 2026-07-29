@@ -35,6 +35,7 @@ class AppConfig:
     port: int
     host: str
     prelogin: int
+    login_interval: float
     max_retry_on_error: int
     max_concurrent: int
     max_queue_size: int
@@ -43,11 +44,9 @@ class AppConfig:
     send_full_prompt: bool
     client_max_body_bytes: int
     create_chat_timeout: float
-    request_total_timeout: float
-    login_timeout: float
-    prelogin_timeout: float
     shutdown_wait_active_requests: float
     shutdown_total_timeout: float
+    shutdown_hard_exit_timeout: float
     record_prompt: bool
     print_prompt: bool
     record_response: bool
@@ -103,6 +102,7 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         port=int(_require_get(raw, "server", "port")),
         host=str(_require_get(raw, "server", "host")),
         prelogin=int(_require_get(raw, "server", "prelogin")),
+        login_interval=float(_require_get(raw, "server", "login_interval")),
         max_retry_on_error=int(_require_get(raw, "retry", "max_retry_on_error")),
         max_concurrent=int(_require_get(raw, "limits", "max_concurrent")),
         max_queue_size=int(_require_get(raw, "limits", "max_queue_size")),
@@ -110,14 +110,12 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         model_context_length=int(_require_get(raw, "limits", "model_context_length")),
         send_full_prompt=bool(_require_get(raw, "limits", "send_full_prompt")),
         client_max_body_bytes=int(_require_get(raw, "limits", "client_max_body_bytes")),
-        request_total_timeout=float(_require_get(raw, "timeout", "request_total")),
         create_chat_timeout=float(_require_get(raw, "timeout", "create_chat")),
-        login_timeout=float(_require_get(raw, "timeout", "login")),
-        prelogin_timeout=float(_require_get(raw, "timeout", "prelogin")),
         shutdown_wait_active_requests=float(
             _require_get(raw, "shutdown", "wait_active_requests")
         ),
         shutdown_total_timeout=float(_require_get(raw, "shutdown", "total_timeout")),
+        shutdown_hard_exit_timeout=float(_require_get(raw, "shutdown", "hard_exit_timeout")),
         record_prompt=bool(_require_get(raw, "fncall", "record_prompt")),
         print_prompt=bool(_require_get(raw, "fncall", "print_prompt")),
         record_response=bool(_require_get(raw, "fncall", "record_response")),

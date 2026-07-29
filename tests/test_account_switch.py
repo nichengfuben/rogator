@@ -57,6 +57,7 @@ class TestPrelogin(unittest.IsolatedAsyncioTestCase):
             client = QwenClient(MagicMock())
         client._sessions = []
         client._prelogin_target = 2
+        client._login_interval = 0.0
         client._ensure_cleanup = AsyncMock()
         client._pick_account_for_login = MagicMock(side_effect=[
             Account(username="a@test.com", password="pw"),
