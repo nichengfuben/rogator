@@ -9,10 +9,10 @@ image_gen = false
 tts = false
 
 [cursor]
-base_url = "https://api2.cursor.sh"
-client_version = "3.12.17"
-default_model = "default"
-request_timeout = 120
+base_url = "https://agentn.global.api5.cursor.sh"
+client_version = "cli-2026.07.23-e383d2b"
+default_model = "composer-2.5-fast"
+request_timeout = 300
 heartbeat_interval = 5
 timezone = "Asia/Shanghai"
 

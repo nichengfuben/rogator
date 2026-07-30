@@ -32,8 +32,8 @@ def _read_frames(buffer: bytes) -> Tuple[bytes, List[Dict[str, Any]]]:
 
 def _wire_ctx_callbacks(ctx: AgentRunContext, sock, conn, stream_id: int, sock_lock: threading.Lock) -> None:
     def send_frame(obj: Dict[str, Any]) -> None:
-        with sock_lock:
-            safe_send_data(conn, sock, stream_id, encode_frame(obj), sock_lock=sock_lock)
+        # safe_send_data 内部会按 sock_lock 加锁；此处不再外包同锁。
+        safe_send_data(conn, sock, stream_id, encode_frame(obj), sock_lock=sock_lock)
 
     def finish(elapsed: float, *, usage=None) -> None:
         if usage:
@@ -74,12 +74,11 @@ def _run_heartbeat(
     while not stop.wait(interval):
         try:
             counter[0] += 1
-            with sock_lock:
-                safe_send_data(
-                    conn, sock, stream_id,
-                    encode_frame({"clientHeartbeat": {"id": counter[0]}}),
-                    sock_lock=sock_lock,
-                )
+            safe_send_data(
+                conn, sock, stream_id,
+                encode_frame({"clientHeartbeat": {"id": counter[0]}}),
+                sock_lock=sock_lock,
+            )
         except Exception:
             break
 

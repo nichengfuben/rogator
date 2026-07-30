@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Qwen 账户池与模型列表拉取。"""
+"""Qwen account pool and model fetch."""
 
 import asyncio
 import json
@@ -17,6 +17,7 @@ from core.session.store import PlatformSession
 from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
 from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
 from upstream.qwen.chat.store import fetch_user_id
+from upstream.qwen.auth.http import run_with_connection_retry
 from server.formats import (
     DEFAULT_MODELS,
     LOGIN_TIMEOUT,
@@ -48,7 +49,9 @@ class QwenLoginMixin(SessionLoginMixin):
     UPSTREAM_NAME = "qwen"
 
     async def _perform_login(self, account: Account) -> Optional[PlatformSession]:
-        async with aiohttp.ClientSession() as session:
+        session = await self._ensure_http_session()
+
+        async def _run() -> Optional[PlatformSession]:
             payload = {
                 "email": account.username,
                 "password": hash_password(account.password),
@@ -83,6 +86,7 @@ class QwenLoginMixin(SessionLoginMixin):
                     user_id=user_id or account.username[:12],
                     upstream="qwen",
                 )
+        return await run_with_connection_retry("login", _run)
 
 
 class ModelsFetchMixin:
@@ -96,6 +100,29 @@ class ModelsFetchMixin:
         if self._models_fetch_time <= 0:
             return True
         return (time.time() - self._models_fetch_time) >= interval
+
+    async def _fetch_models_remote(self, s, session, now: float, keep_cached) -> List[str]:
+        headers = build_headers(session.token)
+        headers["Accept"] = "application/json"
+        async with s.get(
+            f"{BASE_URL}{MODELS_PATH}",
+            headers=headers,
+            ssl=False,
+            timeout=aiohttp.ClientTimeout(total=MODELS_FETCH_TIMEOUT),
+        ) as resp:
+            if resp.status != 200:
+                return keep_cached()
+            data = await resp.json()
+            remote_meta = parse_upstream_models_payload(data)
+            remote_ids = list(remote_meta.keys())
+            if not remote_ids:
+                return keep_cached()
+            merged = merge_model_lists(list(DEFAULT_MODELS), self._models, remote_ids)
+            self._model_meta = merge_model_meta(merged, self._model_meta, remote_meta)
+            self._models = merged
+            self._models_fetch_time = now
+            self._save_models_cache(merged, self._model_meta)
+            return merged
 
     async def fetch_models(self, use_cache: bool = True) -> List[str]:
         await self._ensure_cleanup()
@@ -114,36 +141,11 @@ class ModelsFetchMixin:
         if not session:
             return _keep_cached()
         try:
-            async with aiohttp.ClientSession() as s:
-                headers = build_headers(session.token)
-                headers["Accept"] = "application/json"
-                async with s.get(
-                    f"{BASE_URL}{MODELS_PATH}",
-                    headers=headers,
-                    ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=MODELS_FETCH_TIMEOUT),
-                ) as resp:
-                    if resp.status != 200:
-                        return _keep_cached()
-                    data = await resp.json()
-                    remote_meta = parse_upstream_models_payload(data)
-                    remote_ids = list(remote_meta.keys())
-                    if remote_ids:
-                        merged = merge_model_lists(
-                            list(DEFAULT_MODELS),
-                            self._models,
-                            remote_ids,
-                        )
-                        self._model_meta = merge_model_meta(
-                            merged,
-                            self._model_meta,
-                            remote_meta,
-                        )
-                        self._models = merged
-                        self._models_fetch_time = now
-                        self._save_models_cache(merged, self._model_meta)
-                        return merged
-            return _keep_cached()
+            s = await self._ensure_http_session()
+            return await run_with_connection_retry(
+                "fetch_models",
+                lambda: self._fetch_models_remote(s, session, now, _keep_cached),
+            )
         except Exception:
             return _keep_cached()
 
@@ -156,6 +158,8 @@ class ModelsFetchMixin:
             if p.exists():
                 data = json.loads(p.read_text(encoding="utf-8"))
                 disk_models, disk_meta, updated_at = read_models_cache_payload(data)
+                if updated_at <= 0:
+                    updated_at = float(p.stat().st_mtime)
         except Exception:
             pass
         merged = merge_model_lists(list(DEFAULT_MODELS), disk_models)

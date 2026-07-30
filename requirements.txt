@@ -1,7 +1,7 @@
 # Rogator runtime deps (Python 3.8-3.14, macOS / Linux / Windows)
 aiohttp>=3.9.0
 aiohttp-socks>=0.8.4
-echotools==2.3.99
+echotools==2.3.100
 h2>=4.1.0
 typing-extensions>=4.7.0
 tomli>=2.0.0; python_version < "3.11"

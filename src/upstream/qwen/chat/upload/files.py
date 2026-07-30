@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""QwenClient 的文件与多模态媒体上传能力。"""
+"""Upload and media helpers for Qwen client."""
 
 import base64
 import logging
@@ -23,6 +23,7 @@ from upstream.qwen.chat.upload.storage import (
 )
 from upstream.qwen.chat.upload.oss import upload_to_oss
 from upstream.qwen.chat.store import QwenSession
+from upstream.qwen.auth.http import run_with_connection_retry
 
 logger = logging.getLogger("rogator")
 
@@ -35,22 +36,37 @@ _MAX_FILE_SIZES: Dict[str, int] = {
 
 
 class UploadMixin:
-    """为 QwenClient 提供 OSS 文件上传、base64 与远程 URL 媒体上传能力。"""
+    """Provide OSS upload and media preparation for Qwen client."""
 
     async def _request_sts_token(self, path: str, payload: Dict[str, Any],
                                   headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(
-                f"{BASE_URL}{path}", json=payload, headers=headers, ssl=False,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                creds = data.get("data", data)
-                if all(k in creds for k in ("access_key_id", "access_key_secret", "security_token")):
-                    return creds
+        s = await self._ensure_http_session()
+        async with s.post(
+            f"{BASE_URL}{path}", json=payload, headers=headers, ssl=False,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
                 return None
+            data = await resp.json()
+            creds = data.get("data", data)
+            if all(k in creds for k in ("access_key_id", "access_key_secret", "security_token")):
+                return creds
+            return None
+
+    async def _run_upload_download(self, label: str, func):
+        return await run_with_connection_retry(label, func)
+
+    async def _download_bytes(self, media_url: str, headers: Dict[str, str], timeout_s: int) -> tuple[bytes, aiohttp.typedefs.LooseHeaders]:
+        s = await self._ensure_http_session()
+        async with s.get(
+            media_url,
+            headers=headers,
+            ssl=False,
+            timeout=aiohttp.ClientTimeout(total=timeout_s),
+        ) as resp:
+            if resp.status != 200:
+                raise RuntimeError(f"download file failed: HTTP {resp.status}")
+            return await resp.read(), resp.headers
 
     async def _get_sts_credentials(self, session: QwenSession, filename: str, filesize: int, filetype: str) -> Dict[str, Any]:
         headers = build_headers(session.token)
@@ -73,7 +89,7 @@ class UploadMixin:
         if file_size > limit:
             raise RuntimeError(f"file too large: {filename} ({file_size} > {limit})")
         creds = await self._get_sts_credentials(session, filename, file_size, file_type)
-        file_url = await upload_to_oss(file_data, content_type, creds)
+        file_url = await upload_to_oss(file_data, content_type, creds, await self._ensure_http_session())
         file_obj = build_file_object(
             file_id=str(creds.get("file_id", uuid.uuid4())),
             file_url=file_url,
@@ -85,7 +101,7 @@ class UploadMixin:
         return file_url, file_obj
 
     async def upload_file_from_base64(self, session: QwenSession, data_uri: str) -> Tuple[str, Dict[str, Any]]:
-        """将消息中的 base64 图片上传为 Qwen 文件对象。"""
+        """Upload inline base64 image as a Qwen file object."""
         if not data_uri.startswith("data:") or ";base64," not in data_uri:
             raise RuntimeError("invalid base64 data URI")
         header, encoded = data_uri.split(";base64,", 1)
@@ -98,7 +114,7 @@ class UploadMixin:
 
     @staticmethod
     def extract_base64_images(messages: List[Dict[str, Any]]) -> List[str]:
-        """从 OpenAI 风格消息中提取内联 base64 图片。"""
+        """Extract inline base64 images from OpenAI-style messages."""
         results: List[str] = []
         for message in messages:
             content = message.get("content", "")
@@ -114,11 +130,11 @@ class UploadMixin:
         return results
 
     async def download_image(self, image_url: str, save_dir: str = GENERATED_IMAGE_DIR) -> Optional[str]:
-        """下载图片并保存到本地，返回保存路径。用于 Qwen 生成图的回存。"""
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
+        """Download an image and save it locally."""
+        async def _run() -> Optional[str]:
+            data, headers = await self._download_bytes(
                 image_url,
-                headers={
+                {
                     "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
                     "Accept-Language": "zh-CN,zh;q=0.9",
                     "Connection": "keep-alive",
@@ -126,29 +142,29 @@ class UploadMixin:
                     "Referer": f"{BASE_URL}/",
                     "User-Agent": USER_AGENT,
                 },
-                ssl=False,
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                return save_image_file(await resp.read(), resp.headers.get("Content-Type", "image/png"), save_dir)
+                60,
+            )
+            return save_image_file(data, headers.get("Content-Type", "image/png"), save_dir)
+
+        try:
+            return await self._run_upload_download("download_image", _run)
+        except Exception:
+            return None
 
     async def upload_file_from_url(self, session: QwenSession, media_url: str) -> Tuple[str, Dict[str, Any]]:
-        """下载远程媒体 URL 并上传为 Qwen 文件对象。"""
-        async with aiohttp.ClientSession() as s:
-            async with s.get(
+        """Download remote media URL and upload as a Qwen file."""
+        data, headers = await self._run_upload_download(
+            "download_remote_media",
+            lambda: self._download_bytes(
                 media_url,
-                headers={
+                {
                     "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
                     "User-Agent": USER_AGENT,
                 },
-                ssl=False,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    raise RuntimeError(f"download file failed: HTTP {resp.status}")
-                data = await resp.read()
-                content_type = resp.headers.get("Content-Type", "application/octet-stream").split(";", 1)[0]
+                30,
+            ),
+        )
+        content_type = headers.get("Content-Type", "application/octet-stream").split(";", 1)[0]
         ext = DATA_URI_EXT_MAP.get(content_type, ".bin")
         filename = f"upload_{uuid.uuid4().hex[:8]}{ext}"
         return await self.upload_file(session, data, filename)
@@ -156,7 +172,7 @@ class UploadMixin:
     async def upload_file_from_path(
         self, session: QwenSession, file_path: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        """上传本地磁盘上的文件（按路径读取），返回 (file_url, file_obj)。"""
+        """Upload a local file path and return (file_url, file_obj)."""
         if not os.path.exists(file_path):
             raise RuntimeError(f"file not found: {file_path}")
         data = Path(file_path).read_bytes()
@@ -164,7 +180,7 @@ class UploadMixin:
 
     @staticmethod
     def extract_remote_media_urls(messages: List[Dict[str, Any]]) -> List[str]:
-        """从消息中提取需先上传的非 data URI 远程媒体 URL（图片、视频、音频）。"""
+        """Extract non-data-URI remote media URLs from messages."""
         results: List[str] = []
         for message in messages:
             content = message.get("content", "")
@@ -191,25 +207,23 @@ class UploadMixin:
         return results
 
     async def download_video(self, video_url: str, save_dir: str = GENERATED_VIDEO_DIR) -> Optional[str]:
-        """下载生成的视频并保存到本地，返回保存路径。失败时记录日志并返回 None。"""
+        """Download generated video and save locally."""
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(
+            data, _headers = await self._run_upload_download(
+                "download_video",
+                lambda: self._download_bytes(
                     video_url,
-                    headers={
+                    {
                         "Accept": "*/*",
                         "Connection": "keep-alive",
                         "Origin": BASE_URL,
                         "Referer": f"{BASE_URL}/",
                         "User-Agent": USER_AGENT,
                     },
-                    ssl=False,
-                    timeout=aiohttp.ClientTimeout(total=180),
-                ) as resp:
-                    if resp.status != 200:
-                        logger.warning("Download video failed: HTTP %d", resp.status)
-                        return None
-                    return save_video_file(await resp.read(), save_dir)
+                    180,
+                ),
+            )
+            return save_video_file(data, save_dir)
         except Exception as exc:
             logger.warning("Download video exception: %s", exc)
             return None
@@ -220,11 +234,7 @@ class UploadMixin:
         messages: List[Dict[str, Any]],
         extra_files: Optional[List[Tuple[bytes, str]]] = None,
     ) -> List[Dict[str, Any]]:
-        """汇总消息中所有需要上传的内容（额外文件 + 内联 base64 图片），
-
-        返回按顺序上传后的 Qwen 文件对象列表。单个文件上传失败会记录日志但
-        不中断其余文件的处理，最大程度保留可用的多模态输入。
-        """
+        """Prepare all message attachments and upload them to Qwen."""
         file_objects: List[Dict[str, Any]] = []
         for data, name in extra_files or []:
             try:

@@ -61,43 +61,51 @@ def encode_frame(obj: Dict[str, Any]) -> bytes:
 
 
 def _send_h2_chunk(conn, sock, stream_id: int, piece: bytes, sock_lock) -> None:
-    if sock_lock:
-        with sock_lock:
-            conn.send_data(stream_id, piece, end_stream=False)
-            sock.sendall(conn.data_to_send())
-    else:
-        conn.send_data(stream_id, piece, end_stream=False)
-        sock.sendall(conn.data_to_send())
+    # 调用方若传入 sock_lock，须已持有；此处不再二次加锁（避免非重入 Lock 死锁）。
+    _ = sock_lock
+    conn.send_data(stream_id, piece, end_stream=False)
+    sock.sendall(conn.data_to_send())
 
 
 def _recv_flow_window(conn, sock, sock_lock) -> None:
+    # 同上：不在此处抢锁，避免 send_frame/heartbeat 持锁调用时自死锁。
+    _ = sock_lock
     chunk = sock.recv(65536)
     if not chunk:
         raise ConnectionError("Connection closed while waiting for flow control")
     conn.receive_data(chunk)
     pending = conn.data_to_send()
-    if sock_lock:
-        with sock_lock:
-            sock.sendall(pending)
-    else:
+    if pending:
         sock.sendall(pending)
 
 
 def safe_send_data(conn, sock, stream_id: int, data: bytes, *, sock_lock=None) -> None:
-    """按 H2 流控分块发送，避免大 payload 阻塞。"""
+    """按 H2 流控分块发送，避免大 payload 阻塞。
+
+    若传入 ``sock_lock``，则在整个发送过程持有该锁；调用方不要再外包一层同锁，
+    除非使用可重入锁。
+    """
     max_chunk = 16384
-    offset = 0
-    while offset < len(data):
-        window = conn.local_flow_control_window(stream_id)
-        if window <= 0:
-            try:
-                _recv_flow_window(conn, sock, sock_lock)
-            except socket.timeout:
-                time.sleep(0.05)
-            continue
-        chunk_size = min(max_chunk, window, len(data) - offset)
-        _send_h2_chunk(conn, sock, stream_id, data[offset:offset + chunk_size], sock_lock)
-        offset += chunk_size
+
+    def _send_all() -> None:
+        offset = 0
+        while offset < len(data):
+            window = conn.local_flow_control_window(stream_id)
+            if window <= 0:
+                try:
+                    _recv_flow_window(conn, sock, None)
+                except socket.timeout:
+                    time.sleep(0.05)
+                continue
+            chunk_size = min(max_chunk, window, len(data) - offset)
+            _send_h2_chunk(conn, sock, stream_id, data[offset:offset + chunk_size], None)
+            offset += chunk_size
+
+    if sock_lock is not None:
+        with sock_lock:
+            _send_all()
+    else:
+        _send_all()
 
 
 def build_selected_image(img_path: Any) -> Dict[str, Any]:

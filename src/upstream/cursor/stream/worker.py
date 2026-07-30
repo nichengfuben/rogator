@@ -23,7 +23,6 @@ from upstream.cursor.stream.proto import (
     agent_host,
     build_selected_context,
     encode_frame,
-    generate_checksum,
     safe_send_data,
 )
 
@@ -80,16 +79,11 @@ def _build_run_request(
     run_request: Dict[str, Any] = {
         "conversationState": {},
         "action": {"userMessageAction": user_action},
-        "modelDetails": {
-            "modelId": model,
-            "displayName": model,
-            "displayNameShort": model,
-        },
+        "modelDetails": {"modelId": model},
         "requestedModel": {"modelId": model, "builtInModel": True},
         "conversationId": conv_id,
         "conversationGroupId": group_id,
         "suggestNextPrompt": False,
-        "workspacePath": workspace,
     }
     if custom_system_prompt:
         run_request["customSystemPrompt"] = custom_system_prompt
@@ -111,7 +105,9 @@ def _agent_headers(
     session_id: str,
     request_id: str,
 ) -> List[Tuple[str, str]]:
-    headers = [
+    _ = timezone
+    # 对齐 cursor_mvp：Agent Run 请求头不带 checksum / timezone。
+    return [
         (":method", "POST"),
         (":path", "/agent.v1.AgentService/Run"),
         (":scheme", "https"),
@@ -120,14 +116,11 @@ def _agent_headers(
         ("connect-protocol-version", "1"),
         ("authorization", f"Bearer {token['accessToken']}"),
         ("te", "trailers"),
-        ("x-cursor-checksum", generate_checksum(token["machineId"], token["macMachineId"])),
         ("x-cursor-client-version", client_version),
         ("x-cursor-platform", "cli"),
         ("x-cursor-session-id", session_id),
-        ("x-cursor-timezone", timezone),
         ("x-request-id", request_id),
     ]
-    return headers
 
 
 def _run_agent_stream(

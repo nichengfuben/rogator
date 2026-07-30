@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import threading
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
 from upstream.cursor.stream.proto import StreamEvent
@@ -25,7 +26,6 @@ async def stream_cursor_agent(
     exclude_workspace_context: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
     q: queue.Queue = queue.Queue()
-    loop = asyncio.get_event_loop()
 
     def _run() -> None:
         stream_worker(
@@ -38,9 +38,18 @@ async def stream_cursor_agent(
             exclude_workspace_context=exclude_workspace_context,
         )
 
-    loop.run_in_executor(None, _run)
+    worker = threading.Thread(
+        target=_run,
+        name="cursor-stream-worker",
+        daemon=True,
+    )
+    worker.start()
     while True:
-        event = await loop.run_in_executor(None, q.get)
+        try:
+            event = q.get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.02)
+            continue
         if event is None:
             break
         yield event

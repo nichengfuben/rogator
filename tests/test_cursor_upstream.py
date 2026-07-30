@@ -194,5 +194,111 @@ class TestCursorExecTools(unittest.TestCase):
         self.assertEqual(hook["preToolUse"]["permission"], "allow")
 
 
+class _FakeH2Conn:
+    def __init__(self, windows: list[int]) -> None:
+        self._windows = list(windows)
+        self.sent_chunks: list[bytes] = []
+        self.recv_calls = 0
+
+    def local_flow_control_window(self, _stream_id: int) -> int:
+        return self._windows[0] if self._windows else 65536
+
+    def send_data(self, _stream_id: int, piece: bytes, end_stream: bool = False) -> None:
+        self.sent_chunks.append(piece)
+        if self._windows:
+            self._windows[0] -= len(piece)
+
+    def receive_data(self, _chunk: bytes) -> list[object]:
+        self.recv_calls += 1
+        if self._windows and self._windows[0] <= 0:
+            self._windows.pop(0)
+        return []
+
+    def data_to_send(self) -> bytes:
+        return b"ack"
+
+    def get_next_available_stream_id(self) -> int:
+        return 1
+
+    def send_headers(self, *_args, **_kwargs) -> None:
+        return None
+
+
+class _FakeSock:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+        self.recv_count = 0
+
+    def sendall(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    def recv(self, _size: int) -> bytes:
+        self.recv_count += 1
+        return b"window-update"
+
+
+class TestCursorStreamFlowControl(unittest.TestCase):
+    def test_safe_send_data_splits_large_payload(self) -> None:
+        from upstream.cursor.stream.proto import safe_send_data
+
+        conn = _FakeH2Conn([32768, 65536])
+        sock = _FakeSock()
+        payload = b"x" * 71552
+
+        safe_send_data(conn, sock, 1, payload)
+
+        self.assertEqual(sum(len(piece) for piece in conn.sent_chunks), len(payload))
+        self.assertGreater(len(conn.sent_chunks), 1)
+        self.assertLessEqual(max(len(piece) for piece in conn.sent_chunks), 16384)
+        self.assertEqual(conn.recv_calls, 1)
+
+    def test_safe_send_data_with_lock_does_not_reenter(self) -> None:
+        """回归：持锁发送时不可再二次 acquire 非重入 Lock（kv 回复会死锁）。"""
+        import threading
+
+        from upstream.cursor.stream.proto import safe_send_data
+
+        conn = _FakeH2Conn([65536])
+        sock = _FakeSock()
+        lock = threading.Lock()
+        payload = b"kv-reply"
+
+        done = threading.Event()
+
+        def _run() -> None:
+            safe_send_data(conn, sock, 1, payload, sock_lock=lock)
+            done.set()
+
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        self.assertTrue(done.wait(2.0), "safe_send_data deadlocked on sock_lock")
+        self.assertEqual(b"".join(conn.sent_chunks), payload)
+
+    def test_worker_uses_safe_send_data_for_run_request(self) -> None:
+        from upstream.cursor.stream.worker import _run_agent_stream
+
+        q = object()
+        token = {"accessToken": "tok", "machineId": "mid", "macMachineId": "mmid"}
+        conn = _FakeH2Conn([65536, 65536])
+        sock = _FakeSock()
+        calls: list[int] = []
+
+        def _fake_safe_send(_conn, _sock, _stream_id: int, data: bytes, *, sock_lock=None) -> None:
+            calls.append(len(data))
+
+        with patch("upstream.cursor.stream.worker.agent_config", return_value={}):
+            with patch("upstream.cursor.stream.worker.agent_host", return_value="example.com"):
+                with patch("upstream.cursor.stream.worker._open_h2_socket", return_value=(sock, conn)):
+                    with patch("upstream.cursor.stream.worker.safe_send_data", side_effect=_fake_safe_send):
+                        with patch("upstream.cursor.stream.worker.run_agent_loop") as loop_mock:
+                            _run_agent_stream(
+                                q, token, "hello", "composer-2.5-fast", None, None, None, "X:/ws",
+                                files=[{"path": "big.txt", "content": "x" * 70000}],
+                            )
+        self.assertEqual(len(calls), 1)
+        self.assertGreater(calls[0], 65536)
+        loop_mock.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

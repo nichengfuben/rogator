@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from server.formats import DEFAULT_USER_AGENT
+from upstream.qwen.auth.http import borrow_http_session, run_with_connection_retry
 
 logger = logging.getLogger("rogator")
 
@@ -23,8 +24,9 @@ STS_TOKEN_PATHS = ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]
 
 async def _request_sts_credentials(
     url: str, payload: Dict[str, Any], headers: Dict[str, str],
+    http: aiohttp.ClientSession | None = None,
 ) -> Optional[Dict[str, Any]]:
-    async with aiohttp.ClientSession() as s:
+    async with borrow_http_session(http) as s:
         async with s.post(
             url, json=payload, headers=headers, ssl=False,
             timeout=aiohttp.ClientTimeout(total=15),
@@ -41,6 +43,7 @@ async def _request_sts_credentials(
 
 async def get_sts_credentials(
     base_url: str, token: str, filename: str, filesize: int,
+    http: aiohttp.ClientSession | None = None,
 ) -> Dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -54,7 +57,7 @@ async def get_sts_credentials(
     payload = {"filename": filename, "filesize": filesize, "filetype": "file"}
     for path in STS_TOKEN_PATHS:
         try:
-            creds = await _request_sts_credentials(f"{base_url}{path}", payload, headers)
+            creds = await _request_sts_credentials(f"{base_url}{path}", payload, headers, http)
             if creds:
                 return creds
         except Exception:
@@ -96,9 +99,9 @@ def build_upload_headers(
     }
 
 
-async def get_oss_time(host: str) -> Optional[str]:
+async def get_oss_time(host: str, http: aiohttp.ClientSession | None = None) -> Optional[str]:
     try:
-        async with aiohttp.ClientSession() as s:
+        async with borrow_http_session(http) as s:
             async with s.head(
                 f"https://{host}", ssl=False,
                 timeout=aiohttp.ClientTimeout(total=5),
@@ -112,8 +115,8 @@ async def get_oss_time(host: str) -> Optional[str]:
     return None
 
 
-async def sync_time_with_oss(host: str) -> float:
-    oss_date = await get_oss_time(host)
+async def sync_time_with_oss(host: str, http: aiohttp.ClientSession | None = None) -> float:
+    oss_date = await get_oss_time(host, http)
     if oss_date:
         try:
             dt = datetime.strptime(oss_date, "%a, %d %b %Y %H:%M:%S %Z")
@@ -157,6 +160,7 @@ async def try_oss_upload(
     connect_host: str, header_host: str, object_key: str,
     file_data: bytes, content_type: str, oss_date: str,
     creds: Dict[str, Any],
+    http: aiohttp.ClientSession | None = None,
 ) -> str:
     bucket_name = header_host.split(".")[0]
     resource = f"/{bucket_name}/{object_key}"
@@ -172,7 +176,7 @@ async def try_oss_upload(
     )
     if connect_host != header_host:
         logger.debug("Using IP %s with Host: %s", connect_host, header_host)
-    async with aiohttp.ClientSession() as s:
+    async with borrow_http_session(http) as s:
         async with s.put(
             f"https://{connect_host}/{object_key}", data=file_data,
             headers=headers, ssl=False,
@@ -185,13 +189,14 @@ async def try_oss_upload(
 
 async def upload_to_oss(
     file_data: bytes, content_type: str, creds: Dict[str, Any],
+    http: aiohttp.ClientSession | None = None,
 ) -> str:
     file_url = str(creds.get("file_url", ""))
     object_key = str(creds.get("file_path", ""))
     parsed = urlparse(file_url)
     bucket_host = parsed.netloc
 
-    time_offset = await sync_time_with_oss(bucket_host)
+    time_offset = await sync_time_with_oss(bucket_host, http)
     adjusted_time = time.time() + time_offset
     oss_date = datetime.fromtimestamp(adjusted_time, tz=timezone.utc).strftime(
         "%a, %d %b %Y %H:%M:%S GMT"
@@ -202,9 +207,12 @@ async def upload_to_oss(
     last_error: Optional[Exception] = None
     for connect_host, header_host in host_candidates:
         try:
-            await try_oss_upload(
-                connect_host, header_host, object_key,
-                file_data, content_type, oss_date, creds,
+            await run_with_connection_retry(
+                f"oss_upload:{header_host}",
+                lambda: try_oss_upload(
+                    connect_host, header_host, object_key,
+                    file_data, content_type, oss_date, creds, http,
+                ),
             )
             return file_url
         except Exception as exc:
