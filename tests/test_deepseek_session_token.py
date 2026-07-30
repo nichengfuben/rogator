@@ -11,8 +11,9 @@ import unittest
 import aiohttp
 
 from core.session.accounts import Account, accounts_for_upstream
-from core.session.store import PlatformSession, _deepseek_session_ttl, _jwt_exp
+from core.session.store import PlatformSession, _jwt_exp
 from upstream.deepseek.lib.runtime.user.userapi import login
+from upstream.deepseek.persist import session_expiry_ttl as _deepseek_session_ttl
 
 
 def _make_jwt(exp: float) -> str:

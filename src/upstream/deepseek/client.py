@@ -18,7 +18,8 @@ from upstream.deepseek.lib.adapter.client import DeepseekClient
 from upstream.deepseek.lib.adapter.helpers.pmtutil import Account as DsAccount
 from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.protocol.consts import MODELS
-from upstream.deepseek.lib.biz_error import DeepSeekUserMutedError
+from upstream.deepseek.lib.biz_error import DeepSeekUserMutedError, DeepSeekWafChallengeError
+from upstream.deepseek.lib.runtime.user.userapi import login
 from server.formats import UpstreamUnavailableError
 from upstream.deepseek.persist import read_models_cache, write_models_cache
 
@@ -109,7 +110,7 @@ class DeepSeekClient(SessionLoginMixin):
             token, user_id = await login(  # noqa: SLF001
                 inner._session, account.username, account.password
             )
-        except DeepSeekUserMutedError:
+        except (DeepSeekUserMutedError, DeepSeekWafChallengeError):
             self.handle_account_muted(account.username, mute_at=time.time())
             return None
         mgr = inner._hif_managers.get(account.username)  # noqa: SLF001
