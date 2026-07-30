@@ -9,6 +9,7 @@ from typing import Any, Dict, Tuple
 
 import aiohttp
 
+from upstream.deepseek.lib.biz_error import raise_if_waf_challenge
 from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST
 from upstream.deepseek.lib.protocol.headers import build_basic_headers
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ async def login(
         timeout=aiohttp.ClientTimeout(total=30),
         ssl=False,
     ) as resp:
+        raise_if_waf_challenge(resp.status, resp.headers)
         if resp.status != 200:
             raise Exception("登录 HTTP 错误 {}".format(resp.status))
         data = await resp.json()
@@ -126,6 +128,7 @@ async def login_by_sms(
         timeout=aiohttp.ClientTimeout(total=30),
         ssl=False,
     ) as resp:
+        raise_if_waf_challenge(resp.status, resp.headers)
         if resp.status != 200:
             raise Exception("短信登录 HTTP 错误 {}".format(resp.status))
         data = await resp.json()

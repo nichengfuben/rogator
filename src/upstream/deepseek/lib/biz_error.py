@@ -20,6 +20,24 @@ class DeepSeekUserMutedError(Exception):
         super().__init__(biz_msg)
 
 
+class DeepSeekWafChallengeError(DeepSeekUserMutedError):
+    """CloudFront WAF 人机挑战（HTTP 202 + ``x-amzn-waf-action: challenge``）。"""
+
+    def __init__(self) -> None:
+        super().__init__(biz_msg="waf challenge")
+
+
+def raise_if_waf_challenge(status: int, headers: Any) -> None:
+    """若响应为 WAF challenge，抛出 :class:`DeepSeekWafChallengeError`。"""
+    action = ""
+    if headers is not None:
+        get = getattr(headers, "get", None)
+        if callable(get):
+            action = str(get("x-amzn-waf-action") or get("X-Amzn-Waf-Action") or "")
+    if status == 202 and action.lower() == "challenge":
+        raise DeepSeekWafChallengeError()
+
+
 class DeepSeekAccountsExhaustedError(RuntimeError):
     """所有 DeepSeek 账号均 mute 或不可用。"""
 

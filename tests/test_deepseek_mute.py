@@ -19,8 +19,10 @@ from core.session.store import (
 from upstream.deepseek.client import DeepSeekClient
 from upstream.deepseek.lib.biz_error import (
     DeepSeekUserMutedError,
+    DeepSeekWafChallengeError,
     parse_biz_error_from_line,
     raise_if_user_muted,
+    raise_if_waf_challenge,
 )
 
 
@@ -40,6 +42,12 @@ class TestBizErrorParse(unittest.TestCase):
         line = '{"code":0,"data":{"biz_code":5,"biz_msg":"user is muted"}}'
         with self.assertRaises(DeepSeekUserMutedError):
             raise_if_user_muted(line)
+
+    def test_raise_if_waf_challenge(self) -> None:
+        with self.assertRaises(DeepSeekWafChallengeError):
+            raise_if_waf_challenge(202, {"x-amzn-waf-action": "challenge"})
+        raise_if_waf_challenge(202, {"x-amzn-waf-action": "allow"})
+        raise_if_waf_challenge(200, {"x-amzn-waf-action": "challenge"})
 
 
 class TestMutedAccountsPersist(unittest.TestCase):
@@ -91,6 +99,21 @@ class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
         with patch("core.session.pool.accounts_for_upstream", return_value=[Account(username="only@test.com", password="pw")]):
             await client.replenish_sessions(2)
         client.login_account.assert_not_called()
+
+    async def test_perform_login_waf_challenge_mutes_account(self) -> None:
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())):
+            client = DeepSeekClient(MagicMock())
+        client._save_meta = MagicMock(return_value=[])
+        client._ensure_ready = AsyncMock(return_value=MagicMock(_session=MagicMock(), _hif_managers={}))
+
+        with patch(
+            "upstream.deepseek.client.login",
+            AsyncMock(side_effect=DeepSeekWafChallengeError()),
+        ):
+            ps = await client._perform_login(Account(username="waf@test.com", password="pw"))
+
+        self.assertIsNone(ps)
+        self.assertIn("waf@test.com", client._muted_accounts)
 
 
 if __name__ == "__main__":

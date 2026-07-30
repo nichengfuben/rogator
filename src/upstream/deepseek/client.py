@@ -16,6 +16,7 @@ from upstream.deepseek.lib.adapter.client import DeepseekClient
 from upstream.deepseek.lib.adapter.helpers.pmtutil import Account as DsAccount
 from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.protocol.consts import MODELS
+from upstream.deepseek.lib.biz_error import DeepSeekUserMutedError
 from upstream.deepseek.lib.user.userapi import login
 
 logger = logging.getLogger("rogator")
@@ -90,7 +91,13 @@ class DeepSeekClient(SessionLoginMixin):
 
     async def _perform_login(self, account: Account) -> Optional[PlatformSession]:
         inner = await self._ensure_ready(skip_background=True)
-        token, user_id = await login(inner._session, account.username, account.password)  # noqa: SLF001
+        try:
+            token, user_id = await login(  # noqa: SLF001
+                inner._session, account.username, account.password
+            )
+        except DeepSeekUserMutedError:
+            self.handle_account_muted(account.username, mute_at=time.time())
+            return None
         mgr = inner._hif_managers.get(account.username)  # noqa: SLF001
         if mgr is not None:
             try:
