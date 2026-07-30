@@ -180,8 +180,8 @@ async def _process_anthropic_content_event(
     state: AnthropicStreamState,
     disconnected: list,
 ) -> bool:
-    if is_native_upstream_event(stream_state.registry_entry, proc_event):
-        stream_state.native_upstream = True
+    if is_native_upstream_event(state.registry_entry, proc_event):
+        state.native_upstream = True
         etype = proc_event.get("type")
         content = proc_event.get("content", "")
         if etype in ("response_created", "usage"):

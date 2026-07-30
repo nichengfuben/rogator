@@ -418,7 +418,6 @@ class CursorTokenService:
                     threshold,
                 )
                 return await self.pull_until_acceptable(threshold)
-            logger.debug("Cursor 用量正常 %.1f%%", u["total_pct"])
             return True
         except (ApiError, aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
             logger.warning("Cursor 查询用量失败: %s", e)
