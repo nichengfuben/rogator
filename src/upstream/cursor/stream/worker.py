@@ -25,7 +25,7 @@ from upstream.cursor.stream.proto import (
     encode_frame,
     safe_send_data,
 )
-from upstream.cursor.stream.tool_filter import apply_tool_filter_headers
+from upstream.cursor.stream.exec.tool_filter import apply_tool_filter_headers
 
 
 def _open_h2_socket(host: str):
@@ -137,6 +137,54 @@ def _agent_headers(
     )
 
 
+def _connect_and_send_run(
+    *,
+    token: Dict[str, str],
+    prompt: str,
+    model: str,
+    conversation_id: Optional[str],
+    mcp_tools: Optional[List[Dict[str, Any]]],
+    conversation_history: Optional[List[Dict[str, Any]]],
+    workspace: str,
+    images: Optional[List[Any]],
+    files: Optional[List[Any]],
+    custom_system_prompt: Optional[str],
+    prepend_user_messages: Optional[List[Dict[str, Any]]],
+    harness: Optional[Any],
+    exclude_workspace_context: bool,
+    allowed_tools: Optional[List[str]],
+    exclude_tools: Optional[List[str]],
+) -> Tuple[Any, Any, int, str, float, float]:
+    cfg = agent_config()
+    host = agent_host()
+    timeout = float(cfg.get("request_timeout") or 300)
+    heartbeat_interval = float(cfg.get("heartbeat_interval") or 5)
+    client_version = str(cfg.get("client_version") or "cli-2026.07.23-e383d2b")
+    timezone = str(cfg.get("timezone") or "Asia/Shanghai")
+    conv_id = conversation_id or str(uuid.uuid4())
+    sock, conn = _open_h2_socket(host)
+    stream_id = conn.get_next_available_stream_id()
+    conn.send_headers(
+        stream_id,
+        _agent_headers(
+            host, token, client_version, timezone, str(uuid.uuid4()), str(uuid.uuid4()),
+            allowed_tools=allowed_tools, exclude_tools=exclude_tools,
+        ),
+        end_stream=False,
+    )
+    sock.sendall(conn.data_to_send())
+    run_request = _build_run_request(
+        prompt=prompt, model=model, conv_id=conv_id, msg_id=str(uuid.uuid4()),
+        group_id=str(uuid.uuid4()), workspace=workspace, mcp_tools=mcp_tools,
+        conversation_history=conversation_history, images=images, files=files,
+        custom_system_prompt=custom_system_prompt,
+        prepend_user_messages=prepend_user_messages,
+        harness=harness, exclude_workspace_context=exclude_workspace_context,
+    )
+    safe_send_data(conn, sock, stream_id, encode_frame(run_request))
+    return sock, conn, stream_id, conv_id, timeout, heartbeat_interval
+
+
 def _run_agent_stream(
     q: queue.Queue,
     token: Dict[str, str],
@@ -158,43 +206,20 @@ def _run_agent_stream(
     exclude_tools: Optional[List[str]] = None,
     defer_mcp: bool = False,
 ) -> None:
-    cfg = agent_config()
-    host = agent_host()
-    timeout = int(cfg.get("request_timeout") or 300)
-    heartbeat_interval = float(cfg.get("heartbeat_interval") or 5)
-    client_version = str(cfg.get("client_version") or "cli-2026.07.23-e383d2b")
-    timezone = str(cfg.get("timezone") or "Asia/Shanghai")
-    conv_id = conversation_id or str(uuid.uuid4())
-    session_id = str(uuid.uuid4())
-    request_id = str(uuid.uuid4())
-
-    sock, conn = _open_h2_socket(host)
-    stream_id = conn.get_next_available_stream_id()
-    conn.send_headers(
-        stream_id,
-        _agent_headers(
-            host, token, client_version, timezone, session_id, request_id,
-            allowed_tools=allowed_tools, exclude_tools=exclude_tools,
-        ),
-        end_stream=False,
-    )
-    sock.sendall(conn.data_to_send())
-    run_request = _build_run_request(
-        prompt=prompt, model=model, conv_id=conv_id, msg_id=str(uuid.uuid4()),
-        group_id=str(uuid.uuid4()), workspace=workspace, mcp_tools=mcp_tools,
-        conversation_history=conversation_history, images=images, files=files,
-        custom_system_prompt=custom_system_prompt,
-        prepend_user_messages=prepend_user_messages,
-        harness=harness,
+    sock, conn, stream_id, conv_id, timeout, heartbeat_interval = _connect_and_send_run(
+        token=token, prompt=prompt, model=model, conversation_id=conversation_id,
+        mcp_tools=mcp_tools, conversation_history=conversation_history, workspace=workspace,
+        images=images, files=files, custom_system_prompt=custom_system_prompt,
+        prepend_user_messages=prepend_user_messages, harness=harness,
         exclude_workspace_context=exclude_workspace_context,
+        allowed_tools=allowed_tools, exclude_tools=exclude_tools,
     )
-    safe_send_data(conn, sock, stream_id, encode_frame(run_request))
     ctx = AgentRunContext(
         q=q, conv_id=conv_id, start=time.time(), tool_handlers=tool_handlers or {},
         send_frame=lambda _obj: None, finish=lambda *_a, **_k: None, touch=lambda: None,
         defer_mcp=defer_mcp,
     )
-    run_agent_loop(sock, conn, stream_id, ctx, timeout=float(timeout), heartbeat_interval=heartbeat_interval)
+    run_agent_loop(sock, conn, stream_id, ctx, timeout=timeout, heartbeat_interval=heartbeat_interval)
 
 
 def stream_worker(

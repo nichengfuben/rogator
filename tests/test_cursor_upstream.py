@@ -263,7 +263,7 @@ class TestCursorConverter(unittest.TestCase):
         self.assertNotIn("customSystemPrompt", run)
 
     def test_tool_filter_headers(self) -> None:
-        from upstream.cursor.stream.tool_filter import (
+        from upstream.cursor.stream.exec.tool_filter import (
             HEADER_ALLOWED_TOOLS,
             HEADER_EXCLUDE_TOOLS,
             MCP_ONLY_ALLOWED_TOOLS,

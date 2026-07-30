@@ -9,6 +9,42 @@ from upstream.cursor.stream.proto import StreamEvent
 from upstream.cursor.stream.worker import stream_worker
 
 
+def _start_stream_worker(
+    q: queue.Queue,
+    *,
+    prompt: str,
+    model: str,
+    token: Dict[str, str],
+    conversation_id: Optional[str],
+    mcp_tools: Optional[List[Dict[str, Any]]],
+    conversation_history: Optional[List[Dict[str, Any]]],
+    workspace: str,
+    tool_handlers: Optional[Dict[str, Callable[..., Any]]],
+    images: Optional[List[Any]],
+    files: Optional[List[Any]],
+    custom_system_prompt: Optional[str],
+    prepend_user_messages: Optional[List[Dict[str, Any]]],
+    harness: Optional[Any],
+    exclude_workspace_context: bool,
+    allowed_tools: Optional[List[str]],
+    exclude_tools: Optional[List[str]],
+    defer_mcp: bool,
+) -> threading.Thread:
+    def _run() -> None:
+        stream_worker(
+            q, token, prompt, model, conversation_id, mcp_tools, conversation_history, workspace,
+            tool_handlers=tool_handlers, images=images, files=files,
+            custom_system_prompt=custom_system_prompt,
+            prepend_user_messages=prepend_user_messages, harness=harness,
+            exclude_workspace_context=exclude_workspace_context,
+            allowed_tools=allowed_tools, exclude_tools=exclude_tools, defer_mcp=defer_mcp,
+        )
+
+    worker = threading.Thread(target=_run, name="cursor-stream-worker", daemon=True)
+    worker.start()
+    return worker
+
+
 async def stream_cursor_agent(
     *,
     prompt: str,
@@ -30,28 +66,14 @@ async def stream_cursor_agent(
     defer_mcp: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
     q: queue.Queue = queue.Queue()
-
-    def _run() -> None:
-        stream_worker(
-            q, token, prompt, model, conversation_id, mcp_tools, conversation_history, workspace or "",
-            tool_handlers=tool_handlers,
-            images=images,
-            files=files,
-            custom_system_prompt=custom_system_prompt,
-            prepend_user_messages=prepend_user_messages,
-            harness=harness,
-            exclude_workspace_context=exclude_workspace_context,
-            allowed_tools=allowed_tools,
-            exclude_tools=exclude_tools,
-            defer_mcp=defer_mcp,
-        )
-
-    worker = threading.Thread(
-        target=_run,
-        name="cursor-stream-worker",
-        daemon=True,
+    _start_stream_worker(
+        q, prompt=prompt, model=model, token=token, conversation_id=conversation_id,
+        mcp_tools=mcp_tools, conversation_history=conversation_history,
+        workspace=workspace or "", tool_handlers=tool_handlers, images=images, files=files,
+        custom_system_prompt=custom_system_prompt, prepend_user_messages=prepend_user_messages,
+        harness=harness, exclude_workspace_context=exclude_workspace_context,
+        allowed_tools=allowed_tools, exclude_tools=exclude_tools, defer_mcp=defer_mcp,
     )
-    worker.start()
     while True:
         try:
             event = q.get_nowait()
