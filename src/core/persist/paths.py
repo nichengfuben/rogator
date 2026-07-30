@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-KNOWN_UPSTREAMS: tuple[str, ...] = ("qwen", "deepseek")
+KNOWN_UPSTREAMS: tuple[str, ...] = ("qwen", "deepseek", "cursor")
 
 
 def persist_root(root: Path | None = None) -> Path:

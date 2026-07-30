@@ -258,6 +258,19 @@ def _reconcile_tool_calls(state: AnthropicStreamState) -> None:
 async def _complete_anthropic_stream(
     resp, parser, stream_state, usage_tracker, model, msg_id, req_id, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+    if stream_state.native_upstream:
+        stream_state.all_tool_calls = list(stream_state.streamed_tool_calls)
+        await _maybe_emit_message_start(
+            resp, model, msg_id, usage_tracker, stream_state, disconnected,
+        )
+        if stream_state.deferred_content and not disconnected[0]:
+            if not await _process_anthropic_content_events(
+                resp, stream_state.deferred_content, parser, stream_state, disconnected,
+            ):
+                return stream_result_tuple(stream_state, usage_tracker, early_return=True)
+            stream_state.deferred_content = []
+        return stream_result_tuple(stream_state, usage_tracker, early_return=False)
+
     final_text, parsed_calls = _finalize_parser(parser)
     stream_state.all_tool_calls = parsed_calls
 
@@ -285,9 +298,9 @@ async def _complete_anthropic_stream(
 
 async def _stream_anthropic(
     resp, state, messages, model, tools, req_id, disconnected, protocol_options=None,
-    *, msg_id: str,
+    *, msg_id: str, registry_entry=None,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    stream_state = AnthropicStreamState()
+    stream_state = AnthropicStreamState(registry_entry=registry_entry)
     parser = FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options)
     usage_tracker = UpstreamUsageTracker()
 

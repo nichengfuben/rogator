@@ -41,6 +41,7 @@ from server.formats import (
     client_disconnected_response,
     read_request_json,
 )
+from server.model.model_registry import ModelRegistryEntry, is_native_upstream_event
 from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.records.response_record import record_raw_response
 from server.retry import stream_with_session_retry
@@ -68,6 +69,8 @@ class OpenAIStreamState:
     streamed_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     stream_tool: Optional[Dict[str, Any]] = None
     stream_tool_blocks_sent: int = 0
+    native_upstream: bool = False
+    registry_entry: Optional[ModelRegistryEntry] = None
     usage_tracker: UpstreamUsageTracker = field(default_factory=UpstreamUsageTracker)
 
     def stream_chunk(self, **kwargs: Any) -> Dict[str, Any]:
@@ -150,6 +153,35 @@ async def _process_openai_stream_answer(st: OpenAIStreamState, content: str) -> 
 
 async def _process_openai_stream_event(st: OpenAIStreamState, event: Dict[str, Any]) -> bool:
     """处理单个上游事件；返回 False 表示应中断流。"""
+    if is_native_upstream_event(st.registry_entry, event):
+        st.native_upstream = True
+        etype = event.get("type")
+        if etype == "prompt_meta":
+            st.usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
+            return True
+        st.usage_tracker.ingest_event(event)
+        if etype in ("response_created", "usage"):
+            return True
+        if etype == "thinking":
+            content = event.get("content", "")
+            if content:
+                st.usage_tracker.add_output_chars(len(content))
+            return await _process_openai_stream_thinking(st, content)
+        if etype == "answer":
+            content = event.get("content", "")
+            if content:
+                st.usage_tracker.add_output_chars(len(content))
+                st.full_answer += content
+                chunk = st.stream_chunk(content=content)
+                return await _emit_chunk(st.resp, chunk, st.disconnected)
+            return True
+        if etype == "tool_call":
+            tc = event.get("tool_call")
+            if tc:
+                await _emit_ready_tool_calls(st, [tc])
+            return True
+        return True
+
     etype = event.get("type")
     if etype == "prompt_meta":
         st.usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
@@ -168,6 +200,8 @@ async def _process_openai_stream_event(st: OpenAIStreamState, event: Dict[str, A
 
 
 def _finalize_parser_tool_calls(st: OpenAIStreamState) -> tuple[str, List[Dict[str, Any]]]:
+    if st.native_upstream:
+        return st.full_answer, list(st.streamed_tool_calls)
     final_text = st.parser.partial_text
     try:
         final_text, parsed_calls = st.parser.finalize()
@@ -181,6 +215,8 @@ async def _flush_remaining_thinking_and_text(
     st: OpenAIStreamState, final_text: str,
 ) -> None:
     if st.disconnected[0]:
+        return
+    if st.native_upstream:
         return
     await _emit_partial_thinking(st)
 
@@ -196,7 +232,7 @@ async def _flush_remaining_thinking_and_text(
 
 
 async def _finalize_openai_stream_tool(st: OpenAIStreamState, all_tool_calls: List[Dict[str, Any]]) -> None:
-    if st.disconnected[0]:
+    if st.disconnected[0] or st.native_upstream:
         return
     late_ready = st.parser.get_ready_tool_calls()
     if late_ready:
@@ -297,6 +333,7 @@ async def _finish_openai_stream(st: OpenAIStreamState, resp, model, include_usag
 async def _handle_stream(
     request, state, messages, model, req_id, tools, protocol_options=None, *,
     include_usage: bool = False,
+    registry_entry: Optional[ModelRegistryEntry] = None,
 ):
     try:
         async with tracked_request(state, req_id):
@@ -314,6 +351,7 @@ async def _handle_stream(
                 include_usage=include_usage,
                 parser=FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options),
                 req_id=req_id,
+                registry_entry=registry_entry,
             )
 
             try:
@@ -359,9 +397,14 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     messages = body.get("messages", [])
     requested_model = body.get("model", state.model)
     try:
-        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
+        from handlers.model_resolve import (
+            model_resolve_error_response,
+            resolve_handler_model,
+            resolve_handler_model_entry,
+        )
 
-        model = resolve_handler_model(state, str(requested_model))
+        registry_entry = resolve_handler_model_entry(state, str(requested_model))
+        model = registry_entry.internal_id
     except Exception as exc:
         from server.model.model_registry import ModelResolveError
 
@@ -382,17 +425,22 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     )
     req_id = _gen_request_id()
     if not stream:
-        return await _handle_non_stream(state, messages, model, req_id, tools, protocol_options)
+        return await _handle_non_stream(
+            state, messages, model, req_id, tools, protocol_options, registry_entry=registry_entry,
+        )
     return await _handle_stream(
         request, state, messages, model, req_id, tools, protocol_options,
         include_usage=openai_stream_include_usage(body),
+        registry_entry=registry_entry,
     )
 
 
-async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
+async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None, *, registry_entry=None):
     try:
         result = await state.scheduler.submit(
-            lambda: _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options))
+            lambda: _process_openai_non_stream(
+                state, messages, model, req_id, tools, protocol_options, registry_entry=registry_entry,
+            ))
         return _json_response(result)
     except Exception as e:
         return handler_error_response(e, label="OpenAI non-stream")

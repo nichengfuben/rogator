@@ -316,6 +316,24 @@ def migrate_models_upstream(
         logger.info("已初始化 models [deepseek] → %s", dest)
         return True
 
+    if upstream == "cursor":
+        try:
+            from upstream.cursor.client import _model_ids_from_config
+            from upstream.cursor.models_store import _meta_for
+
+            ids = _model_ids_from_config()
+            payload = {
+                "models": ids,
+                "meta": {mid: _meta_for(mid) for mid in ids},
+                "updated_at": int(time.time()),
+            }
+            _write_json(dest, payload)
+            logger.info("已初始化 models [cursor] → %s", dest)
+            return True
+        except Exception as exc:
+            logger.debug("cursor models init skipped: %s", exc)
+            return False
+
     return False
 
 

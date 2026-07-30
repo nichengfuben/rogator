@@ -231,6 +231,12 @@ def start_background_tasks(state: "AppState") -> List[asyncio.Task]:
         asyncio.create_task(upstream_init_background(state)),
     ]
     for name, client in state._clients.items():
+        token_loop = getattr(client, "token_maintenance_loop", None)
+        if callable(token_loop):
+            tasks.append(
+                asyncio.create_task(token_loop(state.shutdown_event))
+            )
+            continue
         if not hasattr(client, "replenish_sessions"):
             continue
         tasks.append(asyncio.create_task(session_maintenance_loop(state, client, name)))

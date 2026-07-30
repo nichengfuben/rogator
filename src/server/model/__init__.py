@@ -18,6 +18,9 @@ from server.model.model_registry import (
     reload_model_registry,
     resolve_request_model,
     uses_entml_thinking,
+    uses_entml_tools,
+    uses_native_upstream_response,
+    is_native_upstream_event,
 )
 from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.model.token_estimate import (
@@ -44,5 +47,8 @@ __all__ = [
     "reload_model_registry",
     "resolve_qwen_thinking",
     "resolve_request_model",
+    "is_native_upstream_event",
     "uses_entml_thinking",
+    "uses_entml_tools",
+    "uses_native_upstream_response",
 ]

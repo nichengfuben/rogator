@@ -34,6 +34,7 @@ refresh_interval = 3600.0
 
 [upstream]
 # 启用的上游模块（对应 upstream/<name>/）；未列出的不会被加载
+# 可选: "deepseek", "cursor"（cursor 需在 configs/cursor.toml 配置 Star Cursor api_keys）
 enabled = ["qwen"]
 
 [shutdown]

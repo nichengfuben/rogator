@@ -39,7 +39,9 @@ htmlcov/
 .tox/
 # Project specific
 config.toml
+configs/
 persist/qwen/
+persist/cursor/
 persist/sessions.json
 logs/prompts/
 abnormis.txt

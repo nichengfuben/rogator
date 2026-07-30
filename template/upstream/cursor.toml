@@ -1,0 +1,50 @@
+# Cursor 上游配置（复制到 configs/cursor.toml 后按需修改）
+
+[capabilities]
+chat = true
+vision = false
+search = false
+count_tokens = false
+image_gen = false
+tts = false
+
+[cursor]
+base_url = "https://api2.cursor.sh"
+client_version = "3.12.17"
+default_model = "default"
+request_timeout = 120
+heartbeat_interval = 5
+timezone = "Asia/Shanghai"
+
+[starcursor]
+base_url = "http://starcursor.airoe.cn"
+api_keys = []
+switch_threshold = 80
+usage_threshold = 90.0
+poll_interval = 30
+status_refresh_interval = 30
+request_timeout = 15
+max_retry_per_pull = 3
+
+[models]
+default = "default"
+fallback = [
+    "default",
+    "composer-2.5-fast",
+    "composer-2.5",
+    "composer-2",
+    "composer-2-fast",
+    "composer-1.5",
+    "gpt-4",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4-turbo",
+    "gpt-3.5-turbo",
+]
+
+[models.mapping]
+gpt-4 = "composer-2.5-fast"
+gpt-4o = "composer-2.5-fast"
+gpt-4o-mini = "composer-2.5-fast"
+gpt-4-turbo = "composer-2.5"
+gpt-3.5-turbo = "composer-2"

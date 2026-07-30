@@ -61,11 +61,12 @@ async def _send_post_stream(
     )
 
 
-async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
+async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None, *, registry_entry=None):
     try:
         result = await state.scheduler.submit(
             lambda: _process_openai_non_stream(
                 state, messages, model, req_id, tools, protocol_options,
+                registry_entry=registry_entry,
             )
         )
         return _json_response(convert_to_anthropic(result))
@@ -82,7 +83,7 @@ async def _emit_anthropic_handler_stream_error(
     await _write_stream_error(resp, {"type": "error", "error": err_body}, disconnected)
 
 
-async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None):
+async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None, *, registry_entry=None):
     try:
         async with tracked_request(state, req_id):
             resp = web.StreamResponse(
@@ -96,7 +97,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
             try:
                 block_idx, block_type, _full_answer, early_return, pending_tc_count, all_tool_calls, usage_tracker = await _stream_anthropic(
                     resp, state, messages, model, tools, req_id, disconnected, protocol_options,
-                    msg_id=msg_id,
+                    msg_id=msg_id, registry_entry=registry_entry,
                 )
             except asyncio.CancelledError:
                 logger.info("Anthropic stream cancelled during shutdown %s", req_id)
@@ -137,9 +138,13 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     system = body.get("system")
     requested_model = body.get("model", state.model)
     try:
-        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
+        from handlers.model_resolve import (
+            model_resolve_error_response,
+            resolve_handler_model_entry,
+        )
 
-        model = resolve_handler_model(state, str(requested_model))
+        registry_entry = resolve_handler_model_entry(state, str(requested_model))
+        model = registry_entry.internal_id
     except Exception as exc:
         from server.model.model_registry import ModelResolveError
 
@@ -167,7 +172,9 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     if not stream:
         return await _handle_non_stream(
             state, messages, model, req_id, tools, protocol_options,
+            registry_entry=registry_entry,
         )
     return await _handle_stream(
         request, state, messages, model, req_id, tools, protocol_options,
+        registry_entry=registry_entry,
     )

@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id
 
+from server.model.model_registry import ModelRegistryEntry
+
 _STREAM_CHUNK_SIZE = 20
 
 
@@ -182,6 +184,8 @@ class AnthropicStreamState:
     message_started: bool = False
     deferred_content: List[Dict[str, Any]] = field(default_factory=list)
     all_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    native_upstream: bool = False
+    registry_entry: Optional[ModelRegistryEntry] = None
 
 
 def merged_tool_calls(state: AnthropicStreamState) -> List[Dict[str, Any]]:

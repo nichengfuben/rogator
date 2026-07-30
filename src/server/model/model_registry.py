@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""模型注册表：外键（API）→ 内键（上游）→ entml 思考开关。"""
+"""模型注册表：外键 → 内键 → entml 思考 / entml 工具调用开关。"""
 
 import logging
 from dataclasses import dataclass
@@ -19,6 +19,7 @@ class ModelRegistryEntry:
     external_id: str
     internal_id: str
     uses_entml: bool
+    uses_entml_tools: bool
 
 
 class ModelResolveError(Exception):
@@ -41,7 +42,7 @@ class ModelInternalIdError(ModelResolveError):
 
 
 class ModelNotConfiguredError(ModelResolveError):
-    """上游模型已在列表中，但注册表缺少外键:内键:值 配置。"""
+    """上游模型已在列表中，但注册表缺少外键:内键:思考:工具 配置。"""
 
 
 @dataclass
@@ -51,24 +52,35 @@ class ModelRegistry:
     by_internal: Dict[str, ModelRegistryEntry]
 
 
+def _parse_bool_flag(raw: str) -> Optional[bool]:
+    lowered = raw.strip().lower()
+    if lowered in ("true", "1", "yes"):
+        return True
+    if lowered in ("false", "0", "no"):
+        return False
+    return None
+
+
 def _parse_line(line: str) -> Optional[ModelRegistryEntry]:
     line = line.strip()
     if not line or line.startswith("#"):
         return None
-    parts = line.split(":", 2)
-    if len(parts) != 3:
+    parts = [p.strip() for p in line.split(":")]
+    if len(parts) not in (3, 4):
         return None
-    external_id, internal_id, flag = (p.strip() for p in parts)
+    external_id, internal_id = parts[0], parts[1]
     if not external_id or not internal_id:
         return None
-    lowered = flag.lower()
-    if lowered in ("true", "1", "yes"):
-        uses_entml = True
-    elif lowered in ("false", "0", "no"):
-        uses_entml = False
-    else:
+    thinking_flag = _parse_bool_flag(parts[2])
+    if thinking_flag is None:
         return None
-    return ModelRegistryEntry(external_id, internal_id, uses_entml)
+    if len(parts) == 4:
+        tools_flag = _parse_bool_flag(parts[3])
+        if tools_flag is None:
+            return None
+    else:
+        tools_flag = thinking_flag
+    return ModelRegistryEntry(external_id, internal_id, thinking_flag, tools_flag)
 
 
 def load_model_registry(path: Path | None = None) -> ModelRegistry:
@@ -100,6 +112,15 @@ def reload_model_registry(path: Path | None = None) -> ModelRegistry:
     global _MODEL_REGISTRY
     _MODEL_REGISTRY = load_model_registry(path)
     return _MODEL_REGISTRY
+
+
+def _entry_for_internal(internal_model: str) -> ModelRegistryEntry:
+    entry = _MODEL_REGISTRY.by_internal.get(internal_model)
+    if entry is None:
+        raise ModelNotConfiguredError(
+            f"模型 ID {internal_model} 存在于上游列表但未配置，请检查 persist/model_registry.jsonl"
+        )
+    return entry
 
 
 def list_external_models(available_internal: Sequence[str]) -> List[str]:
@@ -144,9 +165,32 @@ def resolve_request_model(requested: str, available_internal: Iterable[str]) -> 
 
 
 def uses_entml_thinking(internal_model: str) -> bool:
-    entry = _MODEL_REGISTRY.by_internal.get(internal_model)
+    return _entry_for_internal(internal_model).uses_entml
+
+
+def uses_entml_tools(internal_model: str) -> bool:
+    return _entry_for_internal(internal_model).uses_entml_tools
+
+
+def uses_native_upstream_response(entry: ModelRegistryEntry) -> bool:
+    """思考与工具调用均不走 entml 响应解析。"""
+    return not entry.uses_entml and not entry.uses_entml_tools
+
+
+def is_native_upstream_event(
+    entry: Optional[ModelRegistryEntry],
+    event: Dict[str, object],
+) -> bool:
+    """上游事件是否应绕过 entml 解析（按注册表或 upstream native 标记）。"""
+    if event.get("native"):
+        return True
     if entry is None:
-        raise ModelNotConfiguredError(
-            f"模型 ID {internal_model} 存在于上游列表但未配置，请检查 persist/model_registry.jsonl"
-        )
-    return entry.uses_entml
+        return False
+    etype = event.get("type")
+    if etype == "tool_call":
+        return not entry.uses_entml_tools
+    if etype == "thinking":
+        return not entry.uses_entml
+    if etype == "answer":
+        return not entry.uses_entml_tools
+    return False
