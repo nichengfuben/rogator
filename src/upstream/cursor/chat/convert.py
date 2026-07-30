@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from upstream.cursor.config import load_cursor_upstream_config
+from upstream.cursor.setup.config import load_cursor_upstream_config
 
 
 def _message_text(msg: Dict[str, Any]) -> str:
@@ -88,15 +88,23 @@ def split_prompt_and_history(messages: List[Dict[str, Any]]) -> Tuple[str, List[
 
 
 def map_model(model: Optional[str]) -> str:
+    """将 Rogator 内键映射为 Cursor Agent ``modelId``（保留 effort 后缀）。"""
     cfg = load_cursor_upstream_config()
     cursor_cfg = cfg.get("cursor") or {}
     models_cfg = cfg.get("models") or {}
     default = str(models_cfg.get("default") or cursor_cfg.get("default_model") or "composer-2.5-fast")
     if not model:
         return default
+
+    from upstream.cursor.models.identity import is_valid_model_id
+
+    if is_valid_model_id(model):
+        return model
+
     mapping = models_cfg.get("mapping") or {}
     if isinstance(mapping, dict) and model in mapping:
-        return str(mapping[model])
+        mapped = str(mapping[model])
+        return mapped if is_valid_model_id(mapped) else model
     return model
 
 

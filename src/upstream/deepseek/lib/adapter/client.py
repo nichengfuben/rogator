@@ -28,7 +28,7 @@ from upstream.deepseek.lib.adapter.helpers.client_helpers import (
 )
 from upstream.deepseek.lib.guard.hif import HifTokenManager
 from upstream.deepseek.lib.guard.pow import WasmPow
-from upstream.deepseek.lib.stream.strmpars import StreamParser
+from upstream.deepseek.lib.runtime.stream.strmpars import StreamParser
 
 logger = logging.getLogger(__name__)
 

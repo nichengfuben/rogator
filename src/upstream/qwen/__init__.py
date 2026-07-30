@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 NAME = "qwen"
+PERSIST_MODULE = "upstream.qwen.auth.persist"
 
 _PLATFORM_SKIP = frozenset({"thinking", "tools", "native_tools"})
 

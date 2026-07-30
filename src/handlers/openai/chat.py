@@ -45,6 +45,30 @@ async def _chat_once(
         yield event
 
 
+def _ingest_non_stream_event(
+    event: Dict[str, Any],
+    registry_entry: Optional[ModelRegistryEntry],
+    response_parts: List[str],
+    think_parts: List[str],
+    tool_calls_native: List[Dict[str, Any]],
+) -> None:
+    if event.get("type") in ("response_created", "usage", "prompt_meta"):
+        return
+    if is_native_upstream_event(registry_entry, event):
+        etype = event.get("type")
+        if etype == "answer":
+            response_parts.append(event.get("content", ""))
+        elif etype == "thinking":
+            think_parts.append(event.get("content", ""))
+        elif etype == "tool_call" and event.get("tool_call"):
+            tool_calls_native.append(event["tool_call"])
+        return
+    if event.get("type") == "answer":
+        response_parts.append(event.get("content", ""))
+    elif event.get("type") == "thinking":
+        think_parts.append(event.get("content", ""))
+
+
 async def _collect_non_stream_response(
     state, messages, model, tools, req_id, protocol_options,
     *,
@@ -64,21 +88,9 @@ async def _collect_non_stream_response(
             event_count += 1
             usage_tracker.ingest_event(event)
             raw_recorder.ingest_event(event)
-            if event.get("type") in ("response_created", "usage", "prompt_meta"):
-                continue
-            if is_native_upstream_event(registry_entry, event):
-                etype = event.get("type")
-                if etype == "answer":
-                    response_parts.append(event.get("content", ""))
-                elif etype == "thinking":
-                    think_parts.append(event.get("content", ""))
-                elif etype == "tool_call" and event.get("tool_call"):
-                    tool_calls_native.append(event["tool_call"])
-                continue
-            if event.get("type") == "answer":
-                response_parts.append(event.get("content", ""))
-            elif event.get("type") == "thinking":
-                think_parts.append(event.get("content", ""))
+            _ingest_non_stream_event(
+                event, registry_entry, response_parts, think_parts, tool_calls_native,
+            )
     if event_count == 0:
         logger.warning("No events received from upstream for req %s", req_id)
         raise EmptyResponseError(f"No events received from upstream for {req_id}")

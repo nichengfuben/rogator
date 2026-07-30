@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from upstream.deepseek.lib.stream.srchres import SearchResult
+from upstream.deepseek.lib.runtime.stream.srchres import SearchResult
 
 
 class _FragmentChunkMixin:

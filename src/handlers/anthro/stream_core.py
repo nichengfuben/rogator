@@ -7,9 +7,12 @@ from server.formats import (
     TokenExpiredError,
     UpstreamUsageTracker,
     UpstreamTimeoutError,
+    UpstreamUnavailableError,
+    UpstreamConnectionError,
     _fix_tool_call_id,
     log_qwen_upstream_usage,
 )
+from server.formats import as_upstream_connection_error
 from server.records.response_record import record_raw_response
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
@@ -80,6 +83,36 @@ async def _handle_stream_upstream_timeout(
     logger.warning("Anthropic stream upstream timeout: %s", e)
     await _write_stream_error(
         resp, {"type": "error", "error": {"message": str(e), "type": "timeout"}}, disconnected,
+    )
+    return stream_result_tuple(state, usage_tracker, early_return=True)
+
+
+async def _handle_stream_upstream_unavailable(
+    resp, state, usage_tracker, e: UpstreamUnavailableError, disconnected,
+) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+    logger.warning("Anthropic stream upstream unavailable: %s", e.message)
+    await _write_stream_error(
+        resp,
+        {
+            "type": "error",
+            "error": {"message": e.message, "type": e.error_type, "code": e.status},
+        },
+        disconnected,
+    )
+    return stream_result_tuple(state, usage_tracker, early_return=True)
+
+
+async def _handle_stream_upstream_connection(
+    resp, state, usage_tracker, e: UpstreamConnectionError, disconnected,
+) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+    logger.warning("Anthropic stream upstream connection: %s", e.message)
+    await _write_stream_error(
+        resp,
+        {
+            "type": "error",
+            "error": {"message": e.message, "type": e.error_type, "code": e.status},
+        },
+        disconnected,
     )
     return stream_result_tuple(state, usage_tracker, early_return=True)
 
@@ -321,7 +354,20 @@ async def _stream_anthropic(
             return await _handle_stream_upstream_timeout(
                 resp, stream_state, usage_tracker, e, disconnected,
             )
+        except UpstreamUnavailableError as e:
+            return await _handle_stream_upstream_unavailable(
+                resp, stream_state, usage_tracker, e, disconnected,
+            )
+        except UpstreamConnectionError as e:
+            return await _handle_stream_upstream_connection(
+                resp, stream_state, usage_tracker, e, disconnected,
+            )
         except Exception as e:
+            conn_err = as_upstream_connection_error(e)
+            if conn_err is not None:
+                return await _handle_stream_upstream_connection(
+                    resp, stream_state, usage_tracker, conn_err, disconnected,
+                )
             return await _handle_stream_generic_error(
                 resp, stream_state, usage_tracker, e, disconnected,
             )

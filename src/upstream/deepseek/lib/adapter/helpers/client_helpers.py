@@ -17,7 +17,7 @@ from upstream.deepseek.lib.protocol.headers import build_headers
 from upstream.deepseek.lib.protocol.payload import make_stream_id
 from upstream.deepseek.lib.adapter.helpers.pmtutil import build_prompt, translate_chunk
 from upstream.deepseek.lib.guard.pow import get_pow_response
-from upstream.deepseek.lib.session.sessapi import create_session
+from upstream.deepseek.lib.runtime.session.sessapi import create_session
 
 
 def build_request_context(

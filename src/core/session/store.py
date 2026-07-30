@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.persist.migrate import migrate_sessions_upstream
 from core.persist.paths import PROJECT_ROOT, sessions_path as upstream_sessions_path
+from core.persist.upstream_persist import persist_attr
 from core.session.accounts import Account
 from core.session.io import atomic_write_text
 
@@ -50,9 +51,11 @@ class PlatformSession:
         exp = _jwt_exp(self.token)
         if exp is not None:
             return time.time() >= exp - 30
-        if self.upstream == "deepseek":
-            ttl = _deepseek_session_ttl()
-            return time.time() >= self.login_time + ttl - 30
+        ttl_fn = persist_attr(self.upstream, "session_expiry_ttl")
+        if callable(ttl_fn):
+            ttl = ttl_fn()
+            if ttl is not None:
+                return time.time() >= self.login_time + ttl - 30
         return True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -82,18 +85,6 @@ class PlatformSession:
 def sessions_file(upstream: str) -> Path:
     return upstream_sessions_path(upstream, PROJECT_ROOT)
 
-
-def _deepseek_session_ttl() -> float:
-    try:
-        from server.config.app_config import _load_upstream_toml
-
-        raw = _load_upstream_toml("deepseek")
-        session = raw.get("session") if isinstance(raw, dict) else None
-        if isinstance(session, dict) and session.get("token_ttl_seconds") is not None:
-            return float(session["token_ttl_seconds"])
-    except Exception:
-        pass
-    return 3600.0
 
 
 def _jwt_exp(token: str) -> Optional[float]:

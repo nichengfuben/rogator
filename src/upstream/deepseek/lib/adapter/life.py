@@ -10,7 +10,7 @@ from upstream.deepseek.lib.adapter.helpers.pmtutil import Account
 from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.guard.pow import WasmPow, download_wasm
 from upstream.deepseek.lib.protocol.consts import HIF_REFRESH_INTERVAL
-from upstream.deepseek.lib.user.userapi import login
+from upstream.deepseek.lib.runtime.user.userapi import login
 
 logger = logging.getLogger(__name__)
 

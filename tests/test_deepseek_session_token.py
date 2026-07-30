@@ -12,7 +12,7 @@ import aiohttp
 
 from core.session.accounts import Account, accounts_for_upstream
 from core.session.store import PlatformSession, _deepseek_session_ttl, _jwt_exp
-from upstream.deepseek.lib.user.userapi import login
+from upstream.deepseek.lib.runtime.user.userapi import login
 
 
 def _make_jwt(exp: float) -> str:

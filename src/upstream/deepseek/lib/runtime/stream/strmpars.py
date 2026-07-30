@@ -6,9 +6,9 @@ import json
 import re
 from typing import Any, Dict, Optional, Tuple
 
-from upstream.deepseek.lib.stream.fragchunk import _FragmentChunkMixin
-from upstream.deepseek.lib.stream.fraghndl import _FragmentHandlerMixin
-from upstream.deepseek.lib.stream.srchres import SearchResult
+from upstream.deepseek.lib.runtime.stream.fragchunk import _FragmentChunkMixin
+from upstream.deepseek.lib.runtime.stream.fraghndl import _FragmentHandlerMixin
+from upstream.deepseek.lib.runtime.stream.srchres import SearchResult
 
 # 重新导出 SearchResult，保持 `from .streamparser import SearchResult` 等旧引用路径可用
 __all__ = ["SearchResult", "StreamParser", "parse_sse_line"]

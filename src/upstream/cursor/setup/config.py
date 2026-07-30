@@ -7,17 +7,17 @@ from typing import Any, Dict, List
 _DEFAULT: Dict[str, Any] = {
     "capabilities": {
         "chat": True,
-        "vision": False,
+        "vision": True,
         "search": False,
         "count_tokens": False,
         "image_gen": False,
         "tts": False,
     },
     "cursor": {
-        "base_url": "https://api2.cursor.sh",
-        "client_version": "3.12.17",
+        "base_url": "https://agentn.global.api5.cursor.sh",
+        "client_version": "cli-2026.07.23-e383d2b",
         "default_model": "composer-2.5-fast",
-        "request_timeout": 120,
+        "request_timeout": 300,
         "heartbeat_interval": 5,
         "timezone": "Asia/Shanghai",
     },

@@ -301,6 +301,49 @@ async def _ingest_stream_event(
     return None
 
 
+async def _handle_native_tool_event(
+    resp, event, parser, stream_state, disconnected,
+) -> bool:
+    """处理原生 tool_call 事件；返回 False 表示应中断流。"""
+    stream_state.native_upstream = True
+    tc = event.get("tool_call")
+    if not tc:
+        return True
+    from server.formats import _fix_tool_call_id
+    return await _handle_ready_tool_calls_in_event(
+        resp, parser, stream_state, disconnected, [_fix_tool_call_id(tc)],
+    )
+
+
+async def _dispatch_stream_event(
+    resp,
+    event,
+    *,
+    model,
+    msg_id,
+    stream_state,
+    parser,
+    usage_tracker,
+    raw_recorder,
+    disconnected,
+) -> bool:
+    """处理单条流事件；返回 False 表示应中断外层循环。"""
+    if is_native_upstream_event(stream_state.registry_entry, event) and event.get("type") == "tool_call":
+        return await _handle_native_tool_event(resp, event, parser, stream_state, disconnected)
+    ingest = await _ingest_stream_event(
+        resp, event, model=model, msg_id=msg_id, stream_state=stream_state,
+        usage_tracker=usage_tracker, raw_recorder=raw_recorder, disconnected=disconnected,
+    )
+    if ingest is True:
+        return True
+    to_process = await _events_to_process(event, stream_state)
+    if to_process is None:
+        return True
+    return await _process_anthropic_content_events(
+        resp, to_process, parser, stream_state, disconnected,
+    )
+
+
 async def _stream_event_loop(
     resp,
     state_obj,
@@ -324,26 +367,9 @@ async def _stream_event_loop(
         async for event in event_stream:
             if disconnected[0]:
                 break
-            if is_native_upstream_event(stream_state.registry_entry, event) and event.get("type") == "tool_call":
-                stream_state.native_upstream = True
-                tc = event.get("tool_call")
-                if tc:
-                    from server.formats import _fix_tool_call_id
-                    if not await _handle_ready_tool_calls_in_event(
-                        resp, parser, stream_state, disconnected, [_fix_tool_call_id(tc)],
-                    ):
-                        break
-                continue
-            ingest = await _ingest_stream_event(
+            if not await _dispatch_stream_event(
                 resp, event, model=model, msg_id=msg_id, stream_state=stream_state,
-                usage_tracker=usage_tracker, raw_recorder=raw_recorder, disconnected=disconnected,
-            )
-            if ingest is True:
-                continue
-            to_process = await _events_to_process(event, stream_state)
-            if to_process is None:
-                continue
-            if not await _process_anthropic_content_events(
-                resp, to_process, parser, stream_state, disconnected,
+                parser=parser, usage_tracker=usage_tracker, raw_recorder=raw_recorder,
+                disconnected=disconnected,
             ):
                 break

@@ -98,6 +98,41 @@ class TestLoadModelsCache(unittest.TestCase):
         self.assertTrue(meta.capabilities.get("vision"))
         self.assertNotIn("thinking", meta.capabilities)
 
+    def test_mtime_fallback_when_updated_at_missing(self) -> None:
+        client = _ModelsClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "models.json"
+            cache_path.write_text(
+                json.dumps({"models": ["cached-model"], "meta": {}}),
+                encoding="utf-8",
+            )
+            mtime = cache_path.stat().st_mtime
+            with patch("upstream.qwen.account.MODELS_CACHE_FILE", str(cache_path)):
+                client.load_models_cache()
+        self.assertEqual(client._models_fetch_time, mtime)
+
+
+class TestModelsRefreshLoop(unittest.IsolatedAsyncioTestCase):
+    async def test_does_not_refresh_immediately(self) -> None:
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from state import AppState
+        from state_sched import models_refresh_loop
+
+        state = AppState.__new__(AppState)
+        state.shutdown_event = asyncio.Event()
+        state._shutdown_requested = False
+
+        with patch("state_sched.CONFIG") as cfg:
+            cfg.models_refresh_interval = 3600.0
+            with patch.object(state, "refresh_models", new_callable=AsyncMock) as refresh:
+                task = asyncio.create_task(models_refresh_loop(state))
+                await asyncio.sleep(0.05)
+                refresh.assert_not_called()
+                state.shutdown_event.set()
+                await task
+
 
 if __name__ == "__main__":
     unittest.main()

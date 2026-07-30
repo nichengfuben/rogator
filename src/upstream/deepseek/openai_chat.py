@@ -63,6 +63,60 @@ def _prepare_messages(
     return [{**injected[0], "content": send_text}], send_text
 
 
+async def _stream_one_candidate(
+    inner,
+    client,
+    candidate,
+    final_messages,
+    model: str,
+    *,
+    thinking: bool,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    async for chunk in inner.complete(
+        candidate,
+        final_messages,
+        model,
+        stream=True,
+        thinking=thinking,
+        search=False,
+    ):
+        event = _normalize_chunk(chunk)
+        if event is not None:
+            yield event
+
+
+async def _complete_with_mute_retry(
+    client,
+    inner,
+    final_messages,
+    model: str,
+    *,
+    thinking: bool,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    for attempt in range(_MAX_MUTE_SWITCH):
+        candidate = await client.pick_candidate()
+        username = str(candidate.meta.get("identifier") or "")
+        try:
+            async for event in _stream_one_candidate(
+                inner, client, candidate, final_messages, model, thinking=thinking,
+            ):
+                yield event
+            return
+        except DeepSeekUserMutedError as exc:
+            if username and hasattr(client, "handle_account_muted"):
+                client.handle_account_muted(username, mute_at=time.time())
+                logger.warning(
+                    "DeepSeek muted %s: %s (attempt %d/%d)",
+                    username[:6], exc.biz_msg, attempt + 1, _MAX_MUTE_SWITCH,
+                )
+            switched = await client.switch_to_next(exclude_username=username or None)
+            if switched is None:
+                raise DeepSeekAccountsExhaustedError(
+                    "All DeepSeek accounts are muted or unavailable",
+                ) from exc
+    raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")
+
+
 async def stream_openai_chat(
     state: Any,
     client: Any,
@@ -83,36 +137,7 @@ async def stream_openai_chat(
         logger.debug("DeepSeek: ignoring %d uploaded file(s) for req %s", len(files), req_id)
     yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
     inner = await client._ensure_ready()  # noqa: SLF001
-
-    for attempt in range(_MAX_MUTE_SWITCH):
-        candidate = await client.pick_candidate()
-        username = str(candidate.meta.get("identifier") or "")
-        try:
-            async for chunk in inner.complete(
-                candidate,
-                final_messages,
-                model,
-                stream=True,
-                thinking=qwen_enabled,
-                search=False,
-            ):
-                event = _normalize_chunk(chunk)
-                if event is not None:
-                    yield event
-            return
-        except DeepSeekUserMutedError as exc:
-            if username and hasattr(client, "handle_account_muted"):
-                client.handle_account_muted(username, mute_at=time.time())
-                logger.warning(
-                    "DeepSeek muted %s: %s (attempt %d/%d)",
-                    username[:6],
-                    exc.biz_msg,
-                    attempt + 1,
-                    _MAX_MUTE_SWITCH,
-                )
-            switched = await client.switch_to_next(exclude_username=username or None)
-            if switched is None:
-                raise DeepSeekAccountsExhaustedError(
-                    "All DeepSeek accounts are muted or unavailable"
-                ) from exc
-    raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")
+    async for event in _complete_with_mute_retry(
+        client, inner, final_messages, model, thinking=qwen_enabled,
+    ):
+        yield event

@@ -5,11 +5,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from upstream.cursor.auth_store import auth_path, get_access_token, write_auth
+from upstream.cursor.auth.store import auth_path, get_access_token, write_auth
 from upstream.cursor.client import _merge_model_inventory, _model_ids_from_config
-from upstream.cursor.models_store import load_merged, read_cache, write_cache
-from upstream.cursor.converter import messages_to_cursor_history, split_prompt_and_history
-from upstream.cursor.token_service import KeyPool, is_limit_reached, parse_usage
+from upstream.cursor.models.identity import (
+    external_id_for,
+    meta_for_model,
+    parse_cursor_model_id,
+)
+from upstream.cursor.models.store import load_merged, read_cache, write_cache
+from upstream.cursor.chat.convert import messages_to_cursor_history, split_prompt_and_history
+from upstream.cursor.auth.token_pool import KeyPool, is_limit_reached, parse_usage
 
 
 class TestCursorAuthStore(unittest.TestCase):
@@ -19,7 +24,7 @@ class TestCursorAuthStore(unittest.TestCase):
             self.assertTrue(write_auth("tok123", "ref456", root=root))
             self.assertEqual(get_access_token(root=root), "tok123")
             text = auth_path(root).read_text(encoding="utf-8")
-            self.assertIn("access_token", text)
+            self.assertIn("accessToken", text)
             self.assertIn("ref456", text)
 
 
@@ -46,15 +51,44 @@ class TestCursorModelsStore(unittest.TestCase):
             self.assertIn("remote-model", models)
 
 
+class TestCursorModelIdentity(unittest.TestCase):
+    def test_parse_effort_suffix(self) -> None:
+        identity = parse_cursor_model_id("claude-opus-5-high")
+        assert identity is not None
+        self.assertEqual(identity.base_name, "claude-opus-5")
+        self.assertEqual(identity.effort, "high")
+        self.assertFalse(identity.thinking)
+
+    def test_parse_thinking_and_fast(self) -> None:
+        identity = parse_cursor_model_id("claude-opus-4-7-high-fast")
+        assert identity is not None
+        self.assertEqual(identity.effort, "high")
+        self.assertTrue(identity.fast)
+
+    def test_meta_includes_effort(self) -> None:
+        meta = meta_for_model("claude-opus-5-low")
+        self.assertEqual(meta["cursor_effort"], "low")
+        self.assertEqual(meta["think_efforts"]["default_effort"], "low")
+
+    def test_rejects_dirty_model_id(self) -> None:
+        self.assertIsNone(parse_cursor_model_id("{'5-turbo': 'composer-2'}"))
+
+    def test_external_id_replaces_dots(self) -> None:
+        self.assertEqual(external_id_for("composer-2.5-fast"), "composer-2-5-fast")
+
+
 class TestCursorModelInventory(unittest.TestCase):
     def test_merge_api_and_mapping(self) -> None:
         ids, meta = _merge_model_inventory([
             {"modelId": "composer-2.5-fast", "displayName": "Fast"},
             {"modelId": "composer-2.5", "displayName": "Standard"},
+            {"modelId": "{'5-turbo': 'composer-2'}"},
         ])
         self.assertIn("composer-2.5-fast", ids)
         self.assertIn("composer-2.5", ids)
-        self.assertIn("composer-2.5-fast", meta)
+        self.assertNotIn("{'5-turbo': 'composer-2'}", ids)
+        self.assertIn("display_name", meta["composer-2.5-fast"])
+        self.assertEqual(meta["composer-2.5-fast"]["display_name"], "Fast")
 
     def test_config_fallback_ids(self) -> None:
         with patch("upstream.cursor.client.load_cursor_upstream_config", return_value={
@@ -69,7 +103,7 @@ class TestCursorModelInventory(unittest.TestCase):
 class TestCursorConfig(unittest.TestCase):
     def test_default_starcursor_section(self) -> None:
         with patch("server.config.app_config._load_upstream_toml", return_value={}):
-            from upstream.cursor.config import load_cursor_upstream_config
+            from upstream.cursor.setup.config import load_cursor_upstream_config
             cfg = load_cursor_upstream_config()
         sc = cfg["starcursor"]
         self.assertIn("base_url", sc)
@@ -118,10 +152,46 @@ class TestCursorClientStartup(unittest.IsolatedAsyncioTestCase):
 
         with patch("upstream.cursor.client.starcursor_config", return_value={"api_keys": [], "poll_interval": 30}):
             with patch("upstream.cursor.client.get_access_token", return_value=None):
-                with patch("upstream.cursor.client.CursorClient.fetch_models", return_value=[]):
+                with patch("upstream.cursor.client.CursorClient.fetch_models") as fetch_mock:
                     client = CursorClient(None)
                     await client.startup()
+        fetch_mock.assert_not_called()
         self.assertTrue(client._startup_done)
+
+
+class TestDeepSeekModelsCache(unittest.TestCase):
+    def test_load_cache_reads_updated_at(self) -> None:
+        from upstream.deepseek.client import DeepSeekClient
+
+        with patch("upstream.deepseek.client.read_models_cache", return_value=(["deepseek-v4-pro"], 1234567890.0)):
+            client = DeepSeekClient(None)
+            models = client.load_models_cache()
+        self.assertEqual(models, ["deepseek-v4-pro"])
+        self.assertEqual(client._models_fetch_time, 1234567890.0)
+
+
+class TestCursorExecTools(unittest.TestCase):
+    def test_git_diff_request(self) -> None:
+        from upstream.cursor.stream.exec import execute_tool
+
+        results = execute_tool({
+            "id": 1,
+            "gitDiffRequest": {"files": [], "baseBranch": "HEAD"},
+        })
+        self.assertEqual(len(results), 1)
+        self.assertIn("gitDiffResponse", results[0])
+
+    def test_execute_hook_args(self) -> None:
+        from upstream.cursor.stream.exec import execute_tool
+
+        results = execute_tool({
+            "id": 2,
+            "executeHookArgs": {"request": {"preToolUse": {"case": "preToolUse"}}},
+        })
+        self.assertEqual(len(results), 1)
+        hook = results[0]["executeHookResult"]["response"]
+        self.assertIn("preToolUse", hook)
+        self.assertEqual(hook["preToolUse"]["permission"], "allow")
 
 
 if __name__ == "__main__":

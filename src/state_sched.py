@@ -176,15 +176,18 @@ async def run_resilient(req_id: str, state: "AppState", func) -> Any:
 
 
 async def models_refresh_loop(state: "AppState") -> None:
+    """唯一自动刷新入口：启动后先等待 interval，再按缓存 TTL 决定是否拉取。"""
     interval = max(0.0, CONFIG.models_refresh_interval)
     if interval <= 0:
         return
     while not state.is_shutting_down:
-        await state.refresh_models(require_session=True)
         try:
             await asyncio.wait_for(state.shutdown_event.wait(), timeout=interval)
         except asyncio.TimeoutError:
-            continue
+            pass
+        else:
+            break
+        await state.refresh_models(require_session=True)
 
 
 async def upstream_init_background(state: "AppState") -> None:

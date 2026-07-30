@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import sys
+import types
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 NAME = "cursor"
+PERSIST_MODULE = "upstream.cursor.setup.persist"
 
 _DEFAULT_CAPABILITIES: Dict[str, bool] = {
     "chat": True,
@@ -54,7 +57,7 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    from upstream.cursor.openai_chat import stream_openai_chat as _stream
+    from upstream.cursor.chat.openai import stream_openai_chat as _stream
 
     async for event in _stream(
         state,
@@ -68,3 +71,14 @@ async def stream_openai_chat(
         files=files,
     ):
         yield event
+
+
+def _register_openai_chat_compat() -> None:
+    from upstream.cursor.chat.openai import stream_openai_chat as _stream_fn
+
+    mod = types.ModuleType("upstream.cursor.openai_chat")
+    mod.stream_openai_chat = _stream_fn  # type: ignore[attr-defined]
+    sys.modules.setdefault("upstream.cursor.openai_chat", mod)
+
+
+_register_openai_chat_compat()

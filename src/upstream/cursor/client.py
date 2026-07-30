@@ -8,22 +8,20 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from upstream.cursor.auth_store import get_access_token, get_token_bundle
-from upstream.cursor.config import load_cursor_upstream_config, starcursor_config
-from upstream.cursor.models_api import fetch_usable_models
-from upstream.cursor.models_store import load_merged, merge_model_lists, write_cache
-from upstream.cursor.token_service import CursorTokenService
+from upstream.cursor.auth.store import get_access_token, get_token_bundle
+from upstream.cursor.setup.config import load_cursor_upstream_config, starcursor_config
+from upstream.cursor.models.api import fetch_usable_models
+from upstream.cursor.models.store import load_merged, merge_model_lists, write_cache
+from upstream.cursor.auth.token_service import CursorTokenService
+from server.formats import UpstreamUnavailableError
 
 logger = logging.getLogger("rogator")
 
 
 def _meta_for(model_id: str) -> Dict[str, Any]:
-    return {
-        "id": model_id,
-        "object": "model",
-        "owned_by": "cursor",
-        "capabilities": {"chat": True, "thinking": True, "tools": True},
-    }
+    from upstream.cursor.models.identity import meta_for_model
+
+    return meta_for_model(model_id)
 
 
 def _model_ids_from_config() -> List[str]:
@@ -46,38 +44,30 @@ def _model_ids_from_config() -> List[str]:
 
 
 def _merge_model_inventory(api_models: List[Dict[str, Any]]) -> Tuple[List[str], Dict[str, Any]]:
+    from upstream.cursor.models.identity import normalize_api_models
+
     cfg = load_cursor_upstream_config()
     models_cfg = cfg.get("models") or {}
     cursor_cfg = cfg.get("cursor") or {}
-    ids: set[str] = set()
-    meta: Dict[str, Any] = {}
 
-    for item in api_models:
-        mid = str(item.get("modelId") or item.get("model_id") or "")
-        if not mid:
-            continue
-        ids.add(mid)
-        meta[mid] = _meta_for(mid)
-
+    extra: List[str] = []
     default = str(models_cfg.get("default") or cursor_cfg.get("default_model") or "")
     if default:
-        ids.add(default)
+        extra.append(default)
 
     mapping = models_cfg.get("mapping") or {}
     if isinstance(mapping, dict):
         for key, val in mapping.items():
-            ids.add(str(key))
+            if key:
+                extra.append(str(key))
             if val:
-                ids.add(str(val))
+                extra.append(str(val))
 
     for mid in models_cfg.get("fallback") or []:
         if mid:
-            ids.add(str(mid))
+            extra.append(str(mid))
 
-    sorted_ids = sorted(ids)
-    for mid in sorted_ids:
-        meta.setdefault(mid, _meta_for(mid))
-    return sorted_ids, meta
+    return normalize_api_models(api_models, extra_ids=extra)
 
 
 class CursorClient:
@@ -125,6 +115,12 @@ class CursorClient:
         self._models_fetch_time = time.time()
         if persist:
             write_cache(merged, full_meta)
+            try:
+                from upstream.cursor.models.registry_sync import sync_cursor_registry
+
+                sync_cursor_registry(merged)
+            except Exception as exc:
+                logger.debug("Cursor registry sync skipped: %s", exc)
         return list(merged)
 
     def _keep_cached(self) -> List[str]:
@@ -167,12 +163,16 @@ class CursorClient:
             return token
         ok = await self._tokens.pull_until_acceptable()
         if not ok:
-            raise RuntimeError(
-                "Cursor: 无法拉取 Token，请检查 configs/cursor.toml 中 [starcursor].api_keys"
+            raise UpstreamUnavailableError(
+                "Cursor 无法拉取 Token，请检查 configs/cursor.toml 中 [starcursor].api_keys",
+                upstream="cursor",
             )
         token = get_access_token()
         if not token:
-            raise RuntimeError("Cursor: auth.toml 无 access_token")
+            raise UpstreamUnavailableError(
+                "Cursor auth.json 无 access_token",
+                upstream="cursor",
+            )
         return token
 
     async def startup(self) -> None:
@@ -190,14 +190,14 @@ class CursorClient:
                 logger.info("Cursor: 无本地 Token，尝试首次拉号...")
                 await self._tokens.pull_until_acceptable()
             else:
-                logger.info("Cursor startup: 已有 auth.toml Token")
+                logger.info("Cursor startup: 已有 auth.json Token")
             self._poll_interval = float(cfg.get("poll_interval", 30))
-            try:
-                await self.fetch_models(use_cache=False)
-            except Exception as exc:
-                logger.warning("Cursor startup 拉取模型列表失败: %s", exc)
             self._startup_done = True
-            logger.info("Cursor startup: %d model(s), poll_interval=%.0fs", len(self._models), self._poll_interval)
+            logger.info(
+                "Cursor startup: %d model(s) from cache, poll_interval=%.0fs",
+                len(self._models),
+                self._poll_interval,
+            )
 
     async def token_maintenance_loop(self, shutdown_event: asyncio.Event) -> None:
         """后台用量监测与自动换号。"""

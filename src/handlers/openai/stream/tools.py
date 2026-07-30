@@ -35,6 +35,35 @@ async def _write_openai_stream_error(
     await _safe_write(resp, f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected)
 
 
+async def _handle_uncaught_openai_stream_error(resp, st, req_id, exc, logger) -> None:
+    from server.formats import (
+        UpstreamConnectionError,
+        UpstreamTimeoutError,
+        UpstreamUnavailableError,
+        as_upstream_connection_error,
+    )
+
+    if isinstance(exc, UpstreamTimeoutError):
+        logger.warning("OpenAI stream upstream timeout (uncaught path) %s: %s", req_id, exc)
+        await _write_openai_stream_error(resp, str(exc), st.disconnected, error_type="timeout", code=504)
+        return
+    if isinstance(exc, UpstreamUnavailableError):
+        logger.warning("OpenAI stream upstream unavailable (uncaught path) %s: %s", req_id, exc.message)
+        await _write_openai_stream_error(resp, exc.message, st.disconnected, error_type=exc.error_type, code=exc.status)
+        return
+    if isinstance(exc, UpstreamConnectionError):
+        logger.warning("OpenAI stream upstream connection (uncaught path) %s: %s", req_id, exc.message)
+        await _write_openai_stream_error(resp, exc.message, st.disconnected, error_type=exc.error_type, code=exc.status)
+        return
+    conn_err = as_upstream_connection_error(exc)
+    if conn_err is not None:
+        logger.warning("OpenAI stream upstream connection (uncaught path) %s: %s", req_id, conn_err.message)
+        await _write_openai_stream_error(resp, conn_err.message, st.disconnected, error_type=conn_err.error_type, code=conn_err.status)
+        return
+    logger.error("OpenAI stream error (uncaught path) %s: %s", req_id, exc, exc_info=True)
+    await _write_openai_stream_error(resp, str(exc), st.disconnected)
+
+
 def _openai_tool_call_entry(index: int, tc: Dict[str, Any]) -> Dict[str, Any]:
     """单个 tool_calls delta 条目（对齐 mock.py OpenAIBuilder._build_tool_calls）。"""
     fixed = _fix_tool_call_id(tc)
