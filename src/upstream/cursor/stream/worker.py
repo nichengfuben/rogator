@@ -25,6 +25,7 @@ from upstream.cursor.stream.proto import (
     encode_frame,
     safe_send_data,
 )
+from upstream.cursor.stream.tool_filter import apply_tool_filter_headers
 
 
 def _open_h2_socket(host: str):
@@ -86,6 +87,7 @@ def _build_run_request(
         "suggestNextPrompt": False,
     }
     if custom_system_prompt:
+        # 保留参数供实验；默认 OpenAI 路径不传。当前 agentn 会报 unknown option '--system-prompt'。
         run_request["customSystemPrompt"] = custom_system_prompt
     if harness:
         run_request["harness"] = harness
@@ -104,10 +106,13 @@ def _agent_headers(
     timezone: str,
     session_id: str,
     request_id: str,
+    *,
+    allowed_tools: Optional[List[str]] = None,
+    exclude_tools: Optional[List[str]] = None,
 ) -> List[Tuple[str, str]]:
     _ = timezone
     # 对齐 cursor_mvp：Agent Run 请求头不带 checksum / timezone。
-    return [
+    headers: List[Tuple[str, str]] = [
         (":method", "POST"),
         (":path", "/agent.v1.AgentService/Run"),
         (":scheme", "https"),
@@ -121,6 +126,11 @@ def _agent_headers(
         ("x-cursor-session-id", session_id),
         ("x-request-id", request_id),
     ]
+    return apply_tool_filter_headers(
+        headers,
+        allowed_tools=allowed_tools,
+        exclude_tools=exclude_tools,
+    )
 
 
 def _run_agent_stream(
@@ -139,6 +149,9 @@ def _run_agent_stream(
     custom_system_prompt: Optional[str] = None,
     harness: Optional[Any] = None,
     exclude_workspace_context: bool = False,
+    allowed_tools: Optional[List[str]] = None,
+    exclude_tools: Optional[List[str]] = None,
+    defer_mcp: bool = False,
 ) -> None:
     cfg = agent_config()
     host = agent_host()
@@ -154,7 +167,10 @@ def _run_agent_stream(
     stream_id = conn.get_next_available_stream_id()
     conn.send_headers(
         stream_id,
-        _agent_headers(host, token, client_version, timezone, session_id, request_id),
+        _agent_headers(
+            host, token, client_version, timezone, session_id, request_id,
+            allowed_tools=allowed_tools, exclude_tools=exclude_tools,
+        ),
         end_stream=False,
     )
     sock.sendall(conn.data_to_send())
@@ -169,6 +185,7 @@ def _run_agent_stream(
     ctx = AgentRunContext(
         q=q, conv_id=conv_id, start=time.time(), tool_handlers=tool_handlers or {},
         send_frame=lambda _obj: None, finish=lambda *_a, **_k: None, touch=lambda: None,
+        defer_mcp=defer_mcp,
     )
     run_agent_loop(sock, conn, stream_id, ctx, timeout=float(timeout), heartbeat_interval=heartbeat_interval)
 
@@ -189,6 +206,9 @@ def stream_worker(
     custom_system_prompt: Optional[str] = None,
     harness: Optional[Any] = None,
     exclude_workspace_context: bool = False,
+    allowed_tools: Optional[List[str]] = None,
+    exclude_tools: Optional[List[str]] = None,
+    defer_mcp: bool = False,
 ) -> None:
     try:
         _run_agent_stream(
@@ -196,6 +216,8 @@ def stream_worker(
             tool_handlers=tool_handlers, images=images, files=files,
             custom_system_prompt=custom_system_prompt, harness=harness,
             exclude_workspace_context=exclude_workspace_context,
+            allowed_tools=allowed_tools, exclude_tools=exclude_tools,
+            defer_mcp=defer_mcp,
         )
     except Exception as exc:
         q.put(StreamEvent(type="error", error=str(exc)))

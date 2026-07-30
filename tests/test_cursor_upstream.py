@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -113,6 +114,8 @@ class TestCursorConfig(unittest.TestCase):
 
 class TestCursorConverter(unittest.TestCase):
     def test_split_prompt_and_history(self) -> None:
+        from upstream.cursor.chat.convert import messages_to_cursor_history, split_prompt_and_history
+
         messages = [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "hi"},
@@ -123,6 +126,255 @@ class TestCursorConverter(unittest.TestCase):
         self.assertEqual(len(history), 2)
         cursor_hist = messages_to_cursor_history(messages[:-1])
         self.assertEqual(history, cursor_hist)
+
+    def test_system_goes_to_custom_prompt_not_history(self) -> None:
+        from upstream.cursor.chat.convert import (
+            IMPORTANT_MCP_TOOLS_ONLY,
+            IMPORTANT_NO_TOOLS,
+            build_custom_system_prompt,
+            openai_tools_to_mcp,
+            rewrite_tool_call_for_openai,
+            split_prompt_and_history,
+        )
+
+        messages = [
+            {"role": "system", "content": "Be concise."},
+            {"role": "user", "content": "hi"},
+        ]
+        prompt, history = split_prompt_and_history(messages)
+        self.assertEqual(prompt, "hi")
+        self.assertEqual(history, [])
+        with_tools = build_custom_system_prompt(
+            messages,
+            [{"type": "function", "function": {"name": "mcp__echo", "parameters": {}}}],
+        )
+        self.assertTrue(with_tools.startswith(IMPORTANT_MCP_TOOLS_ONLY))
+        self.assertIn("Be concise.", with_tools)
+        no_tools = build_custom_system_prompt(messages, None)
+        self.assertTrue(no_tools.startswith(IMPORTANT_NO_TOOLS))
+
+        mcp = openai_tools_to_mcp([
+            {"type": "function", "function": {"name": "mcp__echo", "parameters": {}}},
+        ])
+        self.assertEqual(mcp[0]["name"], "mcp__echo")
+        self.assertEqual(mcp[0]["toolName"], "mcp__echo")
+        self.assertNotIn("providerIdentifier", mcp[0])
+
+        mcp2 = openai_tools_to_mcp([
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp__fs__read_file",
+                    "description": "read",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ])
+        self.assertEqual(mcp2[0]["name"], "mcp__fs__read_file")
+        self.assertEqual(mcp2[0]["providerIdentifier"], "fs")
+        self.assertEqual(mcp2[0]["toolName"], "read_file")
+
+        allowed = {"mcp__echo"}
+        self.assertIsNone(rewrite_tool_call_for_openai(
+            {"id": "1", "function": {"name": "", "arguments": "{}"}},
+            allowed_originals=allowed,
+        ))
+        self.assertIsNone(rewrite_tool_call_for_openai(
+            {"id": "1", "function": {"name": "shell", "arguments": "{}"}},
+            allowed_originals=allowed,
+        ))
+        kept = rewrite_tool_call_for_openai(
+            {"id": "1", "function": {"name": "mcp__echo", "arguments": "{}"}},
+            allowed_originals=allowed,
+        )
+        assert kept is not None
+        self.assertEqual(kept["function"]["name"], "mcp__echo")
+
+    def test_tool_results_go_into_conversation_history(self) -> None:
+        from upstream.cursor.chat.convert import (
+            _TOOL_CONTINUE_PROMPT,
+            split_prompt_and_history,
+        )
+        from upstream.cursor.stream.worker import _build_run_request
+
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "list files"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "mcp__Glob",
+                        "arguments": '{"glob_pattern":"*.py"}',
+                    },
+                }],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "mcp__Glob",
+                "content": "a.py\nb.py",
+            },
+        ]
+        prompt, history = split_prompt_and_history(messages)
+        self.assertTrue(prompt.startswith(_TOOL_CONTINUE_PROMPT))
+        self.assertIn('<tool_result name="mcp__Glob">', prompt)
+        self.assertIn("a.py\nb.py", prompt)
+        self.assertEqual(len(history), 3)
+        self.assertIn("user", history[0])
+        self.assertEqual(
+            history[1]["assistant"]["content"][0]["toolCall"]["toolName"],
+            "mcp__Glob",
+        )
+        tool_msg = history[2]["tool"]
+        self.assertEqual(tool_msg["toolCallId"], "call_1")
+        self.assertEqual(tool_msg["toolName"], "mcp__Glob")
+        self.assertEqual(tool_msg["content"][0]["text"]["text"], "a.py\nb.py")
+
+        # 空结果也要进 history
+        empty_msgs = messages[:-1] + [{
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "mcp__Glob",
+            "content": "",
+        }]
+        _, hist2 = split_prompt_and_history(empty_msgs)
+        self.assertEqual(hist2[-1]["tool"]["content"][0]["text"]["text"], "")
+
+        payload = _build_run_request(
+            prompt=prompt,
+            model="composer-2.5-fast",
+            conv_id="c1",
+            msg_id="m1",
+            group_id="g1",
+            workspace="X:/ws",
+            mcp_tools=[{"name": "mcp__Glob", "toolName": "mcp__Glob", "description": "", "inputSchemaJson": "{}"}],
+            conversation_history=history,
+        )
+        run = payload["runRequest"]
+        self.assertEqual(
+            run["action"]["userMessageAction"]["conversationHistory"]["messages"],
+            history,
+        )
+        self.assertIn("mcpTools", run)
+        self.assertNotIn("customSystemPrompt", run)
+
+    def test_tool_filter_headers(self) -> None:
+        from upstream.cursor.stream.tool_filter import (
+            HEADER_ALLOWED_TOOLS,
+            HEADER_EXCLUDE_TOOLS,
+            MCP_ONLY_ALLOWED_TOOLS,
+            tool_filter_for_openai,
+        )
+        from upstream.cursor.stream.worker import _agent_headers
+
+        allowed, exclude = tool_filter_for_openai(True)
+        self.assertEqual(allowed, list(MCP_ONLY_ALLOWED_TOOLS))
+        self.assertIsNone(exclude)
+        headers = _agent_headers(
+            "agentn.example",
+            {"accessToken": "t"},
+            "cli-test",
+            "UTC",
+            "s1",
+            "r1",
+            allowed_tools=allowed,
+            exclude_tools=exclude,
+        )
+        self.assertIn((HEADER_ALLOWED_TOOLS, "mcp_tool_call"), headers)
+
+        allowed2, exclude2 = tool_filter_for_openai(False)
+        self.assertIsNone(allowed2)
+        assert exclude2 is not None
+        self.assertGreater(len(exclude2), 40)
+        headers2 = _agent_headers(
+            "agentn.example",
+            {"accessToken": "t"},
+            "cli-test",
+            "UTC",
+            "s1",
+            "r1",
+            allowed_tools=allowed2,
+            exclude_tools=exclude2,
+        )
+        exclude_hdr = dict(headers2).get(HEADER_EXCLUDE_TOOLS, "")
+        self.assertIn("shell_tool_call", exclude_hdr)
+        self.assertIn("mcp_tool_call", exclude_hdr)
+
+    def test_mcp_args_proto_unwrap(self) -> None:
+        from upstream.cursor.stream.handlers import _mcp_args_to_json
+
+        raw = {
+            "path": {"stringValue": "/tmp/a"},
+            "n": {"numberValue": 3},
+            "flag": {"boolValue": True},
+        }
+        self.assertEqual(
+            json.loads(_mcp_args_to_json(raw)),
+            {"path": "/tmp/a", "n": 3, "flag": True},
+        )
+        plain = {"path": "/tmp/b", "nested": {"x": 1}}
+        self.assertEqual(json.loads(_mcp_args_to_json(plain)), plain)
+
+    def test_prepend_system_to_prompt(self) -> None:
+        from upstream.cursor.chat.convert import (
+            IMPORTANT_NO_TOOLS,
+            build_custom_system_prompt,
+            prepend_system_to_prompt,
+        )
+
+        sys_text = build_custom_system_prompt(
+            [{"role": "system", "content": "Be brief."}],
+            None,
+        )
+        out = prepend_system_to_prompt(sys_text, "hello")
+        self.assertTrue(out.startswith("<system>\n"))
+        self.assertIn(IMPORTANT_NO_TOOLS, out)
+        self.assertIn("Be brief.", out)
+        self.assertTrue(out.endswith("hello"))
+        self.assertNotIn("customSystemPrompt", out)
+
+    def test_build_cursor_turn_keeps_user_query_primary(self) -> None:
+        from upstream.cursor.chat.convert import build_cursor_turn
+
+        messages = [
+            {"role": "system", "content": "You are Kimi Code CLI. " + ("x" * 2000)},
+            {"role": "user", "content": "试试agentswam工具是否可用"},
+        ]
+        tools = [{"type": "function", "function": {"name": "Shell", "parameters": {}}}]
+        send, hist = build_cursor_turn(messages, tools)
+        self.assertTrue(send.startswith("<user_query>"))
+        self.assertIn("试试agentswam工具是否可用", send)
+        self.assertNotIn("You are Kimi Code CLI", send)
+        self.assertGreaterEqual(len(hist), 1)
+        sys_blob = hist[0]["user"]["content"][0]["text"]["text"]
+        self.assertIn("<system>", sys_blob)
+        self.assertIn("You are Kimi Code CLI", sys_blob)
+        self.assertIn("tool list", sys_blob)
+        self.assertNotIn('names start with "mcp__"', sys_blob)
+
+    def test_user_after_tool_keeps_results_in_history(self) -> None:
+        from upstream.cursor.chat.convert import split_prompt_and_history
+
+        messages = [
+            {"role": "user", "content": "q"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "c1",
+                    "function": {"name": "mcp__echo", "arguments": "{}"},
+                }],
+            },
+            {"role": "tool", "tool_call_id": "c1", "name": "mcp__echo", "content": "pong"},
+            {"role": "user", "content": "thanks"},
+        ]
+        prompt, history = split_prompt_and_history(messages)
+        self.assertEqual(prompt, "thanks")
+        self.assertEqual(history[-1]["tool"]["content"][0]["text"]["text"], "pong")
 
 
 class TestCursorTokenHelpers(unittest.TestCase):

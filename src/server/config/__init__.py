@@ -24,6 +24,7 @@ from server.config.logging_setup import (
     resolve_log_file_path,
     setup_logging,
     shutdown_logging,
+    silence_hpack_debug,
 )
 from server.config.shutdown import (
     cancel_leftover_tasks,
@@ -53,6 +54,7 @@ __all__ = [
     "resolve_log_path",
     "setup_logging",
     "shutdown_logging",
+    "silence_hpack_debug",
     "cancel_leftover_tasks",
     "install_asyncio_exception_handler",
     "install_signal_handlers",

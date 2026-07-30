@@ -24,17 +24,37 @@ _HOOK_RESPONSES: Dict[str, Dict[str, Any]] = {
 }
 
 
-def _handle_mcp(msg: dict, base: dict, start: float, tool_handlers: Optional[Dict[str, Callable]] = None) -> List[Dict[str, Any]]:
+def _handle_mcp(
+    msg: dict,
+    base: dict,
+    start: float,
+    tool_handlers: Optional[Dict[str, Callable]] = None,
+    *,
+    defer_mcp: bool = False,
+) -> List[Dict[str, Any]]:
     args = msg["mcpArgs"]
-    tool_name = args.get("toolName") or args.get("name", "")
+    tool_name = args.get("name") or args.get("toolName") or ""
     tool_args = args.get("args", {})
     handler = (tool_handlers or {}).get(tool_name)
+    if handler is None and tool_name:
+        # 也允许短名 handler
+        short = args.get("toolName") or ""
+        if short and short != tool_name:
+            handler = (tool_handlers or {}).get(short)
     if handler:
         try:
             response_text = handler(tool_args)
             payload = {"success": {"content": [{"text": {"text": response_text}}], "isError": False}}
         except Exception as exc:
             payload = {"error": {"error": str(exc)}}
+    elif defer_mcp:
+        # OpenAI 代理：真实结果由客户端下一轮 conversationHistory 回灌
+        payload = {
+            "success": {
+                "content": [{"text": {"text": ""}}],
+                "isError": False,
+            },
+        }
     else:
         payload = {"success": {"content": [{"text": {"text": f"Unknown tool: {tool_name}"}}], "isError": False}}
     return [finish(base, start, "mcpResult", payload)]

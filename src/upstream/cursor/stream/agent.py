@@ -24,6 +24,9 @@ async def stream_cursor_agent(
     custom_system_prompt: Optional[str] = None,
     harness: Optional[Any] = None,
     exclude_workspace_context: bool = False,
+    allowed_tools: Optional[List[str]] = None,
+    exclude_tools: Optional[List[str]] = None,
+    defer_mcp: bool = False,
 ) -> AsyncGenerator[StreamEvent, None]:
     q: queue.Queue = queue.Queue()
 
@@ -36,6 +39,9 @@ async def stream_cursor_agent(
             custom_system_prompt=custom_system_prompt,
             harness=harness,
             exclude_workspace_context=exclude_workspace_context,
+            allowed_tools=allowed_tools,
+            exclude_tools=exclude_tools,
+            defer_mcp=defer_mcp,
         )
 
     worker = threading.Thread(

@@ -12,6 +12,8 @@ from upstream.cursor.stream.exec.stubs import is_stub_tool, stub_tool
 def execute_tool(
     exec_msg: Dict[str, Any],
     tool_handlers: Optional[Dict[str, Callable[..., Any]]] = None,
+    *,
+    defer_mcp: bool = False,
 ) -> List[Dict[str, Any]]:
     """执行 execServerMessage 并返回 execClientMessage 内层 payload 列表。"""
     start = time.time()
@@ -21,6 +23,8 @@ def execute_tool(
         return [finish(base, start, "shellResult", {"stdout": "", "stderr": "Unknown exec type", "exitCode": -1})]
     if tool == "requestContextArgs":
         return _handle_request_context(base, start)
+    if tool == "mcpArgs":
+        return RUN_HANDLERS["mcpArgs"](exec_msg, base, start, tool_handlers, defer_mcp=defer_mcp)
     if tool in RUN_HANDLERS:
         return RUN_HANDLERS[tool](exec_msg, base, start, tool_handlers)
     if tool in FS_HANDLERS:
