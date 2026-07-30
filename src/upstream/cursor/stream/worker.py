@@ -64,6 +64,7 @@ def _build_run_request(
     images: Optional[List[Any]] = None,
     files: Optional[List[Any]] = None,
     custom_system_prompt: Optional[str] = None,
+    prepend_user_messages: Optional[List[Dict[str, Any]]] = None,
     harness: Optional[Any] = None,
     exclude_workspace_context: bool = False,
 ) -> Dict[str, Any]:
@@ -77,6 +78,9 @@ def _build_run_request(
     }
     if conversation_history:
         user_action["conversationHistory"] = {"messages": conversation_history}
+    if prepend_user_messages:
+        # agent.v1.UserMessageAction.prepend_user_messages — 官方 system/前置注入口
+        user_action["prependUserMessages"] = prepend_user_messages
     run_request: Dict[str, Any] = {
         "conversationState": {},
         "action": {"userMessageAction": user_action},
@@ -147,6 +151,7 @@ def _run_agent_stream(
     images: Optional[List[Any]] = None,
     files: Optional[List[Any]] = None,
     custom_system_prompt: Optional[str] = None,
+    prepend_user_messages: Optional[List[Dict[str, Any]]] = None,
     harness: Optional[Any] = None,
     exclude_workspace_context: bool = False,
     allowed_tools: Optional[List[str]] = None,
@@ -178,7 +183,9 @@ def _run_agent_stream(
         prompt=prompt, model=model, conv_id=conv_id, msg_id=str(uuid.uuid4()),
         group_id=str(uuid.uuid4()), workspace=workspace, mcp_tools=mcp_tools,
         conversation_history=conversation_history, images=images, files=files,
-        custom_system_prompt=custom_system_prompt, harness=harness,
+        custom_system_prompt=custom_system_prompt,
+        prepend_user_messages=prepend_user_messages,
+        harness=harness,
         exclude_workspace_context=exclude_workspace_context,
     )
     safe_send_data(conn, sock, stream_id, encode_frame(run_request))
@@ -204,6 +211,7 @@ def stream_worker(
     images: Optional[List[Any]] = None,
     files: Optional[List[Any]] = None,
     custom_system_prompt: Optional[str] = None,
+    prepend_user_messages: Optional[List[Dict[str, Any]]] = None,
     harness: Optional[Any] = None,
     exclude_workspace_context: bool = False,
     allowed_tools: Optional[List[str]] = None,
@@ -214,7 +222,9 @@ def stream_worker(
         _run_agent_stream(
             q, token, prompt, model, conversation_id, mcp_tools, conversation_history, workspace,
             tool_handlers=tool_handlers, images=images, files=files,
-            custom_system_prompt=custom_system_prompt, harness=harness,
+            custom_system_prompt=custom_system_prompt,
+            prepend_user_messages=prepend_user_messages,
+            harness=harness,
             exclude_workspace_context=exclude_workspace_context,
             allowed_tools=allowed_tools, exclude_tools=exclude_tools,
             defer_mcp=defer_mcp,

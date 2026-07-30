@@ -87,12 +87,13 @@ async def stream_openai_chat(
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     _ = protocol_options, prompt_api
-    send_text, history = build_cursor_turn(messages, tools)
+    send_text, history, prepend = build_cursor_turn(messages, tools)
     logger.info(
-        "cursor turn req=%s prompt_chars=%d history=%d prompt_head=%r prompt_tail=%r",
+        "cursor turn req=%s prompt_chars=%d history=%d prepend=%d prompt_head=%r prompt_tail=%r",
         req_id,
         len(send_text),
         len(history),
+        len(prepend),
         send_text[:160].replace("\n", "\\n"),
         send_text[-160:].replace("\n", "\\n"),
     )
@@ -126,7 +127,9 @@ async def stream_openai_chat(
         conversation_history=history or None,
         workspace=workspace,
         files=files,
-        # 勿传 customSystemPrompt；IMPORTANT+system 已在 history 首条 <system>
+        # 勿传 customSystemPrompt（agentn → unknown option '--system-prompt'）
+        # IMPORTANT+system 走官方 prependUserMessages
+        prepend_user_messages=prepend or None,
         allowed_tools=allowed_tools,
         exclude_tools=exclude_tools,
         defer_mcp=True,

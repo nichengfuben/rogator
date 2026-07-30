@@ -339,22 +339,58 @@ class TestCursorConverter(unittest.TestCase):
 
     def test_build_cursor_turn_keeps_user_query_primary(self) -> None:
         from upstream.cursor.chat.convert import build_cursor_turn
+        from upstream.cursor.stream.worker import _build_run_request
 
         messages = [
             {"role": "system", "content": "You are Kimi Code CLI. " + ("x" * 2000)},
             {"role": "user", "content": "试试agentswam工具是否可用"},
         ]
         tools = [{"type": "function", "function": {"name": "Shell", "parameters": {}}}]
-        send, hist = build_cursor_turn(messages, tools)
-        self.assertTrue(send.startswith("<user_query>"))
-        self.assertIn("试试agentswam工具是否可用", send)
+        send, hist, prepend = build_cursor_turn(messages, tools)
+        # 对齐逆向：明文 UserMessage，不加 <user_query>；system 走 prepend
+        self.assertEqual(send, "试试agentswam工具是否可用")
+        self.assertNotIn("<user_query>", send)
         self.assertNotIn("You are Kimi Code CLI", send)
-        self.assertGreaterEqual(len(hist), 1)
-        sys_blob = hist[0]["user"]["content"][0]["text"]["text"]
-        self.assertIn("<system>", sys_blob)
-        self.assertIn("You are Kimi Code CLI", sys_blob)
-        self.assertIn("tool list", sys_blob)
-        self.assertNotIn('names start with "mcp__"', sys_blob)
+        self.assertEqual(hist, [])
+        self.assertEqual(len(prepend), 1)
+        self.assertIn("You are Kimi Code CLI", prepend[0]["text"])
+        self.assertIn("tool list", prepend[0]["text"])
+        self.assertNotIn("<system>", prepend[0]["text"])
+        self.assertNotIn('names start with "mcp__"', prepend[0]["text"])
+
+        payload = _build_run_request(
+            prompt=send,
+            model="composer-2.5-fast",
+            conv_id="c1",
+            msg_id="m1",
+            group_id="g1",
+            workspace="X:/ws",
+            mcp_tools=None,
+            conversation_history=hist or None,
+            prepend_user_messages=prepend,
+        )
+        ua = payload["runRequest"]["action"]["userMessageAction"]
+        self.assertEqual(ua["userMessage"]["text"], send)
+        self.assertEqual(ua["prependUserMessages"], prepend)
+        self.assertNotIn("conversationHistory", ua)
+        self.assertNotIn("customSystemPrompt", payload["runRequest"])
+
+    def test_whitespace_user_falls_back_to_prior(self) -> None:
+        from upstream.cursor.chat.convert import build_cursor_turn, split_prompt_and_history
+
+        messages = [
+            {"role": "user", "content": "真实问题"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "   \n\t  "},
+        ]
+        prompt, history = split_prompt_and_history(messages)
+        self.assertEqual(prompt, "真实问题")
+        self.assertEqual(len(history), 1)
+        self.assertIn("assistant", history[0])
+
+        send, hist, prepend = build_cursor_turn(messages, None)
+        self.assertEqual(send, "真实问题")
+        self.assertTrue(prepend)
 
     def test_user_after_tool_keeps_results_in_history(self) -> None:
         from upstream.cursor.chat.convert import split_prompt_and_history

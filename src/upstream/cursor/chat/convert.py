@@ -3,6 +3,7 @@ from __future__ import annotations
 """OpenAI ↔ Cursor 消息/模型转换。"""
 
 import json
+import uuid
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from upstream.cursor.setup.config import load_cursor_upstream_config
@@ -30,18 +31,35 @@ def _message_text(msg: Dict[str, Any]) -> str:
         parts: List[str] = []
         for p in content:
             if isinstance(p, dict):
-                if "text" in p and p.get("text") is not None:
+                # OpenAI / Anthropic / 部分客户端：{"type":"text","text":"..."}
+                text = p.get("text")
+                if text is not None and str(text).strip():
+                    parts.append(str(text))
+                    continue
+                if p.get("type") in ("text", "input_text") and p.get("text") is not None:
+                    parts.append(str(p.get("text") or ""))
+                    continue
+                if isinstance(p.get("content"), str) and str(p.get("content") or "").strip():
+                    parts.append(str(p.get("content") or ""))
+                    continue
+                # 跳过纯图片/附件块，避免把整段 JSON 当成「用户话」淹没真实文本
+                if p.get("type") in ("image_url", "image", "input_image", "file", "input_file"):
+                    continue
+                if "text" in p:
                     parts.append(str(p.get("text") or ""))
                 elif "content" in p and isinstance(p.get("content"), str):
                     parts.append(str(p.get("content") or ""))
-                else:
-                    parts.append(json.dumps(p, ensure_ascii=False))
             else:
                 parts.append(str(p))
         return "\n".join(parts)
     if isinstance(content, (dict, bool, int, float)):
         return json.dumps(content, ensure_ascii=False)
     return str(content)
+
+
+def _user_text(msg: Dict[str, Any]) -> str:
+    """用户可见文本（去首尾空白）；空白视为空。"""
+    return _message_text(msg).strip()
 
 
 def extract_system_texts(messages: List[Dict[str, Any]]) -> List[str]:
@@ -71,7 +89,7 @@ def build_custom_system_prompt(
 def prepend_system_to_prompt(system_text: str, prompt: str) -> str:
     """兼容旧路径：system 前缀 + body。
 
-    新路径请用 ``build_cursor_turn``：system 进 history，UserMessage 只承载本轮用户话。
+    新路径请用 ``build_cursor_turn``：system → prependUserMessages，UserMessage 只承载本轮用户明文。
     """
     block = (system_text or "").strip()
     if not block:
@@ -112,7 +130,7 @@ def messages_to_cursor_history(messages: List[Dict[str, Any]]) -> List[Dict[str,
         if role == "system":
             continue
         if role == "user":
-            if not text:
+            if not text.strip():
                 continue
             history.append({"user": {"content": [{"text": {"text": text}}]}})
         elif role == "assistant":
@@ -165,15 +183,16 @@ def split_prompt_and_history(messages: List[Dict[str, Any]]) -> Tuple[str, List[
         return "", []
     last = messages[-1]
     last_role = last.get("role") or ""
-    if last_role == "user" and _message_text(last):
-        return _message_text(last), messages_to_cursor_history(messages[:-1])
+    last_text = _user_text(last) if last_role == "user" else ""
+    if last_role == "user" and last_text:
+        return last_text, messages_to_cursor_history(messages[:-1])
 
-    # 末条 user 但内容为空：回退到上一条非空 user，避免 UserMessage.text 为空
-    if last_role == "user" and not _message_text(last):
+    # 末条 user 但内容为空/空白：回退到上一条非空 user，避免 UserMessage.text 为空
+    if last_role == "user" and not last_text:
         for msg in reversed(messages[:-1]):
-            if (msg.get("role") or "") == "user" and _message_text(msg):
+            if (msg.get("role") or "") == "user" and _user_text(msg):
                 idx = messages.index(msg)
-                return _message_text(msg), messages_to_cursor_history(messages[:idx] + messages[idx + 1 : -1])
+                return _user_text(msg), messages_to_cursor_history(messages[:idx] + messages[idx + 1 : -1])
         return "", messages_to_cursor_history(messages[:-1])
 
     if last_role == "tool" or (
@@ -185,35 +204,44 @@ def split_prompt_and_history(messages: List[Dict[str, Any]]) -> Tuple[str, List[
     return messages_to_prompt(messages), []
 
 
+def build_prepend_user_messages(system_text: str) -> List[Dict[str, Any]]:
+    """对齐 agent.v1.UserMessageAction.prepend_user_messages（非 customSystemPrompt）。
+
+    customSystemPrompt 在 agentn 上会变成 ``--system-prompt`` 并报 unknown option；
+    cursor-agent / cursor_mvp 的正规注入口是 prependUserMessages。
+    """
+    block = (system_text or "").strip()
+    if not block:
+        return []
+    return [{
+        "text": block,
+        "messageId": str(uuid.uuid4()),
+        "mode": 1,
+    }]
+
+
 def build_cursor_turn(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]],
-) -> Tuple[str, List[Dict[str, Any]]]:
-    """构造 Cursor 本轮 UserMessage.text + conversationHistory。
+) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """构造 Cursor 本轮 UserMessage.text + conversationHistory + prependUserMessages。
 
-    关键点：UserMessage.text **只放本轮用户话**（加 ``<user_query>``），
-    IMPORTANT + 客户端 system 放进 history 首条，避免 30k system 淹没用户意图
-    （模型会回 ``The user did not provide a specific query``）。
+    对齐逆向（cursor-agent / cursor_mvp）：
+    - ``UserMessage.text`` = 本轮用户明文（不加 ``<user_query>``；源码无此标签）
+    - IMPORTANT + 客户端 system → ``prependUserMessages``（官方字段）
+    - ``conversationHistory`` 只放真实先验轮次（不塞伪 system user）
     """
     prompt, history = split_prompt_and_history(messages)
     system = build_custom_system_prompt(messages, tools).strip()
-    hist: List[Dict[str, Any]] = list(history or [])
-    if system:
-        hist.insert(0, {
-            "user": {"content": [{"text": {"text": f"<system>\n{system}\n</system>"}}]},
-        })
+    prepend = build_prepend_user_messages(system)
     body = (prompt or "").strip()
     if body.startswith(_TOOL_CONTINUE_PROMPT):
         send_text = body
     elif body:
-        send_text = f"<user_query>\n{body}\n</user_query>"
+        send_text = body
     else:
-        send_text = (
-            "<user_query>\n"
-            "(No user text was found in this turn; ask the user what they need.)\n"
-            "</user_query>"
-        )
-    return send_text, hist
+        send_text = "(No user text was found in this turn; ask the user what they need.)"
+    return send_text, list(history or []), prepend
 
 
 def map_model(model: Optional[str]) -> str:
