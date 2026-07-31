@@ -116,14 +116,34 @@ def messages_to_prompt(messages: List[Dict[str, Any]]) -> str:
             if text:
                 parts.append(f"<assistant>\n{text}\n</assistant>")
         elif role == "tool":
-            parts.append(f"<tool_result name=\"{msg.get('name', '')}\">\n{text}\n</tool_result>")
+            # 工具回执只走 conversationHistory；此处不拼 XML
+            continue
         else:
             parts.append(text)
     return "\n\n".join(parts)
 
 
+def _tool_name_index(messages: List[Dict[str, Any]]) -> Dict[str, str]:
+    """tool_call_id → toolName（OpenAI tool 消息常缺 name）。"""
+    out: Dict[str, str] = {}
+    for msg in messages or []:
+        if (msg.get("role") or "") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            tid = str(tc.get("id") or "").strip()
+            if not tid:
+                continue
+            fn = tc.get("function") or {}
+            name = str(fn.get("name") or "").strip()
+            if name:
+                out[tid] = name
+    return out
+
+
 def messages_to_cursor_history(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """对齐 agent.v1.ConversationHistory（user / assistant / tool）。"""
     history: List[Dict[str, Any]] = []
+    name_by_id = _tool_name_index(messages)
     for msg in messages:
         role = msg.get("role") or "user"
         text = _message_text(msg)
@@ -149,10 +169,12 @@ def messages_to_cursor_history(messages: List[Dict[str, Any]]) -> List[Dict[str,
             if blocks:
                 history.append({"assistant": {"content": blocks}})
         elif role == "tool":
+            tid = str(msg.get("tool_call_id") or "")
+            tname = str(msg.get("name") or "").strip() or name_by_id.get(tid, "")
             history.append({
                 "tool": {
-                    "toolCallId": msg.get("tool_call_id") or "",
-                    "toolName": msg.get("name") or "",
+                    "toolCallId": tid,
+                    "toolName": tname,
                     "content": [{"text": {"text": text}}],
                     "isError": bool(msg.get("is_error") or msg.get("isError")),
                 },
@@ -160,25 +182,12 @@ def messages_to_cursor_history(messages: List[Dict[str, Any]]) -> List[Dict[str,
     return history
 
 
+# 工具续轮：UserMessage.text 仅短续写；回执在 conversationHistory.tool
 _TOOL_CONTINUE_PROMPT = "Continue based on the tool results."
 
 
-def _embed_tool_results_prompt(messages: List[Dict[str, Any]]) -> str:
-    """续轮 user 文本：固定续写句 + 明文 tool_result，避免仅靠 history 时模型看不见回执。"""
-    blocks: List[str] = []
-    for msg in messages or []:
-        if (msg.get("role") or "") != "tool":
-            continue
-        name = str(msg.get("name") or "")
-        text = _message_text(msg)
-        blocks.append(f'<tool_result name="{name}">\n{text}\n</tool_result>')
-    if not blocks:
-        return _TOOL_CONTINUE_PROMPT
-    return _TOOL_CONTINUE_PROMPT + "\n\n" + "\n\n".join(blocks)
-
-
 def split_prompt_and_history(messages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
-    """拆出本轮 user 文本 + Cursor conversationHistory。"""
+    """拆出本轮 UserMessage.text + Cursor conversationHistory。"""
     if not messages:
         return "", []
     last = messages[-1]
@@ -199,7 +208,8 @@ def split_prompt_and_history(messages: List[Dict[str, Any]]) -> Tuple[str, List[
         last_role != "user"
         and any((m.get("role") or "") == "tool" for m in messages)
     ):
-        return _embed_tool_results_prompt(messages), messages_to_cursor_history(messages)
+        # 官方：回执只进 history；text 不塞 <tool_result> XML
+        return _TOOL_CONTINUE_PROMPT, messages_to_cursor_history(messages)
 
     return messages_to_prompt(messages), []
 
@@ -208,7 +218,7 @@ def build_prepend_user_messages(system_text: str) -> List[Dict[str, Any]]:
     """对齐 agent.v1.UserMessageAction.prepend_user_messages（非 customSystemPrompt）。
 
     customSystemPrompt 在 agentn 上会变成 ``--system-prompt`` 并报 unknown option；
-    cursor-agent / cursor_mvp 的正规注入口是 prependUserMessages。
+    正规注入口是 prependUserMessages。
     """
     block = (system_text or "").strip()
     if not block:
@@ -226,18 +236,16 @@ def build_cursor_turn(
 ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
     """构造 Cursor 本轮 UserMessage.text + conversationHistory + prependUserMessages。
 
-    对齐逆向（cursor-agent / cursor_mvp）：
-    - ``UserMessage.text`` = 本轮用户明文（不加 ``<user_query>``；源码无此标签）
-    - IMPORTANT + 客户端 system → ``prependUserMessages``（官方字段）
-    - ``conversationHistory`` 只放真实先验轮次（不塞伪 system user）
+    对齐 agent.v1：
+    - ``UserMessage.text`` = 本轮用户明文；工具续轮仅为短续写句（不塞 tool XML）
+    - IMPORTANT + 客户端 system → ``prependUserMessages``
+    - 工具回执 → ``conversationHistory`` 的 tool 消息（补全 toolName）
     """
     prompt, history = split_prompt_and_history(messages)
     system = build_custom_system_prompt(messages, tools).strip()
     prepend = build_prepend_user_messages(system)
     body = (prompt or "").strip()
-    if body.startswith(_TOOL_CONTINUE_PROMPT):
-        send_text = body
-    elif body:
+    if body:
         send_text = body
     else:
         send_text = "(No user text was found in this turn; ask the user what they need.)"

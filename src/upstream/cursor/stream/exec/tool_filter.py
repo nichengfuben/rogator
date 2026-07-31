@@ -1,8 +1,7 @@
 """Cursor Agent builtin ToolCall oneof names + allow/exclude header helpers.
 
-逆向自 cursor-agent 2026.07.23-e383d2b：
 --allowed-tools / --exclude-tools 取值必须是 agent.v1.ToolCall 的 tool oneof 字段名；
-HTTP 头为 x-cursor-agent-allowed-tools / x-cursor-agent-exclude-tools（逗号分隔）。
+对应上游 allow/exclude 工具列表 HTTP 头（逗号分隔）。
 """
 
 from __future__ import annotations

@@ -18,7 +18,7 @@ _STUBS: Dict[str, Tuple[str, Dict[str, Any]]] = {
     "canvasDiagnosticsArgs": ("canvasDiagnosticsResult", {"success": {"path": ""}}),
     "backgroundShellSpawnArgs": ("backgroundShellSpawnResult", {"error": {"command": "", "workingDirectory": "", "error": "Background shell not supported"}}),
     "forceBackgroundShellArgs": ("forceBackgroundShellResult", {"error": {"error": "Background shell not supported"}}),
-    "subagentArgs": ("subagentResult", {"error": {"error": "Subagents not supported in MVP"}}),
+    "subagentArgs": ("subagentResult", {"error": {"error": "Subagents not supported"}}),
     "subagentAwaitArgs": ("subagentAwaitResult", {"notFound": {"agentId": ""}}),
     "forceBackgroundSubagentArgs": ("forceBackgroundSubagentResult", {"error": {"error": "Background subagents not supported"}}),
     "agentStoreConflictArgs": ("agentStoreConflictResult", {"success": {}}),

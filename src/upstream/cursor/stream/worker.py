@@ -115,7 +115,7 @@ def _agent_headers(
     exclude_tools: Optional[List[str]] = None,
 ) -> List[Tuple[str, str]]:
     _ = timezone
-    # 对齐 cursor_mvp：Agent Run 请求头不带 checksum / timezone。
+    # Agent Run 请求头不带 checksum / timezone。
     headers: List[Tuple[str, str]] = [
         (":method", "POST"),
         (":path", "/agent.v1.AgentService/Run"),

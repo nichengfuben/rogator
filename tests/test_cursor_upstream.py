@@ -229,9 +229,9 @@ class TestCursorConverter(unittest.TestCase):
             },
         ]
         prompt, history = split_prompt_and_history(messages)
-        self.assertTrue(prompt.startswith(_TOOL_CONTINUE_PROMPT))
-        self.assertIn('<tool_result name="mcp__Glob">', prompt)
-        self.assertIn("a.py\nb.py", prompt)
+        self.assertEqual(prompt, _TOOL_CONTINUE_PROMPT)
+        self.assertNotIn("<tool_result", prompt)
+        self.assertNotIn("a.py\nb.py", prompt)
         self.assertEqual(len(history), 3)
         self.assertIn("user", history[0])
         self.assertEqual(
@@ -253,6 +253,37 @@ class TestCursorConverter(unittest.TestCase):
         _, hist2 = split_prompt_and_history(empty_msgs)
         self.assertEqual(hist2[-1]["tool"]["content"][0]["text"]["text"], "")
 
+        # name 缺失时从 assistant.tool_calls 反查
+        nameless = messages[:-1] + [{
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "only-id",
+        }]
+        p3, h3 = split_prompt_and_history(nameless)
+        self.assertEqual(p3, _TOOL_CONTINUE_PROMPT)
+        self.assertEqual(h3[-1]["tool"]["toolName"], "mcp__Glob")
+
+        # 多工具：text 仍短，history 含全部 tool
+        multi = [
+            {"role": "user", "content": "do both"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "Read", "arguments": "{}"}},
+                    {"id": "c2", "function": {"name": "Grep", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "file-a"},
+            {"role": "tool", "tool_call_id": "c2", "content": "hit-b"},
+        ]
+        pm, hm = split_prompt_and_history(multi)
+        self.assertEqual(pm, _TOOL_CONTINUE_PROMPT)
+        self.assertNotIn("file-a", pm)
+        tools = [m["tool"] for m in hm if "tool" in m]
+        self.assertEqual([t["toolName"] for t in tools], ["Read", "Grep"])
+        self.assertEqual([t["content"][0]["text"]["text"] for t in tools], ["file-a", "hit-b"])
+
         payload = _build_run_request(
             prompt=prompt,
             model="composer-2.5-fast",
@@ -268,6 +299,7 @@ class TestCursorConverter(unittest.TestCase):
             run["action"]["userMessageAction"]["conversationHistory"]["messages"],
             history,
         )
+        self.assertEqual(run["action"]["userMessageAction"]["userMessage"]["text"], prompt)
         self.assertIn("mcpTools", run)
         self.assertNotIn("customSystemPrompt", run)
 

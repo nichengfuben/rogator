@@ -123,7 +123,7 @@ def _handle_mini_swe_bash(msg: dict, base: dict, start: float, _handlers=None) -
 def _fetch_url(msg: dict, base: dict, start: float, args_key: str, result_key: str) -> List[Dict[str, Any]]:
     url = (msg.get(args_key) or {}).get("url", "")
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "CursorMVP/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "Rogator/1.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             content = resp.read().decode("utf-8", errors="replace")
             if result_key == "fetchResult":

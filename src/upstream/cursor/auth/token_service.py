@@ -254,7 +254,7 @@ class CursorTokenService:
             u = parse_usage(raw)
             self.last_usage_pct = float(u.get("total_pct", 0.0))
             if is_limit_reached(u, threshold=threshold):
-                logger.warning(
+                logger.debug(
                     "Cursor 用量 %.1f%% >= %.1f%%，自动换号",
                     u["total_pct"],
                     threshold,
