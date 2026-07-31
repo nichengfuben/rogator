@@ -223,7 +223,7 @@ class SessionLoginMixin:
             account = self._pick_account_for_login()
             if account is None:
                 if valid_session_count(self._sessions) == 0:
-                    logger.warning(
+                    logger.debug(
                         "No login-eligible accounts for %s (all blocked/muted/in-use)",
                         self.UPSTREAM_NAME,
                     )
@@ -242,7 +242,7 @@ class SessionLoginMixin:
                 target,
             )
         elif valid_session_count(self._sessions) == 0:
-            logger.error(
+            logger.debug(
                 "Session pool replenish failed [%s] (target=%d)",
                 self.UPSTREAM_NAME,
                 target,

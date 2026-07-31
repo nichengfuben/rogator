@@ -13,7 +13,10 @@ from handlers.openai.protocol import _inject_protocol_options
 from handlers.openai.thinking import protocol_thinking_level
 from handlers.openai.tools import convert_tools_to_openai
 from server.model.model_thinking import resolve_qwen_thinking
-from upstream.deepseek.lib.biz_error import DeepSeekAccountsExhaustedError, DeepSeekUserMutedError
+from upstream.deepseek.lib.adapter.helpers.biz_error import (
+    DeepSeekAccountsExhaustedError,
+    DeepSeekUserMutedError,
+)
 
 logger = get_logger("rogator")
 
@@ -63,6 +66,25 @@ def _prepare_messages(
     return [{**injected[0], "content": send_text}], send_text
 
 
+async def _on_user_muted(
+    client: Any, username: str, exc: DeepSeekUserMutedError, attempt: int
+) -> None:
+    if username and hasattr(client, "handle_account_muted"):
+        client.handle_account_muted(username, mute_at=time.time())
+        logger.warning(
+            "DeepSeek muted %s: %s (attempt %d/%d)",
+            username[:6],
+            exc.biz_msg,
+            attempt + 1,
+            _MAX_MUTE_SWITCH,
+        )
+    switched = await client.switch_to_next(exclude_username=username or None)
+    if switched is None:
+        raise DeepSeekAccountsExhaustedError(
+            "All DeepSeek accounts are muted or unavailable"
+        ) from exc
+
+
 async def stream_openai_chat(
     state: Any,
     client: Any,
@@ -75,15 +97,18 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    qwen_enabled, _, _ = resolve_qwen_thinking(model, protocol_thinking_level(protocol_options))
+    qwen_enabled, _, _ = resolve_qwen_thinking(
+        model, protocol_thinking_level(protocol_options)
+    )
     final_messages, send_text = _prepare_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
     if files:
-        logger.debug("DeepSeek: ignoring %d uploaded file(s) for req %s", len(files), req_id)
+        logger.debug(
+            "DeepSeek: ignoring %d uploaded file(s) for req %s", len(files), req_id
+        )
     yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
     inner = await client._ensure_ready()  # noqa: SLF001
-
     for attempt in range(_MAX_MUTE_SWITCH):
         candidate = await client.pick_candidate()
         username = str(candidate.meta.get("identifier") or "")
@@ -101,18 +126,5 @@ async def stream_openai_chat(
                     yield event
             return
         except DeepSeekUserMutedError as exc:
-            if username and hasattr(client, "handle_account_muted"):
-                client.handle_account_muted(username, mute_at=time.time())
-                logger.warning(
-                    "DeepSeek muted %s: %s (attempt %d/%d)",
-                    username[:6],
-                    exc.biz_msg,
-                    attempt + 1,
-                    _MAX_MUTE_SWITCH,
-                )
-            switched = await client.switch_to_next(exclude_username=username or None)
-            if switched is None:
-                raise DeepSeekAccountsExhaustedError(
-                    "All DeepSeek accounts are muted or unavailable"
-                ) from exc
+            await _on_user_muted(client, username, exc, attempt)
     raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")

@@ -1,6 +1,6 @@
 # Rogator
 
-Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 Anthropic 兼容 API 暴露给上游客户端。
+多上游 AI 适配服务器 — 将 **Qwen** / **DeepSeek** 等通过 OpenAI 与 Anthropic 兼容 API 暴露给客户端。
 
 默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.43`。
 
@@ -9,27 +9,35 @@ Qwen AI 适配服务器 — 将阿里云通义千问 (Qwen) 通过 OpenAI 与 An
 
 ## 功能特性
 
-- **OpenAI 兼容**：`/v1/chat/completions`、模型列表、TTS、图片/视频生成
+- **OpenAI 兼容**：`/v1/chat/completions`、模型列表、TTS、图片/视频生成（视上游能力）
 - **Anthropic 兼容**：`/v1/messages` 及 `/anthropic/v1/*` 别名路径
-- **工具调用 (Function Calling)**：由 echotools `inject_fncall` 注入 entml 协议
-- **思考模式**：支持 `thinking` / `reasoning_effort`；entml 模型与原生思考模型分流（见 `persist/model_entml_thinking.jsonl`）
+- **多上游**：`config.toml` 的 `[upstream].enabled` 选择加载 `upstream/<name>/`（如 `qwen`、`deepseek`）
+- **工具调用 (Function Calling)**：由 echotools `inject_fncall` 注入 entml 协议（按模型注册表开关）
+- **思考模式**：支持 `thinking` / `reasoning_effort`；entml 模型与原生思考模型分流
 - **历史 reasoning**：通过 `protocol_options.include_thinking_in_history` 由 echotools 渲染 `<entml:thinking>` 块
-- **多账号会话池**：预登录、JWT 过期清理、限流/鉴权失败自动换号重试
-- **长文本处理**：超长内容分割 + OSS 上传
+- **多账号会话池**：预登录、JWT 过期清理、限流/鉴权失败自动换号重试（按上游分桶）
+- **长文本处理**：超长内容分割 + OSS 上传（Qwen）
 - **并发调度**：请求队列与并发上限（`config.toml` 可配）
 
 ## 快速开始
 
 ### 1. 准备账号
 
-账号从 `persist/qwen/accounts.csv` 加载（由 `upstream.qwen.accounts` 读取；根目录旧 `accounts.csv` 仅作兼容回退）。CSV 列格式：
+按上游分文件加载（`core.session.accounts`）：
+
+| 上游 | 路径 |
+|------|------|
+| Qwen | `persist/qwen/accounts.csv` |
+| DeepSeek | `persist/deepseek/accounts.csv` |
+
+CSV 列格式：
 
 ```csv
 email,password,name
 user@example.com,your-password,optional-label
 ```
 
-至少配置一行有效账号，否则无法登录 Qwen。
+至少为一个已启用上游配置有效账号。
 
 ### 2. 安装依赖
 
@@ -45,8 +53,8 @@ pip install -r requirements-dev.txt
 
 | 包 | 用途 |
 |----|------|
-| `aiohttp>=3.9.0` | HTTP 服务端与 Qwen 上游请求 |
-| `echotools>=2.3.43` | entml 工具调用、日志、thinking_level / thinking_behavior（thinking 块置于 prompt 末尾） |
+| `aiohttp>=3.9.0` | HTTP 服务端与上游请求 |
+| `echotools>=2.3.43` | entml 工具调用、日志、thinking_level / thinking_behavior |
 | `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
 | `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
 
@@ -57,9 +65,11 @@ pip install -r requirements-dev.txt
 
 **加载策略（运行时）**：以 `template/config.toml` 为完整缺省，`config.toml` 里**只覆盖你写出的键**；未写出的节/键取自模板，**不使用代码内置默认值**。不会把模板合并写回你的 config 文件。`server.version` 与模板不一致时启动日志会提醒。
 
+上游专属配置：`template/upstream/<name>.toml` → `configs/<name>.toml`（可覆盖）。
+
 ```toml
 [server]
-version = "2.2.1"
+version = "2.2.2"
 port = 8932
 host = "0.0.0.0"
 prelogin = 3          # 启动时预登录账号数；运行中不足时自动补登
@@ -74,15 +84,18 @@ max_retry_on_error = 3   # 限流/过期等可恢复错误时的换号重试次�
 [limits]
 max_concurrent = 8
 max_queue_size = 1000
-# inject 后发给 Qwen 的正文字符上限；超限则尾部直发、前缀 OSS 附件
-qwen_send_max_chars = 256000
-# /v1/models 等 API 对外声明的上下文长度
 model_context_length = 256000
-client_max_body_bytes = 33554432 # aiohttp 入站 body 上限（默认 1 MiB 会 413）
+client_max_body_bytes = 33554432
+
+[upstream]
+# 启用的上游模块（对应 upstream/<name>/）
+enabled = ["qwen"]
+# 同时启用 DeepSeek 示例：
+# enabled = ["qwen", "deepseek"]
 
 [fncall]
 # record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt
-# record_response = true 时写入 logs/responses/{req_id}.txt（上游 thinking+answer，不经 entml 解析）
+# record_response = true 时写入 logs/responses/{req_id}.txt
 record_response = false
 
 [timeout]
@@ -92,9 +105,9 @@ login = 30.0
 prelogin = 120.0
 
 [shutdown]
-wait_active_requests = 3.0   # 关机等待在途请求/流式（秒），超时强制 cancel
-total_timeout = 8.0            # state.shutdown 总超时（秒）
-hard_exit_timeout = 25.0       # 整段关机清理硬上限（秒），超时 os._exit
+wait_active_requests = 3.0
+total_timeout = 8.0
+hard_exit_timeout = 25.0
 ```
 
 监听地址、端口、预登录数量等均来自 `config.toml`（未写项取自 `template/config.toml`）。
@@ -124,11 +137,13 @@ curl http://localhost:8932/v1/models
 curl -X POST http://localhost:8932/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3.7-max",
+    "model": "qwen3-7-max",
     "messages": [{"role": "user", "content": "你好"}],
     "thinking": "on"
   }'
 ```
+
+请求体里的 `model` 必须是 **外键**（见下方模型注册表），不能直接传上游内键（如 `qwen3.7-max`）。
 
 ### Anthropic Messages
 
@@ -136,7 +151,7 @@ curl -X POST http://localhost:8932/v1/chat/completions \
 curl -X POST http://localhost:8932/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3.7-max",
+    "model": "qwen3-7-max",
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "你好"}]
   }'
@@ -144,7 +159,7 @@ curl -X POST http://localhost:8932/v1/messages \
 
 ### 带工具调用
 
-请求体携带 OpenAI 格式 `tools` 即可；服务端经 entml 注入后转发至 Qwen。
+请求体携带 OpenAI 格式 `tools` 即可；服务端按注册表决定是否经 entml 注入后转发。
 
 ## API 端点
 
@@ -153,7 +168,7 @@ curl -X POST http://localhost:8932/v1/messages \
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/health`, `/v1/health` | 健康检查 |
-| GET | `/v1/models` | OpenAI 模型列表 |
+| GET | `/v1/models` | OpenAI 模型列表（外键） |
 | POST | `/v1/chat/completions` | OpenAI 聊天（流式/非流式） |
 | POST | `/v1/messages` | Anthropic 消息 |
 | POST | `/anthropic/v1/messages` | Anthropic 别名 |
@@ -171,48 +186,47 @@ curl -X POST http://localhost:8932/v1/messages \
 | POST | `/v1/admin/switch_session` | 手动切换当前账号 |
 | POST | `/v1/admin/refresh_models` | 刷新模型缓存 |
 
-## 支持的模型
+## 模型注册表
 
-内置默认列表见 `server/formats.py` 的 `DEFAULT_MODELS`；运行时以 `/v1/models` 或 `persist/qwen/models.json` 缓存为准（可通过管理端点刷新）。
+`persist/model_registry.jsonl`（可提交 git）每行：
 
-| 模型 ID | 默认 | entml 思考 |
-|---------|:----:|:----------:|
-| `qwen3.8-max-preview` | | 否（原生 Thinking，**永远开启**，忽略 off/none） |
-| `qwen3.7-max` | **是** | 是 |
-| `qwen3.6-plus` | | 是 |
-| `qwen3.5-plus` | | 是 |
-| `qwen3.5-397b-a17b` | | 是 |
-| `qwen3-max` | | 是 |
-| `qwen3-max-2026-01-23` | | 是 |
-| `qwen3-235b-a22b` | | 是 |
-| `qwen3-30b-a3b` | | 是 |
-| `qwen3-vl-30b-a3b` | | 是 |
-| `qwen3-vl-32b` | | 是 |
-| `qwen3-vl-plus` | | 是 |
-| `qwen3-coder-plus` | | 是 |
-| `qwen3-coder-30b-a3b-instruct` | | 是 |
-| `qwen3-omni-flash` | | 是 |
-| `qwen3-omni-flash-2025-12-01` | | 是 |
-| `qwen2.5-72b-instruct` | | 是 |
-| `qwen2.5-vl-32b-instruct` | | 是 |
-| `qwen2.5-omni-7b` | | 是 |
-| `qwen2.5-coder-32b-instruct` | | 是 |
-| `qwen-max-latest` | | 是 |
-| `qwen-plus-2025-07-28` | | 是 |
-| `qwen-plus-2025-09-11` | | 是 |
-| `qwen-plus-2025-01-25` | | 是 |
-| `qwen-turbo-2025-02-11` | | 是 |
+```text
+外键:内键:uses_entml_thinking:uses_entml_tools
+```
 
-未在 `persist/model_entml_thinking.jsonl` 中列出的模型，默认按 entml 思考处理（`uses_entml_thinking` 缺省为 `true`）。
+- **外键**：客户端 `/v1/models` 与请求里使用的 ID（如 `qwen3-7-max`）
+- **内键**：上游真实模型名（如 `qwen3.7-max`）
+- **uses_entml_thinking**：是否走 entml 思考解析
+- **uses_entml_tools**：是否走 entml 工具调用解析（缺省第三段时与思考开关相同）
+
+示例：
+
+```text
+qwen3-7-max:qwen3.7-max:true:true
+qwen3-8-max-preview:qwen3.8-max-preview:false:true
+deepseek-v4-flash:deepseek-v4-flash:false:true
+```
+
+`GET /v1/models` 只列出注册表中、且内键仍在上游模型列表中的外键。
+
+## 支持的模型（摘录）
+
+运行时以 `/v1/models` 与各上游 `persist/<name>/models.json` 缓存为准。注册表中常见 Qwen 外键见 `persist/model_registry.jsonl`；DeepSeek 如 `deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-vision`。
+
+| 外键 | 默认 | entml 思考 | 说明 |
+|------|:----:|:----------:|------|
+| `qwen3-7-max` | **是** | 是 | |
+| `qwen3-8-max-preview` | | 否 | 原生 Thinking，忽略 off/none |
+| `deepseek-v4-flash` | | 否 | DeepSeek 上游 |
 
 ## 思考模式
 
-Rogator 根据 `persist/model_entml_thinking.jsonl` 判断模型是否走 entml 思考协议：
+Rogator 根据注册表 `uses_entml` 判断模型是否走 entml 思考协议：
 
 | 映射值 | 行为 |
 |--------|------|
 | `true` | 上游 `Fast` + entml 解析 thinking（默认多数 Qwen3 模型） |
-| `false` | 上游原生 `Thinking`（如 `qwen3.8-max-preview`） |
+| `false` | 上游原生思考（如 `qwen3-8-max-preview`、部分 DeepSeek） |
 
 请求侧 `thinking` / `reasoning_effort` / `thinking_level` 会归一化为 echotools 挡位：`none` | `low` | `medium` | `high` | `xhigh` | `max` | `auto`。`off`、`none`、`thinking: false` 等均视为关闭思考（`none`，**不注入** `<entml:thinking_mode>` / `max_thinking_length`）。若 conversation history 中已有 `<entml:thinking>` 历史块（`include_thinking_in_history`），仍会注入**强制不思考**的 `<thinking_behavior>`；无历史思考块时则不注入任何 thinking 相关内容。其中 `low`–`max` 注入 `<entml:thinking_mode>` 为挡位名（如 `medium`）与对应默认 `max_thinking_length`（12800 / 25600 / 64000 / 102400 / 134736）；仅 legacy `thinking_mode: on` 时注入 `on`；`auto` 注入 `auto` 模式且无默认长度。指引文案位于 `<thinking_behavior>` 块。历史 assistant 的 `reasoning` 由 echotools 在 `inject_fncall` 时按 `include_thinking_in_history` 渲染。
 
@@ -230,18 +244,19 @@ python scripts/build_prompt_preview.py
 
 | 文件 | 说明 |
 |------|------|
-| `persist/qwen/sessions.json` | 会话池、`current_index`、`blocked_accounts` |
-| `persist/qwen/login_history.json` | 各账号最近一次成功登录时间（UTC+8） |
+| `persist/<upstream>/sessions.json` | 该上游会话池、`current_index`、`blocked_accounts` |
+| `persist/<upstream>/login_history.json` | 各账号最近一次成功登录时间（UTC+8） |
+| `persist/<upstream>/accounts.csv` | 账号（gitignore，勿提交） |
+| `persist/<upstream>/models.json` | 上游模型列表与能力 meta 缓存 |
 | `persist/model_registry.jsonl` | API 外键 → 上游内键 → entml 开关（可提交 git） |
-| `persist/models.json` | 上游模型列表与能力 meta 缓存 |
 
-换号重试逻辑见 `server/session_retry.py`：捕获 `TokenExpiredError`（含限流）→ 封禁当前账号 → 切换下一可用 session → 最多重试 `max_retry_on_error` 次。
+换号重试逻辑见 `server/retry/session_retry.py`：捕获可恢复错误 → 封禁当前账号 → 切换下一可用 session → 最多重试 `max_retry_on_error` 次。
 
 ## 环境变量
 
 | 变量 | 说明 |
 |------|------|
-| `QWEN_BX_UMIDTOKEN` | 覆盖 Baxia 反爬 `bx-umidtoken` |
+| `QWEN_BX_UMIDTOKEN` | 覆盖 Baxia 反爬 `bx-umidtoken`（Qwen） |
 | `GENERALUSR` / `GENERALPWD` | 测试脚本用账号（可选） |
 
 ## 项目结构
@@ -253,17 +268,19 @@ python scripts/build_prompt_preview.py
 ├── configs/                # 各上游专属配置（qwen.toml、deepseek.toml 等）
 ├── template/
 │   ├── config.toml         # 全局配置模板
-│   └── configs/            # 上游配置模板
+│   ├── upstream_config.toml
+│   └── upstream/           # 上游配置模板
 ├── src/
-│   ├── path_setup.py       # 注入 src/ 与根目录到 sys.path
+│   ├── path_setup.py
 │   ├── state.py            # AppState、调度器；经 core 选上游客户端
-│   ├── core/               # 平台核心：registry / dispatch / 共享错误与传输
-│   ├── upstream/           # 多上游实现（qwen/…）
+│   ├── core/               # registry / dispatch / session 池
+│   ├── upstream/           # qwen / deepseek 等
 │   ├── handlers/           # OpenAI / Anthropic 协议适配
-│   └── server/             # 配置、格式、模型 registry、records、retry
+│   └── server/             # 配置、格式、模型 registry、retry
 ├── persist/
 │   ├── model_registry.jsonl
-│   └── qwen/               # 账号、sessions、login_history 等
+│   ├── qwen/
+│   └── deepseek/
 ├── scripts/
 └── tests/
 ```
@@ -278,9 +295,9 @@ python -m pytest tests/ -q
 ## 注意事项
 
 - Qwen 不支持独立 system role；system 消息会在发送前折叠进最后一条 user 消息
-- 出站 HTTP 请求使用 `ssl=False`
-- 请求需携带阿里巴巴 Baxia 指纹头（`bx-ua`、`bx-umidtoken`）
-- 默认模型：`qwen3.7-max`（见 `server/formats.py` 中 `DEFAULT_MODELS`）
+- 出站 HTTP 请求对部分上游使用 `ssl=False`
+- Qwen 请求需携带阿里巴巴 Baxia 指纹头（`bx-ua`、`bx-umidtoken`）
+- 默认模型以外键为准（见 `persist/model_registry.jsonl` / `server/formats.py`）
 
 ## 许可证
 

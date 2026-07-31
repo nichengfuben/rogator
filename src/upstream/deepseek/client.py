@@ -16,7 +16,7 @@ from upstream.deepseek.lib.adapter.client import DeepseekClient
 from upstream.deepseek.lib.adapter.helpers.pmtutil import Account as DsAccount
 from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.protocol.consts import MODELS
-from upstream.deepseek.lib.biz_error import DeepSeekUserMutedError
+from upstream.deepseek.lib.adapter.helpers.biz_error import DeepSeekUserMutedError
 from upstream.deepseek.lib.user.userapi import login
 
 logger = logging.getLogger("rogator")

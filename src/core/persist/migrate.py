@@ -87,6 +87,39 @@ def _login_entry(value: Any) -> Dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
 
 
+def _fill_nested_buckets(
+    logins_root: Dict[str, Any],
+    buckets: Dict[str, Dict[str, Dict[str, Any]]],
+) -> None:
+    for upstream in KNOWN_UPSTREAMS:
+        raw = logins_root.get(upstream)
+        if not isinstance(raw, dict):
+            continue
+        for username, entry in raw.items():
+            parsed = _login_entry(entry)
+            if parsed is not None:
+                buckets[upstream][str(username)] = parsed
+
+
+def _fill_flat_buckets(
+    logins_root: Dict[str, Any],
+    buckets: Dict[str, Dict[str, Dict[str, Any]]],
+    *,
+    qwen_usernames: Set[str],
+    deepseek_usernames: Set[str],
+) -> None:
+    for username, entry in logins_root.items():
+        parsed = _login_entry(entry)
+        if parsed is None:
+            continue
+        upstream = classify_username(
+            str(username),
+            qwen_usernames=qwen_usernames,
+            deepseek_usernames=deepseek_usernames,
+        )
+        buckets[upstream][str(username)] = parsed
+
+
 def split_login_history_logins(
     logins_root: Dict[str, Any],
     *,
@@ -100,25 +133,14 @@ def split_login_history_logins(
         isinstance(logins_root.get(up), dict) for up in KNOWN_UPSTREAMS if up in logins_root
     )
     if nested and any(up in logins_root for up in KNOWN_UPSTREAMS):
-        for upstream in KNOWN_UPSTREAMS:
-            raw = logins_root.get(upstream)
-            if isinstance(raw, dict):
-                for username, entry in raw.items():
-                    parsed = _login_entry(entry)
-                    if parsed is not None:
-                        buckets[upstream][str(username)] = parsed
+        _fill_nested_buckets(logins_root, buckets)
         return buckets
-
-    for username, entry in logins_root.items():
-        parsed = _login_entry(entry)
-        if parsed is None:
-            continue
-        upstream = classify_username(
-            str(username),
-            qwen_usernames=qwen_usernames,
-            deepseek_usernames=deepseek_usernames,
-        )
-        buckets[upstream][str(username)] = parsed
+    _fill_flat_buckets(
+        logins_root,
+        buckets,
+        qwen_usernames=qwen_usernames,
+        deepseek_usernames=deepseek_usernames,
+    )
     return buckets
 
 

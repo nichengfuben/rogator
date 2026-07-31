@@ -114,8 +114,15 @@ class TestStoredCapabilities(unittest.TestCase):
 
 
 class TestBuildOpenAIModelEntry(unittest.TestCase):
-    def _entry(self, external: str, internal: str, *, uses_entml: bool = True) -> ModelRegistryEntry:
-        return ModelRegistryEntry(external, internal, uses_entml)
+    def _entry(
+        self,
+        external: str,
+        internal: str,
+        *,
+        uses_entml: bool = True,
+        uses_entml_tools: bool = True,
+    ) -> ModelRegistryEntry:
+        return ModelRegistryEntry(external, internal, uses_entml, uses_entml_tools)
 
     def test_exposes_finalized_capabilities(self) -> None:
         meta = {

@@ -17,7 +17,7 @@ from core.session.store import (
     save_upstream_sessions,
 )
 from upstream.deepseek.client import DeepSeekClient
-from upstream.deepseek.lib.biz_error import (
+from upstream.deepseek.lib.adapter.helpers.biz_error import (
     DeepSeekUserMutedError,
     DeepSeekWafChallengeError,
     parse_biz_error_from_line,

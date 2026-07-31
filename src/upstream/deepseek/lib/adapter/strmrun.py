@@ -12,7 +12,7 @@ import aiohttp
 from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST, MAX_CONTINUE
 from upstream.deepseek.lib.protocol.headers import build_headers
 from upstream.deepseek.lib.adapter.helpers.pmtutil import translate_chunk
-from upstream.deepseek.lib.biz_error import raise_if_user_muted
+from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_user_muted
 from upstream.deepseek.lib.stream.strmpars import StreamParser
 
 logger = logging.getLogger(__name__)

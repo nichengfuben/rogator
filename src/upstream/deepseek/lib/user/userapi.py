@@ -9,7 +9,7 @@ from typing import Any, Dict, Tuple
 
 import aiohttp
 
-from upstream.deepseek.lib.biz_error import raise_if_waf_challenge
+from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_waf_challenge
 from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST
 from upstream.deepseek.lib.protocol.headers import build_basic_headers
 logger = logging.getLogger(__name__)

@@ -40,7 +40,10 @@ htmlcov/
 # Project specific
 config.toml
 persist/qwen/
+persist/deepseek/
+persist/bandit/
 persist/sessions.json
+logs/
 logs/prompts/
 abnormis.txt
 full_prompt_dump.txt
