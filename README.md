@@ -17,6 +17,7 @@
 - **工具调用**：Qwen / DeepSeek 经 echotools `inject_fncall` 注入 entml；Cursor 使用上游原生 tool_call（不经 entml）
 - **思考模式**：`thinking` / `reasoning_effort` 挡位；entml 思考、原生思考、纯原生上游（Cursor）分流，规则见 `persist/model_registry.jsonl`
 - **Qwen / DeepSeek 账号池**：预登录、JWT 过期清理、限流/鉴权失败自动换号重试
+- **LinUCB schedule**：`[schedule].enabled` 门控补登（空池强制 act；连续 skip 达上限强制补登）
 - **Cursor**：Star Cursor API Key 拉号，无 Rogator 账号池；Token 写入 `persist/cursor/auth.toml`
 - **长文本**：超长 prompt 尾部直发、前缀 OSS 附件（Qwen；可 `send_full_prompt=true` 关闭分割）
 - **并发调度**：请求队列与并发上限可配
@@ -276,7 +277,10 @@ python scripts/build_prompt_preview.py
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests/ -q
+python achecker.py   # 本地合规检查（可选）
 ```
+
+CI：push/PR 到 `main` 跑 pytest（及仓库内 `achecker.py`）。
 
 ## 注意事项
 

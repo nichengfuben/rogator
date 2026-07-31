@@ -52,7 +52,10 @@ class ScheduleGate:
             self._load()
 
     def decide(self, x: list[float], *, force_act: bool = False, force_skip: bool = False) -> bool:
-        _ = force_act, force_skip
+        if force_skip:
+            return False
+        if force_act or self.consecutive_skips >= self.max_consecutive_skips:
+            return True
         return self.model.select(x) == ARM_ACT
 
     def update(self, acted: bool, x: list[float], reward: float) -> None:

@@ -75,8 +75,9 @@ def build_login_features(client: Any, gate: ScheduleGate, need: int, target: int
 
 
 def login_hard(valid: int, need: int) -> tuple[bool, bool]:
-    """不强制；一律交 LinUCB。"""
-    _ = valid, need
+    """空池或缺口时强制 act；否则交 LinUCB。"""
+    if need > 0 and valid <= 0:
+        return True, False
     return False, False
 
 

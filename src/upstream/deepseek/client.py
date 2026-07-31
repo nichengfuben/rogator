@@ -19,7 +19,7 @@ from upstream.deepseek.lib.adapter.helpers.pmtutil import Account as DsAccount
 from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.protocol.consts import MODELS
 from upstream.deepseek.lib.adapter.helpers.biz_error import DeepSeekUserMutedError, DeepSeekWafChallengeError
-from upstream.deepseek.lib.user.userapi import login
+from upstream.deepseek.lib.runtime.user.userapi import login
 from server.formats import UpstreamUnavailableError
 from upstream.deepseek.persist import read_models_cache, write_models_cache
 

@@ -69,23 +69,23 @@ class TestScheduleGate(unittest.TestCase):
     def setUp(self) -> None:
         reset_gates_for_tests()
 
-    def test_decide_ignores_force_flags(self) -> None:
+    def test_decide_honors_force_flags(self) -> None:
         g = ScheduleGate("t_force", LOGIN_DIM, persist=False, max_consecutive_skips=99)
         x = [1.0] + [0.0] * (LOGIN_DIM - 1)
         for _ in range(30):
             g.model.update(ARM_SKIP, x, 0.95)
             g.model.update(ARM_ACT, x, 0.05)
-        self.assertFalse(g.decide(x, force_act=True))
+        self.assertTrue(g.decide(x, force_act=True))
         self.assertFalse(g.decide(x, force_skip=True))
 
-    def test_max_consecutive_skips_does_not_force(self) -> None:
+    def test_max_consecutive_skips_forces_act(self) -> None:
         g = ScheduleGate("t_skip", LOGIN_DIM, persist=False, max_consecutive_skips=2)
         x = [1.0] + [0.0] * (LOGIN_DIM - 1)
         for _ in range(30):
             g.model.update(ARM_SKIP, x, 0.95)
             g.model.update(ARM_ACT, x, 0.05)
         g.consecutive_skips = 99
-        self.assertFalse(g.decide(x))
+        self.assertTrue(g.decide(x))
 
     def test_persist_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
