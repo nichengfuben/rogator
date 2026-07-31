@@ -17,7 +17,14 @@ _GATES: Dict[str, "ScheduleGate"] = {}
 
 
 def bandit_path(gate_id: str) -> Path:
-    return persist_root() / "bandit" / f"{gate_id}.json"
+    # Windows：路径中的 ``:`` 会被当成 NTFS ADS（写出空文件 login / poll）
+    safe = (
+        str(gate_id)
+        .replace(":", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+    )
+    return persist_root() / "bandit" / f"{safe}.json"
 
 
 class ScheduleGate:
@@ -45,12 +52,7 @@ class ScheduleGate:
             self._load()
 
     def decide(self, x: list[float], *, force_act: bool = False, force_skip: bool = False) -> bool:
-        if force_skip and not force_act:
-            return False
-        if force_act:
-            return True
-        if self.consecutive_skips >= self.max_consecutive_skips:
-            return True
+        _ = force_act, force_skip
         return self.model.select(x) == ARM_ACT
 
     def update(self, acted: bool, x: list[float], reward: float) -> None:

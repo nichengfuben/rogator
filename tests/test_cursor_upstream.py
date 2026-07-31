@@ -111,13 +111,13 @@ class TestCursorConfig(unittest.TestCase):
         self.assertIn("poll_interval", sc)
         self.assertEqual(sc["poll_interval"], 30)
 
-    def test_legacy_starcursor_section_merged(self) -> None:
+    def test_starcursor_section_ignored(self) -> None:
         raw = {"starcursor": {"api_keys": ["k1"], "poll_interval": 12}}
         with patch("server.config.app_config._load_upstream_toml", return_value=raw):
             from upstream.cursor.setup.config import load_cursor_upstream_config, token_service_config
             cfg = load_cursor_upstream_config()
-            self.assertEqual(cfg["token_service"]["poll_interval"], 12)
-            self.assertEqual(token_service_config()["api_keys"], ["k1"])
+            self.assertEqual(cfg["token_service"]["poll_interval"], 30)
+            self.assertEqual(token_service_config()["api_keys"], [])
 
 
 
@@ -131,19 +131,56 @@ class TestCursorConverter(unittest.TestCase):
             {"role": "user", "content": "again"},
         ]
         prompt, history = split_prompt_and_history(messages)
-        self.assertEqual(prompt, "again")
+        self.assertIn("Prior conversation:", prompt)
+        self.assertIn("Current request:\nagain", prompt)
+        self.assertIn("User: hello", prompt)
+        self.assertIn("Assistant: hi", prompt)
         self.assertEqual(len(history), 2)
         cursor_hist = messages_to_cursor_history(messages[:-1])
         self.assertEqual(history, cursor_hist)
+
+    def test_system_reminder_anchors_prior_user_goal(self) -> None:
+        from upstream.cursor.chat.convert import split_prompt_and_history
+
+        messages = [
+            {"role": "user", "content": "先跑 achecker.py 并制定交付计划"},
+            {"role": "assistant", "content": "好的"},
+            {
+                "role": "user",
+                "content": "<system-reminder>\nPlan mode is active. ...\n</system-reminder>",
+            },
+        ]
+        prompt, history = split_prompt_and_history(messages)
+        self.assertIn("Prior conversation:", prompt)
+        self.assertIn("achecker.py", prompt)
+        self.assertIn("<system-reminder>", prompt)
+        self.assertEqual(len(history), 2)
+
+    def test_normalize_tool_call_id_in_rewrite(self) -> None:
+        from upstream.cursor.chat.convert import rewrite_tool_call_for_openai
+        from upstream.cursor.chat.tool_ids import normalize_tool_call_id
+
+        dirty = "call-1\nfc_2"
+        self.assertEqual(normalize_tool_call_id(dirty), "call-1")
+        out = rewrite_tool_call_for_openai({
+            "id": dirty,
+            "type": "function",
+            "function": {"name": "Shell", "arguments": "{}"},
+        })
+        self.assertEqual(out["id"], "call-1")
 
     def test_system_goes_to_custom_prompt_not_history(self) -> None:
         from upstream.cursor.chat.convert import (
             IMPORTANT_MCP_TOOLS_ONLY,
             IMPORTANT_NO_TOOLS,
             build_custom_system_prompt,
+            format_tool_results_user_text,
+            messages_to_cursor_history,
             openai_tools_to_mcp,
+            restore_mcp_prefix_for_cursor,
             rewrite_tool_call_for_openai,
             split_prompt_and_history,
+            strip_mcp_prefix,
         )
 
         messages = [
@@ -183,25 +220,97 @@ class TestCursorConverter(unittest.TestCase):
         self.assertEqual(mcp2[0]["providerIdentifier"], "fs")
         self.assertEqual(mcp2[0]["toolName"], "read_file")
 
-        allowed = {"mcp__echo"}
+        allowed = {"mcp__echo", "smoke__echo", "echo"}
         self.assertIsNone(rewrite_tool_call_for_openai(
             {"id": "1", "function": {"name": "", "arguments": "{}"}},
-            allowed_originals=allowed,
+            allowed_originals={"mcp__echo"},
         ))
+        # 非 mcp__：不在清单则不转发
         self.assertIsNone(rewrite_tool_call_for_openai(
-            {"id": "1", "function": {"name": "shell", "arguments": "{}"}},
-            allowed_originals=allowed,
+            {"id": "1", "function": {"name": "Shell", "arguments": "{}"}},
+            allowed_originals={"mcp__echo"},
         ))
+        # 非 mcp__：在清单则原样转发（结果仍由上游本地执行，不走 mcpResult 回灌）
+        shell = rewrite_tool_call_for_openai(
+            {"id": "1", "function": {"name": "Shell", "arguments": "{}"}},
+            allowed_originals={"Shell"},
+        )
+        self.assertIsNotNone(shell)
+        self.assertEqual(shell["function"]["name"], "Shell")
+        # mcp__ 不在清单：过滤
+        self.assertIsNone(rewrite_tool_call_for_openai(
+            {"id": "1", "function": {"name": "mcp__other__x", "arguments": "{}"}},
+            allowed_originals={"mcp__echo"},
+        ))
+        # mcp__ 在清单：去前缀转发给请求者
         kept = rewrite_tool_call_for_openai(
             {"id": "1", "function": {"name": "mcp__echo", "arguments": "{}"}},
-            allowed_originals=allowed,
+            allowed_originals={"mcp__echo"},
         )
         assert kept is not None
-        self.assertEqual(kept["function"]["name"], "mcp__echo")
+        self.assertEqual(kept["function"]["name"], "echo")
+        # mcp__provider__tool → provider__tool；可用短名匹配清单
+        self.assertEqual(strip_mcp_prefix("mcp__smoke__echo"), "smoke__echo")
+        via_short = rewrite_tool_call_for_openai(
+            {"id": "2", "function": {"name": "mcp__smoke__echo", "arguments": "{}"}},
+            allowed_originals={"echo"},
+        )
+        assert via_short is not None
+        self.assertEqual(via_short["function"]["name"], "smoke__echo")
+
+        # 工具结果注入：请求者回传去前缀名 → Cursor 侧还原 mcp__
+        self.assertEqual(
+            restore_mcp_prefix_for_cursor("smoke__echo", {"mcp__smoke__echo"}),
+            "mcp__smoke__echo",
+        )
+        self.assertEqual(restore_mcp_prefix_for_cursor("Shell", {"Shell"}), "Shell")
+        self.assertEqual(restore_mcp_prefix_for_cursor("a__b", None), "mcp__a__b")
+
+        injected = format_tool_results_user_text(
+            [
+                {"role": "user", "content": "x"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "c1",
+                        "function": {"name": "smoke__echo", "arguments": "{}"},
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "name": "smoke__echo",
+                    "content": "pong",
+                },
+            ],
+            tool_originals={"mcp__smoke__echo"},
+        )
+        self.assertIn("Tool result for mcp__smoke__echo:\npong", injected)
+        hist = messages_to_cursor_history(
+            [
+                {"role": "user", "content": "x"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "c1",
+                        "function": {"name": "smoke__echo", "arguments": "{}"},
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "c1",
+                    "name": "smoke__echo",
+                    "content": "pong",
+                },
+            ],
+            tool_originals={"mcp__smoke__echo"},
+        )
+        self.assertEqual(hist[-1]["tool"]["toolName"], "mcp__smoke__echo")
+        self.assertEqual(hist[1]["assistant"]["content"][0]["toolCall"]["toolName"], "mcp__smoke__echo")
 
     def test_tool_results_go_into_conversation_history(self) -> None:
         from upstream.cursor.chat.convert import (
-            _TOOL_CONTINUE_PROMPT,
+            format_tool_results_user_text,
             split_prompt_and_history,
         )
         from upstream.cursor.stream.worker import _build_run_request
@@ -229,9 +338,10 @@ class TestCursorConverter(unittest.TestCase):
             },
         ]
         prompt, history = split_prompt_and_history(messages)
-        self.assertEqual(prompt, _TOOL_CONTINUE_PROMPT)
+        # 跨请求：tool 回执必须进 UserMessage.text；此前轮次一并锚定
+        self.assertIn("Tool result for mcp__Glob:\na.py\nb.py", prompt)
+        self.assertIn("Prior conversation:", prompt)
         self.assertNotIn("<tool_result", prompt)
-        self.assertNotIn("a.py\nb.py", prompt)
         self.assertEqual(len(history), 3)
         self.assertIn("user", history[0])
         self.assertEqual(
@@ -243,14 +353,15 @@ class TestCursorConverter(unittest.TestCase):
         self.assertEqual(tool_msg["toolName"], "mcp__Glob")
         self.assertEqual(tool_msg["content"][0]["text"]["text"], "a.py\nb.py")
 
-        # 空结果也要进 history
+        # 空结果也要进 history；text 仍带工具名
         empty_msgs = messages[:-1] + [{
             "role": "tool",
             "tool_call_id": "call_1",
             "name": "mcp__Glob",
             "content": "",
         }]
-        _, hist2 = split_prompt_and_history(empty_msgs)
+        p2, hist2 = split_prompt_and_history(empty_msgs)
+        self.assertIn("Tool result for mcp__Glob:\n", p2)
         self.assertEqual(hist2[-1]["tool"]["content"][0]["text"]["text"], "")
 
         # name 缺失时从 assistant.tool_calls 反查
@@ -260,10 +371,10 @@ class TestCursorConverter(unittest.TestCase):
             "content": "only-id",
         }]
         p3, h3 = split_prompt_and_history(nameless)
-        self.assertEqual(p3, _TOOL_CONTINUE_PROMPT)
+        self.assertIn("Tool result for mcp__Glob:\nonly-id", p3)
         self.assertEqual(h3[-1]["tool"]["toolName"], "mcp__Glob")
 
-        # 多工具：text 仍短，history 含全部 tool
+        # 多工具：text 含全部回执，history 也含全部 tool
         multi = [
             {"role": "user", "content": "do both"},
             {
@@ -278,8 +389,8 @@ class TestCursorConverter(unittest.TestCase):
             {"role": "tool", "tool_call_id": "c2", "content": "hit-b"},
         ]
         pm, hm = split_prompt_and_history(multi)
-        self.assertEqual(pm, _TOOL_CONTINUE_PROMPT)
-        self.assertNotIn("file-a", pm)
+        self.assertIn("Tool result for Read:\nfile-a", pm)
+        self.assertIn("Tool result for Grep:\nhit-b", pm)
         tools = [m["tool"] for m in hm if "tool" in m]
         self.assertEqual([t["toolName"] for t in tools], ["Read", "Grep"])
         self.assertEqual([t["content"][0]["text"]["text"] for t in tools], ["file-a", "hit-b"])
@@ -450,7 +561,8 @@ class TestCursorConverter(unittest.TestCase):
             {"role": "user", "content": "thanks"},
         ]
         prompt, history = split_prompt_and_history(messages)
-        self.assertEqual(prompt, "thanks")
+        self.assertIn("Current request:\nthanks", prompt)
+        self.assertIn("Tool result for mcp__echo:\npong", prompt)
         self.assertEqual(history[-1]["tool"]["content"][0]["text"]["text"], "pong")
 
 
@@ -669,6 +781,52 @@ class TestCursorStreamFlowControl(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertGreater(calls[0], 65536)
         loop_mock.assert_called_once()
+
+
+class TestCursorConversationSession(unittest.TestCase):
+    def test_checkpoint_event_emitted(self) -> None:
+        import queue
+        from upstream.cursor.stream.handlers import AgentRunContext, process_agent_message
+
+        q: queue.Queue = queue.Queue()
+        ctx = AgentRunContext(
+            q=q,
+            conv_id="cid",
+            start=0.0,
+            send_frame=lambda _o: None,
+            finish=lambda *_a, **_k: None,
+            touch=lambda: None,
+        )
+        done = process_agent_message(
+            {"conversationCheckpointUpdate": {"turns": [], "rootPromptMessagesJson": []}},
+            ctx,
+        )
+        self.assertFalse(done)
+        ev = q.get_nowait()
+        self.assertEqual(ev.type, "checkpoint")
+        self.assertEqual(ev.conversation_id, "cid")
+        self.assertIn("turns", ev.data)
+
+    def test_build_run_request_empty_state_by_default(self) -> None:
+        from upstream.cursor.stream.worker import _build_run_request
+
+        payload = _build_run_request(
+            prompt="hi",
+            model="composer-2.5-fast",
+            conv_id="c1",
+            msg_id="m1",
+            group_id="g1",
+            workspace="X:/ws",
+            mcp_tools=None,
+            conversation_history=[{"user": {"content": [{"text": {"text": "a"}}]}}],
+        )
+        # OpenAI 代理跨连接不回灌 checkpoint，默认空 state，靠 history
+        self.assertEqual(payload["runRequest"]["conversationState"], {})
+        self.assertEqual(
+            payload["runRequest"]["action"]["userMessageAction"]["conversationHistory"]["messages"][0]
+            ["user"]["content"][0]["text"]["text"],
+            "a",
+        )
 
 
 if __name__ == "__main__":

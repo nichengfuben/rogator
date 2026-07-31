@@ -97,7 +97,7 @@ hard_exit_timeout = 25.0
 
 ```bash
 cp template/upstream/cursor.toml configs/cursor.toml
-# 编辑 configs/cursor.toml → [starcursor].api_keys
+# 编辑 configs/cursor.toml → [token_service].api_keys
 ```
 
 并在 `[upstream].enabled` 中加入 `"cursor"`。

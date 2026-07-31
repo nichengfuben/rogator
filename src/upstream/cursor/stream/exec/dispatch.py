@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 from upstream.cursor.stream.exec.common import base_msg, finish, tool_type
 from upstream.cursor.stream.exec.fs import FS_HANDLERS
 from upstream.cursor.stream.exec.run import RUN_HANDLERS, _handle_request_context
-from upstream.cursor.stream.exec.stubs import is_stub_tool, stub_tool
+from upstream.cursor.stream.exec.common import is_stub_tool, stub_tool
 
 
 def execute_tool(

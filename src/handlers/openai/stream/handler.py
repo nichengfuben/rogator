@@ -300,7 +300,7 @@ async def _run_openai_stream_guarded(
         await _write_openai_stream_error(resp, str(e), st.disconnected, error_type="timeout", code=504)
         return resp
     except UpstreamUnavailableError as e:
-        logger.warning("OpenAI stream upstream unavailable: %s", e.message)
+        logger.debug("OpenAI stream upstream unavailable: %s", e.message)
         await _write_openai_stream_error(
             resp, e.message, st.disconnected, error_type=e.error_type, code=e.status,
         )

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from server.schedule.features import LOGIN_DIM, login_reward, poll_reward
-from server.schedule.gate import ScheduleGate, reset_gates_for_tests
+from server.schedule.gate import ScheduleGate, bandit_path, reset_gates_for_tests
+from server.schedule.hooks import poll_hard
 from server.schedule.lin_ucb import ARM_ACT, ARM_SKIP, LinUCB
 from server.schedule.loops import gated_tick
 
@@ -24,33 +26,81 @@ class TestLinUCB(unittest.TestCase):
         self.assertEqual(m.select(x), ARM_SKIP)
 
 
+class TestBanditPath(unittest.TestCase):
+    def test_colon_sanitized_for_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("server.schedule.gate.persist_root", return_value=root):
+                p = bandit_path("login:qwen")
+                self.assertEqual(p.name, "login_qwen.json")
+                self.assertNotIn(":", p.name)
+                p2 = bandit_path("poll:cursor")
+                self.assertEqual(p2.name, "poll_cursor.json")
+
+
+class TestPollHard(unittest.TestCase):
+    def _client(self):
+        class _Tok:
+            def current_token(self):
+                return None
+
+            _cfg = {"usage_threshold": 90.0}
+            _pool = type("P", (), {"all": staticmethod(lambda: [])})()
+
+        class _Client:
+            _tokens = _Tok()
+            _poll_interval = 30.0
+
+        return _Client()
+
+    def test_never_force(self) -> None:
+        gate = ScheduleGate("poll_test", 12, persist=False, max_consecutive_skips=3)
+        force_act, force_skip = poll_hard(self._client(), gate)
+        self.assertFalse(force_act)
+        self.assertFalse(force_skip)
+        gate.extra["usage_known"] = 1.0
+        gate.extra["usage_fetched_at"] = time.time()
+        force_act, force_skip = poll_hard(self._client(), gate)
+        self.assertFalse(force_act)
+        self.assertFalse(force_skip)
+
+
 class TestScheduleGate(unittest.TestCase):
     def setUp(self) -> None:
         reset_gates_for_tests()
 
-    def test_force_skip_and_force_act(self) -> None:
+    def test_decide_ignores_force_flags(self) -> None:
         g = ScheduleGate("t_force", LOGIN_DIM, persist=False, max_consecutive_skips=99)
-        x = [0.5] * LOGIN_DIM
+        x = [1.0] + [0.0] * (LOGIN_DIM - 1)
+        for _ in range(30):
+            g.model.update(ARM_SKIP, x, 0.95)
+            g.model.update(ARM_ACT, x, 0.05)
+        self.assertFalse(g.decide(x, force_act=True))
         self.assertFalse(g.decide(x, force_skip=True))
-        self.assertTrue(g.decide(x, force_act=True, force_skip=True))
 
-    def test_max_consecutive_skips_forces_act(self) -> None:
+    def test_max_consecutive_skips_does_not_force(self) -> None:
         g = ScheduleGate("t_skip", LOGIN_DIM, persist=False, max_consecutive_skips=2)
-        x = [0.5] * LOGIN_DIM
-        g.consecutive_skips = 2
-        self.assertTrue(g.decide(x))
+        x = [1.0] + [0.0] * (LOGIN_DIM - 1)
+        for _ in range(30):
+            g.model.update(ARM_SKIP, x, 0.95)
+            g.model.update(ARM_ACT, x, 0.05)
+        g.consecutive_skips = 99
+        self.assertFalse(g.decide(x))
 
     def test_persist_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch("server.schedule.gate.persist_root", return_value=root):
-                g = ScheduleGate("t_persist", LOGIN_DIM, persist=True, max_consecutive_skips=5)
+                g = ScheduleGate("login:qwen", LOGIN_DIM, persist=True, max_consecutive_skips=5)
                 x = [0.1] * LOGIN_DIM
                 g.update(False, x, 0.8)
                 g.extra["usage_pct"] = 42.0
                 g._save()
+                saved = (root / "bandit" / "login_qwen.json")
+                self.assertTrue(saved.is_file())
+                self.assertGreater(saved.stat().st_size, 10)
                 reset_gates_for_tests()
-                g2 = ScheduleGate("t_persist", LOGIN_DIM, persist=True, max_consecutive_skips=5)
+                g2 = ScheduleGate("login:qwen", LOGIN_DIM, persist=True, max_consecutive_skips=5)
                 self.assertEqual(g2.consecutive_skips, 1)
                 self.assertAlmostEqual(g2.extra.get("usage_pct", 0.0), 42.0)
 
@@ -68,14 +118,17 @@ class TestGatedTick(unittest.IsolatedAsyncioTestCase):
     async def test_skip_does_not_call_act(self) -> None:
         g = ScheduleGate("t_tick", LOGIN_DIM, persist=False, max_consecutive_skips=99)
         calls = {"n": 0}
+        x = [1.0] + [0.0] * (LOGIN_DIM - 1)
+        for _ in range(30):
+            g.model.update(ARM_SKIP, x, 0.95)
+            g.model.update(ARM_ACT, x, 0.05)
 
         async def act() -> float:
             calls["n"] += 1
             return 1.0
 
-        x = [0.5] * LOGIN_DIM
         acted = await gated_tick(
-            g, x, enabled=True, force_act=False, force_skip=True, act=act, skip_reward=lambda: 0.9
+            g, x, enabled=True, force_act=False, force_skip=False, act=act, skip_reward=lambda: 0.9
         )
         self.assertFalse(acted)
         self.assertEqual(calls["n"], 0)
@@ -93,7 +146,7 @@ class TestGatedTick(unittest.IsolatedAsyncioTestCase):
             [0.5] * LOGIN_DIM,
             enabled=False,
             force_act=False,
-            force_skip=True,
+            force_skip=False,
             act=act,
             skip_reward=lambda: 0.9,
         )

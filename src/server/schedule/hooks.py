@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """从 client 组装 login/poll 门控上下文（保持 pool/cursor 函数短）。"""
 
+import time
 from typing import Any
 
 from server.config import CONFIG
@@ -74,11 +75,8 @@ def build_login_features(client: Any, gate: ScheduleGate, need: int, target: int
 
 
 def login_hard(valid: int, need: int) -> tuple[bool, bool]:
-    """force_act, force_skip。"""
-    if valid == 0 and need > 0:
-        return True, False
-    if need <= 0:
-        return False, True
+    """不强制；一律交 LinUCB。"""
+    _ = valid, need
     return False, False
 
 
@@ -86,18 +84,37 @@ def reward_login(acted: bool, logged: int, need: int, fill: float) -> float:
     return login_reward(acted=acted, logged=logged, need=need, fill=fill)
 
 
+def poll_usage_max_age_sec(client: Any) -> float:
+    interval = float(getattr(client, "_poll_interval", 30.0) or 30.0)
+    return max(90.0, interval * 3.0)
+
+
+def poll_usage_stale(gate: ScheduleGate, *, max_age_sec: float) -> bool:
+    """从未成功查过用量，或距上次成功查询过久 → 视为陈旧（usage=0 不能当安全）。"""
+    if float(gate.extra.get("usage_known", 0.0)) < 0.5:
+        return True
+    fetched_at = float(gate.extra.get("usage_fetched_at", 0.0))
+    if fetched_at <= 0:
+        return True
+    return (time.time() - fetched_at) >= float(max_age_sec)
+
+
 def build_poll_features(client: Any, gate: ScheduleGate) -> list[float]:
     tokens = client._tokens
     cfg = tokens._cfg
     threshold = float(cfg.get("usage_threshold", 90.0))
-    usage = float(gate.extra.get("usage_pct", 0.0))
+    # 陈旧时不把 0% 喂给 bandit 当「很安全」；用阈值附近占位逼近 act
+    stale = poll_usage_stale(gate, max_age_sec=poll_usage_max_age_sec(client))
+    usage = float(gate.extra.get("usage_pct", 0.0)) if not stale else float(threshold)
     keys = list(tokens._pool.all())
+    fetched_at = float(gate.extra.get("usage_fetched_at", 0.0))
+    sec_since = (time.time() - fetched_at) if fetched_at > 0 else 1e9
     return poll_context(
         has_token=bool(tokens.current_token()),
         usage_pct=usage,
         threshold=threshold,
-        sec_since_poll=gate.sec_since_act(),
-        last_poll_ok=bool(gate.extra.get("last_poll_ok", 1.0)),
+        sec_since_poll=sec_since,
+        last_poll_ok=bool(gate.extra.get("last_poll_ok", 0.0 if stale else 1.0)),
         keys_left=sum(1 for k in keys if getattr(k, "is_active", True)),
         keys_total=max(1, len(keys)),
         request_pressure=request_pressure_from_state(),
@@ -106,13 +123,8 @@ def build_poll_features(client: Any, gate: ScheduleGate) -> list[float]:
 
 
 def poll_hard(client: Any, gate: ScheduleGate) -> tuple[bool, bool]:
-    tokens = client._tokens
-    threshold = float(tokens._cfg.get("usage_threshold", 90.0))
-    usage = float(gate.extra.get("usage_pct", 0.0))
-    if not tokens.current_token():
-        return True, False
-    if usage >= threshold - 5:
-        return True, False
+    """不强制；用量陈旧靠特征/skip 奖励交给 LinUCB。"""
+    _ = client, gate
     return False, False
 
 
@@ -127,7 +139,9 @@ def reward_poll(ok: bool, gate: ScheduleGate, prev_usage: float, new_usage: floa
     )
 
 
-def skip_reward_poll(gate: ScheduleGate, threshold: float) -> float:
+def skip_reward_poll(gate: ScheduleGate, threshold: float, *, max_age_sec: float = 90.0) -> float:
+    if poll_usage_stale(gate, max_age_sec=max_age_sec):
+        return 0.05
     usage = float(gate.extra.get("usage_pct", 0.0))
     return poll_reward(
         acted=False,

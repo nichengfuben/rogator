@@ -56,8 +56,21 @@ async def gated_tick(
     if do_act:
         reward = await act()
         gate.update(True, features, float(reward))
+        logger.debug(
+            "schedule %s act (linucb) reward=%.3f skips=%d",
+            gate.gate_id,
+            float(reward),
+            gate.consecutive_skips,
+        )
         return True
-    gate.update(False, features, float(skip_reward()))
+    reward = float(skip_reward())
+    gate.update(False, features, reward)
+    logger.debug(
+        "schedule %s skip (linucb) reward=%.3f skips=%d",
+        gate.gate_id,
+        reward,
+        gate.consecutive_skips,
+    )
     return False
 
 

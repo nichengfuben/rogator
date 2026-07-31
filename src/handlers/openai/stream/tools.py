@@ -48,7 +48,7 @@ async def _handle_uncaught_openai_stream_error(resp, st, req_id, exc, logger) ->
         await _write_openai_stream_error(resp, str(exc), st.disconnected, error_type="timeout", code=504)
         return
     if isinstance(exc, UpstreamUnavailableError):
-        logger.warning("OpenAI stream upstream unavailable (uncaught path) %s: %s", req_id, exc.message)
+        logger.debug("OpenAI stream upstream unavailable (uncaught path) %s: %s", req_id, exc.message)
         await _write_openai_stream_error(resp, exc.message, st.disconnected, error_type=exc.error_type, code=exc.status)
         return
     if isinstance(exc, UpstreamConnectionError):

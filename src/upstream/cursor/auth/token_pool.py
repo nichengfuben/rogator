@@ -183,13 +183,12 @@ async def fetch_usage_summary(
     cookie_val = build_session_cookie(access_token)
     if not cookie_val:
         raise ValueError("??? access_token ?? user_id")
+    from upstream.cursor.setup.config import cursor_cli_user_agent
+
     headers = {
         "accept": "*/*",
         "referer": "https://cursor.com/agents",
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        ),
+        "user-agent": cursor_cli_user_agent(),
         "cookie": f"WorkosCursorSessionToken={cookie_val}",
     }
     tm = aiohttp.ClientTimeout(total=timeout)

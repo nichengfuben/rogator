@@ -6,6 +6,7 @@ import subprocess
 import urllib.request
 from typing import Any, Callable, Dict, List, Optional
 
+from upstream.cursor.setup.config import cursor_cli_user_agent
 from upstream.cursor.stream.exec.common import finish, truncate
 
 ExecFn = Callable[[Dict[str, Any], Dict[str, Any], float, Optional[Dict[str, Callable]]], List[Dict[str, Any]]]
@@ -48,13 +49,8 @@ def _handle_mcp(
         except Exception as exc:
             payload = {"error": {"error": str(exc)}}
     elif defer_mcp:
-        # OpenAI 代理：真实结果由客户端下一轮 conversationHistory 回灌
-        payload = {
-            "success": {
-                "content": [{"text": {"text": ""}}],
-                "isError": False,
-            },
-        }
+        # OpenAI 同流挂起：不在此处回执，由 agent_session.resume_with_tool_results 注入
+        return []
     else:
         payload = {"success": {"content": [{"text": {"text": f"Unknown tool: {tool_name}"}}], "isError": False}}
     return [finish(base, start, "mcpResult", payload)]
@@ -123,7 +119,10 @@ def _handle_mini_swe_bash(msg: dict, base: dict, start: float, _handlers=None) -
 def _fetch_url(msg: dict, base: dict, start: float, args_key: str, result_key: str) -> List[Dict[str, Any]]:
     url = (msg.get(args_key) or {}).get("url", "")
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Rogator/1.0"})
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": cursor_cli_user_agent()},
+        )
         with urllib.request.urlopen(req, timeout=30) as resp:
             content = resp.read().decode("utf-8", errors="replace")
             if result_key == "fetchResult":

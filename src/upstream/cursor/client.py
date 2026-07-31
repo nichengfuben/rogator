@@ -231,12 +231,16 @@ class CursorClient:
             hard_fn=lambda: poll_hard(self, gate),
             act=_act,
             skip_reward=lambda: skip_reward_poll(
-                gate, float(self._tokens._cfg.get("usage_threshold", 90.0))
+                gate,
+                float(self._tokens._cfg.get("usage_threshold", 90.0)),
+                max_age_sec=max(90.0, wait * 3.0),
             ),
         )
         await interval_loop(shutdown_event, wait, tick, min_interval=5.0)
 
     async def _poll_once_reward(self, gate: Any) -> float:
+        import time
+
         from server.schedule.hooks import reward_poll
 
         prev = float(gate.extra.get("usage_pct", 0.0))
@@ -245,6 +249,9 @@ class CursorClient:
         new_u = float(getattr(self._tokens, "last_usage_pct", prev))
         gate.extra["usage_pct"] = new_u
         gate.extra["last_poll_ok"] = 1.0 if ok else 0.0
+        if ok:
+            gate.extra["usage_known"] = 1.0
+            gate.extra["usage_fetched_at"] = time.time()
         gate.note_outcome(bool(ok))
         return reward_poll(ok, gate, prev, new_u, threshold)
 
