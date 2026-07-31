@@ -34,8 +34,18 @@ refresh_interval = 3600.0
 
 [upstream]
 # 启用的上游模块（对应 upstream/<name>/）；未列出的不会被加载
-# 可选: "deepseek", "cursor"（cursor 需在 configs/cursor.toml 配置 Star Cursor api_keys）
+# 可选: "deepseek", "cursor"（cursor 需在 configs/cursor.toml 配置 [token_service] api_keys）
 enabled = ["qwen"]
+
+[schedule]
+# LinUCB 门控：登录补池 / Cursor 用量轮询；默认关（与旧版一致每 tick 都 act）；本地可在 config.toml 覆盖为 true
+enabled = false
+persist = true
+max_consecutive_skips_login = 5
+max_consecutive_skips_poll = 3
+# LinUCB 探索系数 α、先验精度 λ（极限仿真优选）
+alpha = 0.55
+lambda = 1.0
 
 [shutdown]
 # 关机时等待在途流式/请求结束的最长时间（秒），超时后强制 cancel

@@ -16,8 +16,9 @@ request_timeout = 300
 heartbeat_interval = 5
 timezone = "Asia/Shanghai"
 
-[starcursor]
-base_url = "http://starcursor.airoe.cn"
+# 自建 Token 拉取服务（拉号 / 用量监测）；base_url 与 api_keys 须自行填写
+[token_service]
+base_url = ""
 api_keys = []
 switch_threshold = 80
 usage_threshold = 90.0

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Star Cursor 拉号 / 用量监测 / API Key 轮询（无 Rogator 账号池）。"""
+"""自建 Token 服务：拉号 / 用量监测 / API Key 轮询（无 Rogator 账号池）。"""
 
 import asyncio
 import time
@@ -16,43 +16,44 @@ from upstream.cursor.auth.store import get_access_token, write_auth, write_token
 from upstream.cursor.auth.token_pool import (
     ApiError,
     KeyPool,
-    StarCursorAPI,
+    TokenServiceAPI,
     extract_tokens_from_pull,
     extract_user_id,
     fetch_usage_summary,
     is_limit_reached,
     parse_usage,
 )
-from upstream.cursor.setup.config import starcursor_config
+from upstream.cursor.setup.config import token_service_config
 
 logger = get_logger("rogator")
 
 
 class CursorTokenService:
-    """Star Cursor 拉号 + auto 轮询；无 Rogator 账号池。"""
+    """自建 Token 服务拉号 + auto 轮询；无 Rogator 账号池。"""
 
     def __init__(self) -> None:
-        self._cfg = starcursor_config()
+        self._cfg = token_service_config()
         self._pool = KeyPool(
             keys=list(self._cfg.get("api_keys") or []),
             threshold=int(self._cfg.get("switch_threshold", 80)),
             refresh_interval=int(self._cfg.get("status_refresh_interval", 30)),
         )
-        self._api = StarCursorAPI(
+        self._api = TokenServiceAPI(
             str(self._cfg.get("base_url") or ""),
             timeout=int(self._cfg.get("request_timeout", 15)),
         )
         self._session: Optional[aiohttp.ClientSession] = None
         self._lock = asyncio.Lock()
+        self.last_usage_pct: float = 0.0
 
     def reload_config(self) -> None:
-        self._cfg = starcursor_config()
+        self._cfg = token_service_config()
         self._pool = KeyPool(
             keys=list(self._cfg.get("api_keys") or []),
             threshold=int(self._cfg.get("switch_threshold", 80)),
             refresh_interval=int(self._cfg.get("status_refresh_interval", 30)),
         )
-        self._api = StarCursorAPI(
+        self._api = TokenServiceAPI(
             str(self._cfg.get("base_url") or ""),
             timeout=int(self._cfg.get("request_timeout", 15)),
         )
@@ -233,11 +234,13 @@ class CursorTokenService:
         token = get_access_token()
         if not token:
             logger.debug("Cursor 本地无 Token，自动拉号...")
-            return await self.pull_until_acceptable(threshold)
+            ok = await self.pull_until_acceptable(threshold)
+            return ok
         session = await self._ensure_session()
         try:
             raw = await fetch_usage_summary(session, token)
             u = parse_usage(raw)
+            self.last_usage_pct = float(u.get("total_pct", 0.0))
             if is_limit_reached(u, threshold=threshold):
                 logger.warning(
                     "Cursor 用量 %.1f%% >= %.1f%%，自动换号",

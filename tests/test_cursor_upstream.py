@@ -102,14 +102,23 @@ class TestCursorModelInventory(unittest.TestCase):
 
 
 class TestCursorConfig(unittest.TestCase):
-    def test_default_starcursor_section(self) -> None:
+    def test_default_token_service_section(self) -> None:
         with patch("server.config.app_config._load_upstream_toml", return_value={}):
             from upstream.cursor.setup.config import load_cursor_upstream_config
             cfg = load_cursor_upstream_config()
-        sc = cfg["starcursor"]
+        sc = cfg["token_service"]
         self.assertIn("base_url", sc)
         self.assertIn("poll_interval", sc)
         self.assertEqual(sc["poll_interval"], 30)
+
+    def test_legacy_starcursor_section_merged(self) -> None:
+        raw = {"starcursor": {"api_keys": ["k1"], "poll_interval": 12}}
+        with patch("server.config.app_config._load_upstream_toml", return_value=raw):
+            from upstream.cursor.setup.config import load_cursor_upstream_config, token_service_config
+            cfg = load_cursor_upstream_config()
+            self.assertEqual(cfg["token_service"]["poll_interval"], 12)
+            self.assertEqual(token_service_config()["api_keys"], ["k1"])
+
 
 
 class TestCursorConverter(unittest.TestCase):
@@ -438,7 +447,7 @@ class TestCursorClientStartup(unittest.IsolatedAsyncioTestCase):
     async def test_startup_without_keys_warns(self) -> None:
         from upstream.cursor.client import CursorClient
 
-        with patch("upstream.cursor.client.starcursor_config", return_value={"api_keys": [], "poll_interval": 30}):
+        with patch("upstream.cursor.client.token_service_config", return_value={"api_keys": [], "poll_interval": 30}):
             with patch("upstream.cursor.client.get_access_token", return_value=None):
                 with patch("upstream.cursor.client.CursorClient.fetch_models") as fetch_mock:
                     client = CursorClient(None)

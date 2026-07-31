@@ -207,21 +207,19 @@ async def session_maintenance_loop(
     interval: float = 0,
 ) -> None:
     from core.session.store import CLEANUP_INTERVAL
+    from server.schedule.loops import interval_loop
 
     wait = interval if interval > 0 else CLEANUP_INTERVAL
-    while not state.is_shutting_down:
-        try:
-            cleanup = getattr(client, "cleanup_expired_sessions", None)
-            if callable(cleanup):
-                cleanup()
-            replenish = getattr(client, "replenish_sessions", None)
-            if callable(replenish):
-                await replenish()
-            await asyncio.wait_for(state.shutdown_event.wait(), timeout=wait)
-        except asyncio.TimeoutError:
-            continue
-        except asyncio.CancelledError:
-            raise
+
+    async def _tick() -> None:
+        cleanup = getattr(client, "cleanup_expired_sessions", None)
+        if callable(cleanup):
+            cleanup()
+        replenish = getattr(client, "replenish_sessions", None)
+        if callable(replenish):
+            await replenish()
+
+    await interval_loop(state.shutdown_event, wait, _tick)
 
 
 async def session_cleanup_loop(state: "AppState", interval: float = 0) -> None:

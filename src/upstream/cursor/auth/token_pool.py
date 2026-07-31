@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Star Cursor API Key pool, pull helpers, and usage parsing."""
+"""自建 Token 服务：API Key 池、拉号与用量解析。"""
 
 import base64
 import json
@@ -81,7 +81,7 @@ class KeyPool:
         return s.daily_used >= self.threshold
 
 
-class StarCursorAPI:
+class TokenServiceAPI:
     def __init__(self, base_url: str, timeout: int = 20):
         self.base_url = base_url.rstrip("/")
         self._timeout = aiohttp.ClientTimeout(total=timeout)

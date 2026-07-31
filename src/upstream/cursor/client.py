@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Cursor 上游客户端：Star Cursor 拉号 + Agent 流，无账号池。"""
+"""Cursor 上游客户端：自建 Token 服务拉号 + Agent 流，无账号池。"""
 
 import asyncio
 import logging
@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from upstream.cursor.auth.store import get_access_token, get_token_bundle
-from upstream.cursor.setup.config import load_cursor_upstream_config, starcursor_config
+from upstream.cursor.setup.config import load_cursor_upstream_config, token_service_config
 from upstream.cursor.models.api import fetch_usable_models
 from upstream.cursor.models.store import load_merged, merge_model_lists, write_cache
 from upstream.cursor.auth.token_service import CursorTokenService
@@ -85,7 +85,7 @@ class CursorClient:
         self._startup_lock = asyncio.Lock()
         self._conversation_id: Optional[str] = None
         self._workspace: str = os.getcwd()
-        cfg = starcursor_config()
+        cfg = token_service_config()
         self._poll_interval: float = float(cfg.get("poll_interval", 30))
 
     def load_models_cache(self) -> List[str]:
@@ -164,7 +164,7 @@ class CursorClient:
         ok = await self._tokens.pull_until_acceptable()
         if not ok:
             raise UpstreamUnavailableError(
-                "Cursor 无法拉取 Token，请检查 configs/cursor.toml 中 [starcursor].api_keys",
+                "Cursor 无法拉取 Token，请检查 configs/cursor.toml 中 [token_service].api_keys",
                 upstream="cursor",
             )
         token = get_access_token()
@@ -179,12 +179,12 @@ class CursorClient:
         async with self._startup_lock:
             if self._startup_done:
                 return
-            cfg = starcursor_config()
+            cfg = token_service_config()
             keys = cfg.get("api_keys") or []
             if not keys:
                 logger.warning(
-                    "Cursor: configs/cursor.toml 中 [starcursor].api_keys 为空，"
-                    "请配置 Star Cursor API Key 后重启"
+                    "Cursor: configs/cursor.toml 中 [token_service].api_keys 为空，"
+                    "请配置自建 Token 服务的 API Key 后重启"
                 )
             elif not get_access_token():
                 logger.info("Cursor: 无本地 Token，尝试首次拉号...")
@@ -200,19 +200,46 @@ class CursorClient:
             )
 
     async def token_maintenance_loop(self, shutdown_event: asyncio.Event) -> None:
-        """后台用量监测与自动换号。"""
+        """后台用量监测与自动换号（LinUCB 门控，可 skip）。"""
+        from server.schedule.hooks import (
+            build_poll_features,
+            poll_gate,
+            poll_hard,
+            reward_poll,
+            schedule_enabled,
+            skip_reward_poll,
+        )
+        from server.schedule.loops import interval_loop, make_gated_tick
+
+        gate = poll_gate()
         wait = max(5.0, self._poll_interval)
-        while not shutdown_event.is_set():
-            try:
-                await self._tokens.auto_check_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("Cursor token maintenance: %s", exc)
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=wait)
-            except asyncio.TimeoutError:
-                continue
+
+        async def _act() -> float:
+            return await self._poll_once_reward(gate)
+
+        tick = make_gated_tick(
+            gate=gate,
+            enabled=schedule_enabled(),
+            features_fn=lambda: build_poll_features(self, gate),
+            hard_fn=lambda: poll_hard(self, gate),
+            act=_act,
+            skip_reward=lambda: skip_reward_poll(
+                gate, float(self._tokens._cfg.get("usage_threshold", 90.0))
+            ),
+        )
+        await interval_loop(shutdown_event, wait, tick, min_interval=5.0)
+
+    async def _poll_once_reward(self, gate: Any) -> float:
+        from server.schedule.hooks import reward_poll
+
+        prev = float(gate.extra.get("usage_pct", 0.0))
+        threshold = float(self._tokens._cfg.get("usage_threshold", 90.0))
+        ok = await self._tokens.auto_check_once()
+        new_u = float(getattr(self._tokens, "last_usage_pct", prev))
+        gate.extra["usage_pct"] = new_u
+        gate.extra["last_poll_ok"] = 1.0 if ok else 0.0
+        gate.note_outcome(bool(ok))
+        return reward_poll(ok, gate, prev, new_u, threshold)
 
     async def shutdown(self) -> None:
         await self._tokens.close()
