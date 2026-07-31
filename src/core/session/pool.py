@@ -207,49 +207,16 @@ class SessionLoginMixin:
         return accounts_for_upstream(self.UPSTREAM_NAME)
 
     async def replenish_sessions(self, count: Optional[int] = None) -> None:
-        """有效 session 不足 pool target 时补登（LinUCB 门控，可 skip）。"""
+        """有效 session 不足 pool target 时补登（由后台 maintenance 调用）。"""
         target = self._prelogin_target if count is None else count
         await self._ensure_cleanup()
-        if not self._pool_accounts():
+        pool = self._pool_accounts()
+        if not pool:
             logger.warning("No accounts available for %s", self.UPSTREAM_NAME)
             return
-        await self._gated_replenish(target)
-
-    async def _gated_replenish(self, target: int) -> None:
-        from server.schedule.hooks import (
-            build_login_features,
-            login_gate,
-            login_hard,
-            reward_login,
-            schedule_enabled,
-        )
-        from server.schedule.loops import gated_tick
-
-        valid = valid_session_count(self._sessions)
-        need = max(0, target - valid)
-        gate = login_gate(self.UPSTREAM_NAME)
-        force_act, force_skip = login_hard(valid, need)
-        fill = valid / max(1, target)
-        x = build_login_features(self, gate, need, target)
-
-        async def _act() -> float:
-            logged = await self._login_until(need)
-            gate.note_outcome(logged > 0)
-            return reward_login(True, logged, need, fill)
-
-        await gated_tick(
-            gate,
-            x,
-            enabled=schedule_enabled(),
-            force_act=force_act,
-            force_skip=force_skip,
-            act=_act,
-            skip_reward=lambda: reward_login(False, 0, need, fill),
-        )
-
-    async def _login_until(self, need: int) -> int:
+        need = max(0, target - valid_session_count(self._sessions))
         if need <= 0:
-            return 0
+            return
         logged = 0
         interval = max(0.0, self._login_interval)
         for attempt in range(need):
@@ -261,18 +228,25 @@ class SessionLoginMixin:
                         self.UPSTREAM_NAME,
                     )
                 break
-            if await self.login_account(account):
+            ps = await self.login_account(account)
+            if ps:
                 logged += 1
             if interval > 0 and attempt < need - 1:
                 await asyncio.sleep(interval)
         if logged:
             logger.info(
-                "Session pool [%s]: +%d new, %d ready",
+                "Session pool [%s]: +%d new, %d ready (target=%d)",
                 self.UPSTREAM_NAME,
                 logged,
                 valid_session_count(self._sessions),
+                target,
             )
-        return logged
+        elif valid_session_count(self._sessions) == 0:
+            logger.debug(
+                "Session pool replenish failed [%s] (target=%d)",
+                self.UPSTREAM_NAME,
+                target,
+            )
 
     async def ensure_prelogin(self) -> None:
         """兼容旧调用；等同 ``replenish_sessions``。"""

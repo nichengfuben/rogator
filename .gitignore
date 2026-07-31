@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -19,53 +19,61 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
+
 # Virtual environments
+.env
+.venv
+env/
 venv/
 ENV/
-env/
-.venv/
+env.bak/
+venv.bak/
+
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
-# Testing
+
+# Testing / coverage
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
 htmlcov/
 .tox/
+
 # Project specific
 config.toml
 configs/
+config/config.toml
 persist/qwen/
 persist/cursor/
+persist/deepseek/
+persist/bandit/
 persist/sessions.json
+logs/
 logs/prompts/
 abnormis.txt
 full_prompt_dump.txt
 *.log
 *.rar
 scripts/prompt_case_dumps/
-# accounts.csv holds credentials (ignored below); src/accounts.py is the public loader
+accounts.csv
+**/accounts.csv
+
 # Claude Code
-CLAUDE.local.md
+.claude/
+
+# Local / secrets
+*.pem
+*.key
+.env.*
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
-desktop.ini.backup/
-.claude/
-mvp/.cache/
-mvp/python
-tests/.cache/
-tests/python
-achecker.py
-abnormis.txt
-amerger.py
-upload.txt
-accounts.csv
-achecker.py.lnk
-.backup/
-.repo/
+desktop.ini

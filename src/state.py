@@ -162,12 +162,12 @@ class AppState:
             if qwen is not None:
                 if not force and not qwen.models_refresh_due(CONFIG.models_refresh_interval):
                     logger.debug(
-                        "Refresh models skipped [qwen]: cache fresh (%.0fs ago, interval=%.0fs)",
+                        "Refresh models skipped: cache fresh (%.0fs ago, interval=%.0fs)",
                         time.time() - qwen._models_fetch_time,
                         CONFIG.models_refresh_interval,
                     )
                 elif require_session and valid_session_count(qwen._sessions) == 0:
-                    logger.debug("Refresh models skipped [qwen]: no valid session")
+                    logger.debug("Refresh models skipped: no valid session")
                 else:
                     models = await qwen.fetch_models(use_cache=not force)
                     if models:
@@ -182,13 +182,6 @@ class AppState:
                     continue
                 if not force and hasattr(client, "models_refresh_due"):
                     if not client.models_refresh_due(CONFIG.models_refresh_interval):
-                        fetch_time = float(getattr(client, "_models_fetch_time", 0.0) or 0.0)
-                        logger.debug(
-                            "Refresh models skipped [%s]: cache fresh (%.0fs ago, interval=%.0fs)",
-                            name,
-                            time.time() - fetch_time,
-                            CONFIG.models_refresh_interval,
-                        )
                         continue
                 models = await fetch(use_cache=not force)
                 if models:
@@ -206,7 +199,7 @@ class AppState:
             self.client = qwen
         self._bg_tasks.extend(start_background_tasks(self))
 
-    async def _cancel_background_tasks(self) -> None:
+    async def _stop_background_tasks(self) -> None:
         for task in self._bg_tasks:
             if not task.done():
                 task.cancel()
@@ -239,7 +232,7 @@ class AppState:
         await self.tracker.cancel_all()
         await asyncio.sleep(SHUTDOWN_CANCEL_GRACE)
 
-    def _persist_client_sessions(self) -> None:
+    async def _shutdown_upstreams(self) -> None:
         qwen = self._clients.get("qwen")
         if qwen is not None and hasattr(qwen, "_persist_sessions"):
             qwen._persist_sessions()
@@ -247,9 +240,6 @@ class AppState:
             persist = getattr(client, "_persist_sessions", None)
             if callable(persist) and client is not qwen:
                 persist()
-
-    async def _shutdown_upstream_clients(self) -> None:
-        for client in self._clients.values():
             shutdown = getattr(client, "shutdown", None)
             if not callable(shutdown):
                 continue
@@ -267,8 +257,7 @@ class AppState:
         )
         self._shutdown_requested = True
         self.shutdown_event.set()
-        await self._cancel_background_tasks()
+        await self._stop_background_tasks()
         await self._drain_active_requests()
-        self._persist_client_sessions()
-        await self._shutdown_upstream_clients()
+        await self._shutdown_upstreams()
         self._shutdown_complete = True
