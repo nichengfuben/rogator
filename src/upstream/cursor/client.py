@@ -175,6 +175,13 @@ class CursorClient:
             )
         return token
 
+    async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[bool]:
+        """限流/额度耗尽时换一张 Cursor 卡（经自建 Token 服务拉号）。"""
+        _ = exclude_username
+        logger.debug("Cursor switch_to_next: 用量/限流触发换号")
+        ok = await self._tokens.pull_until_acceptable()
+        return True if ok else None
+
     async def startup(self) -> None:
         async with self._startup_lock:
             if self._startup_done:

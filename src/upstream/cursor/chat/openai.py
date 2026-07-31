@@ -6,6 +6,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from echotools.logger import get_logger
 
+from server.formats import TokenExpiredError, UpstreamUnavailableError
 from upstream.cursor.stream.agent import stream_cursor_agent
 from upstream.cursor.auth.store import get_token_bundle
 from upstream.cursor.chat.convert import (
@@ -18,6 +19,23 @@ from upstream.cursor.chat.convert import (
 from upstream.cursor.stream.exec.tool_filter import tool_filter_for_openai
 
 logger = get_logger("rogator")
+
+
+def _is_cursor_rate_limit(message: str) -> bool:
+    lower = (message or "").lower()
+    return (
+        "error_rate_limited" in lower
+        or "rate_limited" in lower
+        or "rate limit" in lower
+        or "more agent usage" in lower
+    )
+
+
+def _raise_cursor_stream_error(message: str) -> None:
+    msg = message or "Cursor upstream error"
+    if _is_cursor_rate_limit(msg):
+        raise TokenExpiredError(msg)
+    raise UpstreamUnavailableError(msg, upstream="cursor")
 
 
 def _map_tool_started(event, allowed_tool_names: Optional[Set[str]]) -> Optional[Dict[str, Any]]:
@@ -74,7 +92,7 @@ def _map_cursor_event(
     if et == "usage" and event.usage:
         return {"type": "usage", "data": event.usage, "native": True}
     if et == "error":
-        raise RuntimeError(event.error or "Cursor upstream error")
+        _raise_cursor_stream_error(event.error or "Cursor upstream error")
     if et == "done":
         if event.conversation_id:
             client._conversation_id = event.conversation_id  # noqa: SLF001

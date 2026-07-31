@@ -101,14 +101,27 @@ class CursorTokenService:
                 await self._refresh_key_state(s)
             if self._pool.should_switch(s):
                 logger.warning(
-                    "Cursor Key[%s] daily_used=%s >= 阈值 %s，切换",
+                    "Cursor Key[%s] daily_used=%s limit=%s thr=%s，切换",
                     s.masked(),
                     s.daily_used,
+                    s.daily_limit,
                     self._pool.threshold,
                 )
                 self._pool.switch_next()
                 continue
             return s
+        return self._fallback_active_key()
+
+    def _fallback_active_key(self):
+        """全部达阈时仍挑一个活跃 Key 尝试拉号（单 Key 否则永远换不了 Cursor 号）。"""
+        for s in self._pool.all():
+            if s.is_active:
+                logger.warning(
+                    "Cursor Key 均达日阈，仍尝试 Key[%s] 拉号",
+                    s.masked(),
+                )
+                return s
+        logger.error("Cursor: 所有 API Key 均不可用")
         return None
 
     async def _handle_acquire_error(self, e: ApiError, s) -> None:
@@ -149,7 +162,6 @@ class CursorTokenService:
         for _attempt in range(1, max_retry + 1):
             s = await self._ensure_usable_key()
             if s is None:
-                logger.error("Cursor: 所有 API Key 均不可用")
                 return None
             try:
                 result = await self._api.pull_token(session, s.key)

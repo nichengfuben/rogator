@@ -72,13 +72,19 @@ class KeyPool:
         return (time.time() - s.last_checked) >= self.refresh_interval
 
     def should_switch(self, s: KeyState) -> bool:
-        if s.daily_used is None:
-            return False
+        """仅在 Key 失效或达到服务端日限额时切换；无日限时不因本地计数误杀。"""
         if not s.is_active:
             return True
-        if s.daily_limit is not None and s.daily_used >= s.daily_limit:
-            return True
-        return s.daily_used >= self.threshold
+        if s.daily_used is None:
+            return False
+        if s.daily_limit is None or s.daily_limit <= 0:
+            return False
+        # switch_threshold：日限额百分比（≤100）或绝对次数（>100）
+        if self.threshold <= 100:
+            line = s.daily_limit * (self.threshold / 100.0)
+        else:
+            line = float(self.threshold)
+        return float(s.daily_used) >= line
 
 
 class TokenServiceAPI:

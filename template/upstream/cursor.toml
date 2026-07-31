@@ -20,6 +20,7 @@ timezone = "Asia/Shanghai"
 [token_service]
 base_url = ""
 api_keys = []
+# Key 日限额切换线：≤100 视为占 daily_limit 的百分比；无 daily_limit 时不因本地计数误杀
 switch_threshold = 80
 usage_threshold = 90.0
 poll_interval = 30

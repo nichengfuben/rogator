@@ -432,6 +432,30 @@ class TestCursorTokenHelpers(unittest.TestCase):
         assert second is not None
         self.assertNotEqual(first.key, second.key)
 
+    def test_should_switch_uses_daily_limit_percent(self) -> None:
+        pool = KeyPool(["k1"], threshold=80, refresh_interval=60)
+        s = pool.current
+        assert s is not None
+        s.daily_used = 90
+        s.daily_limit = None
+        self.assertFalse(pool.should_switch(s))
+        s.daily_limit = 100
+        self.assertTrue(pool.should_switch(s))
+        s.daily_used = 79
+        self.assertFalse(pool.should_switch(s))
+
+    def test_single_key_without_limit_still_usable(self) -> None:
+        from upstream.cursor.auth.token_service import CursorTokenService
+
+        svc = CursorTokenService.__new__(CursorTokenService)
+        svc._pool = KeyPool(["only-key"], threshold=80, refresh_interval=60)
+        s = svc._pool.current
+        assert s is not None
+        s.daily_used = 999
+        s.daily_limit = None
+        self.assertIs(svc._fallback_active_key(), s)
+        self.assertFalse(svc._pool.should_switch(s))
+
     def test_usage_limit(self) -> None:
         u = parse_usage({
             "individualUsage": {"plan": {
@@ -441,6 +465,24 @@ class TestCursorTokenHelpers(unittest.TestCase):
             }},
         })
         self.assertTrue(is_limit_reached(u, threshold=95.0))
+
+
+class TestCursorStreamErrors(unittest.TestCase):
+    def test_rate_limit_maps_to_token_expired(self) -> None:
+        from server.formats import TokenExpiredError
+        from upstream.cursor.chat.openai import _raise_cursor_stream_error
+
+        with self.assertRaises(TokenExpiredError):
+            _raise_cursor_stream_error(
+                "ERROR_RATE_LIMITED_CHANGEABLE: Get Cursor Pro for more Agent usage"
+            )
+
+    def test_other_error_maps_to_unavailable(self) -> None:
+        from server.formats import UpstreamUnavailableError
+        from upstream.cursor.chat.openai import _raise_cursor_stream_error
+
+        with self.assertRaises(UpstreamUnavailableError):
+            _raise_cursor_stream_error("boom internal")
 
 
 class TestCursorClientStartup(unittest.IsolatedAsyncioTestCase):
