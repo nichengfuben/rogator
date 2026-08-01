@@ -2,21 +2,17 @@ from __future__ import annotations
 
 """DeepSeek 上游 OpenAI 聊天流（原生 complete API）。"""
 
-import asyncio
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from echotools.logger import get_logger
 
+from core.transport.conn_retry import reraise_transport_error
 from handlers import extract_system_for_inject
 from handlers.fncall_inject import inject_fncall_for_request
 from handlers.openai.protocol import _inject_protocol_options
 from handlers.openai.thinking import protocol_thinking_level
 from handlers.openai.tools import convert_tools_to_openai
-from server.formats import (
-    UpstreamTimeoutError,
-    as_upstream_connection_error,
-)
 from server.model.model_thinking import resolve_qwen_thinking
 from upstream.deepseek.lib.adapter.helpers.biz_error import (
     DeepSeekAccountsExhaustedError,
@@ -90,16 +86,6 @@ async def _on_user_muted(
         ) from exc
 
 
-def _reraise_transport_error(exc: BaseException) -> None:
-    """将超时/连接类异常映射为 session_retry 可识别类型。"""
-    if isinstance(exc, asyncio.TimeoutError):
-        raise UpstreamTimeoutError("DeepSeek upstream timeout") from exc
-    conn_err = as_upstream_connection_error(exc, upstream="deepseek")
-    if conn_err is not None:
-        raise conn_err from exc
-    raise exc
-
-
 async def _iter_complete_events(
     inner: Any,
     candidate: Any,
@@ -152,5 +138,9 @@ async def stream_openai_chat(
         except DeepSeekUserMutedError as exc:
             await _on_user_muted(client, username, exc, attempt)
         except Exception as exc:
-            _reraise_transport_error(exc)
+            reraise_transport_error(
+                exc,
+                upstream="deepseek",
+                timeout_message="DeepSeek upstream timeout",
+            )
     raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")

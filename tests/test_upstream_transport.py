@@ -14,7 +14,13 @@ from core.transport.http import (
     reset_upstream_transport,
     upstream_timeout,
 )
+from core.transport.owned import HttpTransportMixin
 from server.retry.http_client import client_session
+
+
+class _OwnedClient(HttpTransportMixin):
+    def __init__(self) -> None:
+        self._init_http_transport()
 
 
 class TestUpstreamTransport(unittest.IsolatedAsyncioTestCase):
@@ -59,6 +65,17 @@ class TestUpstreamTransport(unittest.IsolatedAsyncioTestCase):
             finally:
                 await session.close()
                 await close_shared_connector()
+
+    async def test_mixin_reset_keeps_peer_session_alive(self) -> None:
+        a = _OwnedClient()
+        b = _OwnedClient()
+        sa = await a.ensure_http_session()
+        sb = await b.ensure_http_session()
+        self.assertIs(sa.connector, sb.connector)
+        await a.reset_http_transport()
+        self.assertFalse(sb.closed)
+        self.assertFalse(make_connector().closed)
+        await b.close_http_transport()
 
 
 if __name__ == "__main__":

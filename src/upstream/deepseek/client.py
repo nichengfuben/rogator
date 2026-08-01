@@ -9,9 +9,8 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from server.retry.http_client import client_session
-
-from core.transport.http import reset_upstream_transport
+from core.transport.conn_retry import run_with_connection_retry
+from core.transport.owned import HttpTransportMixin
 from core.session.accounts import Account, accounts_for_upstream
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
@@ -21,20 +20,19 @@ from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.protocol.consts import MODELS
 from upstream.deepseek.lib.adapter.helpers.biz_error import DeepSeekUserMutedError, DeepSeekWafChallengeError
 from upstream.deepseek.lib.user.userapi import login
-from server.formats import UpstreamUnavailableError, as_upstream_connection_error
+from server.formats import UpstreamUnavailableError
 
 logger = logging.getLogger("rogator")
 
 
-class DeepSeekClient(SessionLoginMixin):
+class DeepSeekClient(HttpTransportMixin, SessionLoginMixin):
     UPSTREAM_NAME = "deepseek"
 
     def __init__(self, splitter: Any = None) -> None:
         self._splitter = splitter
         self._init_session_pool()
+        self._init_http_transport()
         self._lock = asyncio.Lock()
-        self._transport_lock = asyncio.Lock()
-        self._http: Optional[aiohttp.ClientSession] = None
         self._inner: Optional[DeepseekClient] = None
         self._models: List[str] = list(MODELS)
         self._model_meta: Dict[str, Any] = {}
@@ -98,12 +96,12 @@ class DeepSeekClient(SessionLoginMixin):
         pool = accounts_for_upstream(self.UPSTREAM_NAME)
         return [DsAccount(username=a.username, password=a.password) for a in pool]
 
-    def _ensure_http_unlocked(self) -> aiohttp.ClientSession:
-        if self._http is None or self._http.closed:
-            self._http = client_session()
+    def _on_http_session_created(self, session: aiohttp.ClientSession) -> None:
         if self._inner is not None:
-            self._inner.rebind_http_session(self._http)
-        return self._http
+            self._inner.rebind_http_session(session)
+
+    def _should_recreate_http_on_reset(self) -> bool:
+        return self._inner is not None
 
     async def _init_minimal_unlocked(self) -> None:
         """仅初始化 HTTP + inner，不跑 background_setup（供预登）。"""
@@ -142,8 +140,7 @@ class DeepSeekClient(SessionLoginMixin):
 
     async def _login_once(self, account: Account) -> Optional[PlatformSession]:
         inner = await self._ensure_ready(skip_background=True)
-        async with self._transport_lock:
-            http = self._ensure_http_unlocked()
+        http = await self._ensure_http_session()
         try:
             token, user_id = await login(http, account.username, account.password)
         except (DeepSeekUserMutedError, DeepSeekWafChallengeError):
@@ -168,21 +165,12 @@ class DeepSeekClient(SessionLoginMixin):
         return ps
 
     async def _perform_login(self, account: Account) -> Optional[PlatformSession]:
-        attempts = 2
-        for attempt in range(1, attempts + 1):
-            try:
-                return await self._login_once(account)
-            except Exception as exc:
-                conn_err = as_upstream_connection_error(exc, upstream="deepseek")
-                if conn_err is None or attempt >= attempts:
-                    raise conn_err or exc
-                await self.reset_http_transport()
-                logger.warning(
-                    "DeepSeek login connection failed (retry %d/%d): %s",
-                    attempt, attempts - 1, conn_err.message,
-                )
-                await asyncio.sleep(0.6 * attempt)
-        return None
+        async def _run() -> Optional[PlatformSession]:
+            return await self._login_once(account)
+
+        return await run_with_connection_retry(
+            "login", _run, upstream="deepseek", transport_owner=self,
+        )
 
     async def startup(self) -> None:
         async with self._startup_lock:
@@ -236,22 +224,10 @@ class DeepSeekClient(SessionLoginMixin):
     async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[PlatformSession]:
         return await SessionLoginMixin.switch_to_next(self, exclude_username=exclude_username)
 
-    async def reset_http_transport(self) -> None:
-        async with self._transport_lock:
-            old = self._http
-            self._http = None
-            await reset_upstream_transport(old)
-            if self._inner is not None:
-                self._http = client_session()
-                self._inner.rebind_http_session(self._http)
-
     async def shutdown(self) -> None:
         if self._inner is not None:
             await self._inner.close()
             self._inner = None
-        async with self._transport_lock:
-            old = self._http
-            self._http = None
-            await reset_upstream_transport(old)
+        await self.close_http_transport()
         self._startup_done = False
         logger.debug("DeepSeek client shut down")

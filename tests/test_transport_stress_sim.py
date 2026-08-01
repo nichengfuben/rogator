@@ -22,6 +22,7 @@ from core.transport.http import (
     reset_upstream_transport,
     upstream_timeout,
 )
+from core.transport.owned import HttpTransportMixin
 from server.formats import LOGIN_TIMEOUT, UpstreamTimeoutError
 from server.retry.session_retry import run_with_session_retry, stream_with_session_retry
 from upstream.qwen.account import QwenLoginMixin
@@ -70,25 +71,25 @@ class PostScript:
         return _post
 
 
-class TransportProbe:
-    """最小 Qwen 客户端探针：只实现 HTTP transport 相关接口。"""
+class TransportProbe(HttpTransportMixin):
+    """最小 Qwen 客户端探针：复用 HttpTransportMixin，post 走脚本。"""
 
     def __init__(self, script: PostScript) -> None:
         self._script = script
-        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._init_http_transport()
         self.reset_count = 0
 
-    async def _ensure_http_session(self) -> aiohttp.ClientSession:
-        if self._http_session is None or self._http_session.closed:
+    def _ensure_http_unlocked(self) -> aiohttp.ClientSession:
+        if self._http is None or bool(getattr(self._http, "closed", True)):
             session = MagicMock(spec=aiohttp.ClientSession)
             session.closed = False
+            session.close = AsyncMock()
             session.post = self._script.build_post()
-            self._http_session = session
-        return self._http_session
+            self._http = session
+        return self._http
 
     async def reset_http_transport(self) -> None:
-        await reset_upstream_transport(self._http_session)
-        self._http_session = None
+        await super().reset_http_transport()
         self.reset_count += 1
 
     def _invalidate_session(self, _session: QwenSession) -> None:
@@ -314,6 +315,8 @@ class TestCrossVersionImports(unittest.TestCase):
 
     _MODULES = (
         "core.transport.http",
+        "core.transport.owned",
+        "core.transport.conn_retry",
         "core.transport",
         "server.retry.http_client",
         "server.retry.session_retry",

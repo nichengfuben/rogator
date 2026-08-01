@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
 
+from core.transport.conn_retry import run_with_connection_retry as _run_with_connection_retry
 from server.formats import UpstreamConnectionError, as_upstream_connection_error
 from server.retry.http_client import client_session
-
-logger = logging.getLogger("rogator")
 
 T = TypeVar("T")
 
@@ -46,22 +43,12 @@ async def run_with_connection_retry(
     delay_seconds: float = 0.6,
     transport_owner: Optional[Any] = None,
 ) -> T:
-    """Retry transient Qwen connection failures a small number of times."""
-    for attempt in range(1, attempts + 1):
-        try:
-            return await func()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            conn_err = map_connection_error(exc)
-            if conn_err is None or attempt >= attempts:
-                raise conn_err or exc
-            reset = getattr(transport_owner, "reset_http_transport", None)
-            if callable(reset):
-                await reset()
-            logger.warning(
-                "Qwen %s connection failed (retry %d/%d): %s",
-                label, attempt, attempts - 1, conn_err.message,
-            )
-            await asyncio.sleep(delay_seconds * attempt)
-    raise RuntimeError("Qwen {0} retry exhausted".format(label))
+    """Qwen 兼容入口：固定 upstream=qwen。"""
+    return await _run_with_connection_retry(
+        label,
+        func,
+        upstream="qwen",
+        attempts=attempts,
+        delay_seconds=delay_seconds,
+        transport_owner=transport_owner,
+    )

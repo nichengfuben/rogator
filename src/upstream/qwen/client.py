@@ -6,8 +6,6 @@ import asyncio
 import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-import aiohttp
-
 from upstream.qwen.auth.crypto import build_headers
 from upstream.qwen.chat.session import ChatSession
 from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH
@@ -21,8 +19,9 @@ from upstream.qwen.chat.store import (
     mark_invalid as mark_invalid_in,
 )
 from upstream.qwen.chat.upload.files import UploadMixin
-from upstream.qwen.auth.http import create_http_session, map_connection_error, run_with_connection_retry
-from core.transport.http import reset_upstream_transport, upstream_timeout
+from upstream.qwen.auth.http import map_connection_error, run_with_connection_retry
+from core.transport.http import upstream_timeout
+from core.transport.owned import HttpTransportMixin
 from server.formats import (
     DEFAULT_MODELS,
     REQUEST_TOTAL_TIMEOUT,
@@ -36,13 +35,12 @@ from server.model.model_meta import ModelMeta
 logger = logging.getLogger("rogator")
 
 
-class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
+class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
         self._init_session_pool()
+        self._init_http_transport()
         self._lock = asyncio.Lock()
-        self._transport_lock = asyncio.Lock()
-        self._http_session: Optional[aiohttp.ClientSession] = None
         self._models: List[str] = list(DEFAULT_MODELS)
         self._model_meta: Dict[str, ModelMeta] = {}
         self._models_fetch_time: float = 0.0
@@ -62,18 +60,6 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
 
     def describe_sessions(self) -> Dict[str, Any]:
         return describe_sessions(self._sessions)
-
-    async def _ensure_http_session(self) -> aiohttp.ClientSession:
-        async with self._transport_lock:
-            if self._http_session is None or self._http_session.closed:
-                self._http_session = create_http_session()
-            return self._http_session
-
-    async def reset_http_transport(self) -> None:
-        async with self._transport_lock:
-            session = self._http_session
-            self._http_session = None
-            await reset_upstream_transport(session)
 
     @property
     def session_count(self) -> int:
@@ -173,4 +159,4 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
             raise
 
     async def shutdown(self) -> None:
-        await self.reset_http_transport()
+        await self.close_http_transport()
