@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from echotools.fncall import get_protocol, inject_fncall
+from echotools import get_protocol, inject_fncall
 
 
 TODO_TOOLS = [{

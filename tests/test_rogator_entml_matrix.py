@@ -35,7 +35,7 @@ from state import AppState  # noqa: E402
 
 @pytest.fixture(scope="module")
 def app_state() -> AppState:
-    from echotools.fncall import get_protocol
+    from echotools import get_protocol
 
     state = AppState.__new__(AppState)
     state.protocol = get_protocol("entml")

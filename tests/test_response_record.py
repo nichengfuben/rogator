@@ -71,7 +71,7 @@ def test_prompt_and_response_share_req_id(
 ) -> None:
     """prompts/{req_id}.txt 与 responses/{req_id}.txt 使用同一 req_id。"""
     from handlers.fncall_inject import inject_fncall_for_request, prompt_dump_dir
-    from echotools.fncall import get_protocol
+    from echotools import get_protocol
 
     prompts = tmp_path / "prompts"
     responses = tmp_path / "responses"

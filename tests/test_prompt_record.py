@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from echotools.fncall import get_protocol
+from echotools import get_protocol
 from handlers.fncall_inject import inject_fncall_for_request, prompt_dump_dir
 from server.config import get_config
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.formats import _fix_tool_call_id
 from state import AppState

@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from core.transport.conn_retry import reraise_transport_error
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages

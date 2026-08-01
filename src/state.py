@@ -6,8 +6,8 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional
 
-from echotools.fncall import ToolProtocol, get_protocol
-from echotools.logger import get_logger
+from echotools import ToolProtocol, get_protocol
+from echotools.base.logger import get_logger
 
 from server.config import CONFIG
 from server.formats import (

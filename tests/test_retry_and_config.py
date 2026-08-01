@@ -440,7 +440,7 @@ class TestThinkingLevels(unittest.TestCase):
         self.assertNotIn("think_efforts", entry38_out)
 
     def test_inject_renders_thinking_behavior(self) -> None:
-        from echotools.fncall import get_protocol, inject_fncall
+        from echotools import get_protocol, inject_fncall
         from handlers.openai import _build_protocol_options, _inject_protocol_options
 
         opts = _inject_protocol_options(
@@ -457,7 +457,7 @@ class TestThinkingLevels(unittest.TestCase):
         self.assertIn("<entml:max_thinking_length>25600</entml:max_thinking_length>", prompt)
 
     def test_inject_thinking_off_with_history_thinking_forces_no_think(self) -> None:
-        from echotools.fncall import get_protocol, inject_fncall
+        from echotools import get_protocol, inject_fncall
         from handlers.openai import _build_protocol_options, _inject_protocol_options
 
         opts = _inject_protocol_options(
@@ -484,7 +484,7 @@ class TestThinkingLevels(unittest.TestCase):
         self.assertIn("Do NOT output a <entml:thinking> block", prompt)
 
     def test_inject_thinking_off_without_history_thinking_omits_behavior(self) -> None:
-        from echotools.fncall import get_protocol, inject_fncall
+        from echotools import get_protocol, inject_fncall
         from handlers.openai import _build_protocol_options, _inject_protocol_options
 
         opts = _inject_protocol_options(
@@ -505,7 +505,7 @@ class TestThinkingLevels(unittest.TestCase):
         self.assertNotIn("<thinking_behavior>", prompt)
 
     def test_inject_no_tools_thinking_behavior_omits_invoke(self) -> None:
-        from echotools.fncall import get_protocol, inject_fncall
+        from echotools import get_protocol, inject_fncall
         from handlers.openai import _build_protocol_options, _inject_protocol_options
 
         opts = _inject_protocol_options(
@@ -523,7 +523,7 @@ class TestThinkingLevels(unittest.TestCase):
 
 class TestMessageHistory(unittest.TestCase):
     def test_inject_renders_reasoning_in_history(self) -> None:
-        from echotools.fncall import get_protocol, inject_fncall
+        from echotools import get_protocol, inject_fncall
         from handlers.openai import _build_protocol_options, _inject_protocol_options
 
         msgs = [{

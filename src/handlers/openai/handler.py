@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from aiohttp import web
-from echotools.fncall import FncallStreamParser
-from echotools.logger import get_logger
+from echotools import FncallStreamParser
+from echotools.base.logger import get_logger
 
 from handlers import get_state
 from handlers.api_errors import apply_tool_choice, handler_error_response, log_classified_stream_error

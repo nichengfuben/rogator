@@ -7,7 +7,7 @@ import signal
 import threading
 from typing import Any, Optional
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 logger = get_logger("rogator")
 

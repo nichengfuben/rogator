@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from core.dispatch import stream_openai_chat
 from handlers import EmptyResponseError

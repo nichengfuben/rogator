@@ -15,9 +15,9 @@ from typing import (
     Tuple,
 )
 
-from echotools.fncall.prompt.inject import inject_fncall as _echotools_inject
+from echotools.exec.fncall.prompt.inject import inject_fncall as _echotools_inject
 from echotools.exec.protocol.base import ToolProtocol
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.config import CONFIG, LOG_DIR
 from server.formats import fix_tool_call_id

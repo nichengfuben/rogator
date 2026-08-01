@@ -26,7 +26,7 @@ for path in (ROOT / "src", ROOT, TESTS_DIR):
         sys.path.insert(0, str(path))
 import path_setup  # noqa: F401
 
-from echotools.fncall import get_protocol  # noqa: E402
+from echotools import get_protocol  # noqa: E402
 from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking  # noqa: E402
 from handlers.openai import _parse_tool_calls  # noqa: E402
 from rogator_entml_harness import (  # noqa: E402

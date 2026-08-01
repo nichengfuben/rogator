@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.model.token_estimate import estimate_stream_tokens_from_char_count
 

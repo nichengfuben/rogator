@@ -28,7 +28,7 @@ for entry in (ROOT / "src", ROOT):
         sys.path.insert(0, s)
 import path_setup  # noqa: F401
 
-from echotools.fncall import get_protocol, inject_fncall
+from echotools import get_protocol, inject_fncall
 
 from handlers import extract_system_for_inject
 from handlers.openai import (

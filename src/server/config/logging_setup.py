@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from echotools.logger import configure
+from echotools.base.logger import configure
 
 from server.config.app_config import CONFIG, LOG_DIR
 

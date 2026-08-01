@@ -8,7 +8,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.config.app_config import CONFIG, AppConfig, get_config, load_config
 from server.config.files import USER_CONFIGS_DIR, user_config_path

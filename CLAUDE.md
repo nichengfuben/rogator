@@ -50,7 +50,7 @@ python main.py
 
 ## Dependencies
 
-- **echotools** — Core library for logging (`echotools.logger`), protocol abstraction (`echotools.protocol.base.ToolProtocol`), and function call injection (`echotools.fncall.inject_fncall`)
+- **echotools** — Core library for logging (`echotools.base.logger`), protocol abstraction (`echotools.exec.protocol.base.ToolProtocol`), and function call injection (`echotools.exec.fncall.inject_fncall`)
 - No pyproject.toml or requirements.txt — dependencies are managed externally
 
 ## Code Style
@@ -60,7 +60,7 @@ python main.py
 - Mixin-based class composition in upstream clients
 - `async/await` throughout — no sync blocking calls
 - Constants: `UPPER_CASE` with `Final` annotations
-- Logger: `echotools.logger.get_logger("rogator")`
+- Logger: `echotools.base.logger.get_logger("rogator")`
 - Section separators: `# ==== blocks`
 - achecker.py enforces: max 7 children per dir, ≤400 line files (hard max 800), 50-line functions, depth 4 nesting
 

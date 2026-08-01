@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from aiohttp import web
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 from server.formats import TokenExpiredError, UpstreamTimeoutError, _error_response, _json_response
 from server.model.model_registry import ModelResolveError, resolve_request_model
 from state import AppState, QueueFullError

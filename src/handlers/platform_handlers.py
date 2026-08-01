@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 from aiohttp import web
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 from handlers import get_state
 from handlers.api_errors import (
     anthropic_error_response,

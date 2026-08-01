@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.config import CONFIG, LOG_DIR
 

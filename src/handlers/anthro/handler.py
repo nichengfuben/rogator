@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 from aiohttp import web
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.formats import (
     _gen_msg_id,

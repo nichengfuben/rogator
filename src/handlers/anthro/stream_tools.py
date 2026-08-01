@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.formats import _fix_tool_call_id, _gen_tool_id
 

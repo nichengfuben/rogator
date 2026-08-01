@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from echotools.fncall import FncallStreamParser, get_protocol
+from echotools import FncallStreamParser, get_protocol
 
 from handlers.anthro import (
     _anthropic_event_bytes,

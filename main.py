@@ -36,7 +36,7 @@ from server.config.shutdown import (
 # ============================================================
 # echotools 日志：控制台 + logs/rogator.log
 # ============================================================
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 _LOG_FILE = setup_logging()
 logger = get_logger("rogator")

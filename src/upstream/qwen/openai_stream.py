@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from server.formats import TokenExpiredError

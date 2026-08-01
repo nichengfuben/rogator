@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from echotools.fncall import get_protocol, inject_fncall
+from echotools import get_protocol, inject_fncall
 
 from handlers import extract_system_for_inject, normalize_message_content
 

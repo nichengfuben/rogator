@@ -7,7 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
-from echotools.logger import get_logger
+from echotools.base.logger import get_logger
 
 from server.config import CONFIG
 

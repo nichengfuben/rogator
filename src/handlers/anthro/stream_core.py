@@ -9,8 +9,8 @@ from server.formats import (
     log_qwen_upstream_usage,
 )
 from server.records.response_record import record_raw_response
-from echotools.fncall import FncallStreamParser
-from echotools.logger import get_logger
+from echotools import FncallStreamParser
+from echotools.base.logger import get_logger
 
 from handlers.api_errors import anthropic_error_event, log_classified_stream_error
 from handlers.fncall_inject import (
