@@ -11,6 +11,11 @@ from echotools.logger import get_logger
 
 from handlers import get_state
 from handlers.api_errors import classify_stream_error, handler_error_response
+from handlers.fncall_inject import (
+    finalize_parser_tool_calls,
+    reconcile_pending_tool_index,
+    resolve_streamed_tool_calls,
+)
 from handlers.openai.chat import _chat_once, _process_openai_non_stream, _resolve_retry_client
 from handlers.openai.protocol import _build_protocol_options
 from handlers.openai.stream_tools import (
@@ -158,16 +163,6 @@ async def _process_openai_stream_event(st: OpenAIStreamState, event: Dict[str, A
     return await _process_openai_stream_answer(st, content)
 
 
-def _finalize_parser_tool_calls(st: OpenAIStreamState) -> tuple[str, List[Dict[str, Any]]]:
-    final_text = st.parser.partial_text
-    try:
-        final_text, parsed_calls = st.parser.finalize()
-        return final_text, [_fix_tool_call_id(tc) for tc in parsed_calls]
-    except Exception as e:
-        logger.warning("stream parser.finalize failed: %s", e)
-        return final_text, []
-
-
 async def _flush_remaining_thinking_and_text(
     st: OpenAIStreamState, final_text: str,
 ) -> None:
@@ -214,12 +209,10 @@ async def _finalize_openai_stream_tool(st: OpenAIStreamState, all_tool_calls: Li
 def _resolve_all_tool_calls(
     st: OpenAIStreamState, parsed_calls: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    all_tool_calls = parsed_calls or st.streamed_tool_calls
-    if all_tool_calls and st.stream_tool_blocks_sent:
-        st.pending_tc_index = max(
-            st.pending_tc_index,
-            min(len(all_tool_calls), st.stream_tool_blocks_sent),
-        )
+    all_tool_calls = resolve_streamed_tool_calls(parsed_calls, st.streamed_tool_calls)
+    st.pending_tc_index = reconcile_pending_tool_index(
+        st.pending_tc_index, all_tool_calls, st.stream_tool_blocks_sent,
+    )
     return all_tool_calls
 
 
@@ -274,7 +267,9 @@ async def _run_openai_stream_guarded(
 
 
 async def _finish_openai_stream(st: OpenAIStreamState, resp, model, include_usage) -> web.StreamResponse:
-    final_text, parsed_calls = _finalize_parser_tool_calls(st)
+    final_text, parsed_calls = finalize_parser_tool_calls(
+        st.parser, warn=logger.warning,
+    )
     await _flush_remaining_thinking_and_text(st, final_text)
     await _finalize_openai_stream_tool(st, parsed_calls)
     all_tool_calls = _resolve_all_tool_calls(st, parsed_calls)

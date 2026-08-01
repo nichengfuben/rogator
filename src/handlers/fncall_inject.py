@@ -1,21 +1,43 @@
 from __future__ import annotations
 
-"""fncall 注入包装：落盘 logs/prompts/{req_id}.txt（与 responses/{req_id}.txt 对齐）。"""
+"""fncall 注入与 entml 流式解析共享辅助。"""
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Final,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+)
 
 from echotools.fncall.prompt.inject import inject_fncall as _echotools_inject
 from echotools.exec.protocol.base import ToolProtocol
 from echotools.logger import get_logger
 
 from server.config import CONFIG, LOG_DIR
+from server.formats import fix_tool_call_id
 
-__all__ = ["inject_fncall_for_request", "prompt_dump_dir"]
+__all__ = [
+    "STREAM_CHUNK_SIZE",
+    "emit_parser_stream_deltas",
+    "finalize_parser_tool_calls",
+    "inject_fncall_for_request",
+    "iter_parser_stream_deltas",
+    "iter_text_chunks",
+    "prompt_dump_dir",
+    "reconcile_pending_tool_index",
+    "resolve_streamed_tool_calls",
+]
 
 logger = get_logger("rogator")
 
 _PROMPTS_SUBDIR = "prompts"
+STREAM_CHUNK_SIZE: Final[int] = 20
 
 
 def prompt_dump_dir() -> Path:
@@ -71,3 +93,72 @@ def inject_fncall_for_request(
         str(prompt_dump_dir()) if _should_dump_prompt() else None,
     )
     return injected
+
+
+# ==== entml 流式解析共享 ====
+
+
+def iter_text_chunks(text: str, size: int = STREAM_CHUNK_SIZE) -> Iterator[str]:
+    """按固定大小切分文本；空串不产出。"""
+    if not text:
+        return
+    for i in range(0, len(text), size):
+        yield text[i : i + size]
+
+
+def iter_parser_stream_deltas(parser) -> Iterator[Tuple[str, str]]:
+    """取出 parser 中全部待发 stream delta（跳过空 partial_json）。"""
+    while True:
+        delta_info = parser.consume_stream_delta()
+        if not delta_info:
+            break
+        name, partial_json = delta_info
+        if not partial_json:
+            continue
+        yield name, partial_json
+
+
+async def emit_parser_stream_deltas(
+    parser,
+    on_delta: Callable[[str, str], Awaitable[bool]],
+) -> bool:
+    """对每个 (name, partial_json) 调用 on_delta；返回 False 表示中止。"""
+    for name, partial_json in iter_parser_stream_deltas(parser):
+        if not await on_delta(name, partial_json):
+            return False
+    return True
+
+
+def finalize_parser_tool_calls(
+    parser,
+    *,
+    warn: Optional[Callable[..., None]] = None,
+    warn_prefix: str = "stream parser.finalize failed",
+) -> Tuple[str, List[Dict[str, Any]]]:
+    """调用 parser.finalize 并规范化 tool_call id。"""
+    final_text = parser.partial_text
+    try:
+        final_text, parsed_calls = parser.finalize()
+        return final_text, [fix_tool_call_id(tc) for tc in parsed_calls]
+    except Exception as e:
+        if warn is not None:
+            warn("%s: %s", warn_prefix, e)
+        return final_text, []
+
+
+def resolve_streamed_tool_calls(
+    parsed_calls: List[Dict[str, Any]],
+    streamed_tool_calls: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    return parsed_calls or streamed_tool_calls
+
+
+def reconcile_pending_tool_index(
+    pending: int,
+    all_tool_calls: List[Dict[str, Any]],
+    stream_tool_blocks_sent: int,
+) -> int:
+    """用已流式发出的 tool 块数校正 pending 索引/计数。"""
+    if all_tool_calls and stream_tool_blocks_sent:
+        return max(pending, min(len(all_tool_calls), stream_tool_blocks_sent))
+    return pending

@@ -4,9 +4,8 @@ import json
 from typing import Any, Dict, List, Optional
 
 from handlers.api_errors import safe_write as _safe_write
+from handlers.fncall_inject import STREAM_CHUNK_SIZE, emit_parser_stream_deltas, iter_text_chunks
 from server.formats import build_openai_chunk, build_openai_stream_usage_chunk, _fix_tool_call_id, _gen_tool_id
-
-_STREAM_CHUNK_SIZE = 20
 
 
 async def _emit_chunk(resp, chunk: Dict[str, Any], disconnected: list) -> bool:
@@ -94,8 +93,7 @@ async def _emit_stream_tool_pieces(
     *,
     include_usage: bool = False,
 ) -> bool:
-    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
-        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+    for piece in iter_text_chunks(partial_json, STREAM_CHUNK_SIZE):
         if not stream_tool["header_sent"]:
             entry = _build_stream_tool_header_entry(stream_tool["index"], stream_tool, name, piece)
             stream_tool["header_sent"] = True
@@ -133,25 +131,21 @@ async def _emit_openai_streaming_tool_delta(
     include_usage: bool = False,
 ) -> tuple[Optional[Dict[str, Any]], int, bool]:
     """invoke 开标签就绪后，增量发送 tool_calls.function.arguments（无需等 </entml:invoke>）。"""
-    while True:
-        delta_info = parser.consume_stream_delta()
-        if not delta_info:
-            break
-        name, partial_json = delta_info
-        if not partial_json:
-            continue
+
+    async def _on_delta(name: str, partial_json: str) -> bool:
+        nonlocal stream_tool, tool_index
         if stream_tool is not None and stream_tool.get("name") != name:
             stream_tool = None
             tool_index += 1
         if stream_tool is None:
             stream_tool = _init_stream_tool(tool_index, name)
-        ok = await _emit_stream_tool_pieces(
+        return await _emit_stream_tool_pieces(
             resp, model, chunk_id, stream_tool, name, partial_json, disconnected,
             include_usage=include_usage,
         )
-        if not ok:
-            return stream_tool, tool_index, False
-    return stream_tool, tool_index, True
+
+    ok = await emit_parser_stream_deltas(parser, _on_delta)
+    return stream_tool, tool_index, ok
 
 
 async def _emit_openai_streaming_tool_argument_pieces(

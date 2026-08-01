@@ -7,8 +7,8 @@ from echotools.logger import get_logger
 
 from server.formats import _fix_tool_call_id, _gen_tool_id
 
+from handlers.fncall_inject import STREAM_CHUNK_SIZE, emit_parser_stream_deltas, iter_text_chunks
 from handlers.anthro.events import (
-    _STREAM_CHUNK_SIZE,
     _close_block,
     _content_block_stop_event,
     _emit_anthropic_event,
@@ -34,8 +34,7 @@ async def _emit_tool_json_pieces(
     disconnected: list,
 ) -> bool:
     stream_tool["json_buf"] = stream_tool.get("json_buf", "") + partial_json
-    for i in range(0, len(partial_json), _STREAM_CHUNK_SIZE):
-        piece = partial_json[i : i + _STREAM_CHUNK_SIZE]
+    for piece in iter_text_chunks(partial_json, STREAM_CHUNK_SIZE):
         if not await _emit_anthropic_event(resp, {
             "type": "content_block_delta",
             "index": stream_tool["block_idx"],
@@ -51,15 +50,10 @@ async def _drain_parser_stream_deltas(
     stream_tool: Dict[str, Any],
     disconnected: list,
 ) -> bool:
-    while True:
-        delta_info = parser.consume_stream_delta()
-        if not delta_info:
-            break
-        _name, partial_json = delta_info
-        if partial_json:
-            if not await _emit_tool_json_pieces(resp, stream_tool, partial_json, disconnected):
-                return False
-    return True
+    async def _on_delta(_name: str, partial_json: str) -> bool:
+        return await _emit_tool_json_pieces(resp, stream_tool, partial_json, disconnected)
+
+    return await emit_parser_stream_deltas(parser, _on_delta)
 
 
 async def _emit_parser_final_delta(
@@ -240,19 +234,15 @@ async def _emit_streaming_tool_delta(
     disconnected: list,
 ) -> Tuple[int, Optional[str], Optional[Dict[str, Any]], bool]:
     """invoke 开标签就绪后，增量发送 input_json_delta（无需等 </entml:invoke>）。"""
-    while True:
-        delta_info = parser.consume_stream_delta()
-        if not delta_info:
-            break
-        name, partial_json = delta_info
-        if not partial_json:
-            continue
+
+    async def _on_delta(name: str, partial_json: str) -> bool:
+        nonlocal block_idx, block_type, stream_tool
         if block_type is not None and block_type != "tool_use":
             block_idx = await _close_block(resp, block_idx, disconnected)
             block_type = None
         if stream_tool is not None and stream_tool.get("name") != name:
             if not await _flush_open_stream_tool(resp, parser, stream_tool, disconnected):
-                return block_idx, block_type, stream_tool, False
+                return False
             stream_tool = None
         if stream_tool is None:
             block_idx += 1
@@ -272,11 +262,12 @@ async def _emit_streaming_tool_delta(
                     "input": {},
                 },
             }, disconnected):
-                return block_idx, block_type, stream_tool, False
+                return False
             block_type = "tool_use"
-        if not await _emit_tool_json_pieces(resp, stream_tool, partial_json, disconnected):
-            return block_idx, block_type, stream_tool, False
-    return block_idx, block_type, stream_tool, True
+        return await _emit_tool_json_pieces(resp, stream_tool, partial_json, disconnected)
+
+    ok = await emit_parser_stream_deltas(parser, _on_delta)
+    return block_idx, block_type, stream_tool, ok
 
 
 async def _close_streaming_tool_block(

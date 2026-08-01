@@ -13,6 +13,11 @@ from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
 from handlers.api_errors import classify_stream_error
+from handlers.fncall_inject import (
+    finalize_parser_tool_calls,
+    reconcile_pending_tool_index,
+    resolve_streamed_tool_calls,
+)
 from handlers.anthro.stream_content import _process_anthropic_content_events, _stream_event_loop
 from handlers.anthro.events import (
     AnthropicStreamState,
@@ -78,16 +83,6 @@ async def _handle_classified_stream_error(
         err_body["type"] = info.kind
     await _write_stream_error(resp, {"type": "error", "error": err_body}, disconnected)
     return stream_result_tuple(state, usage_tracker, early_return=True)
-
-
-def _finalize_parser(parser) -> Tuple[str, List[Dict[str, Any]]]:
-    final_text = parser.partial_text
-    try:
-        final_text, parsed_calls = parser.finalize()
-        return final_text, [_fix_tool_call_id(tc) for tc in parsed_calls]
-    except Exception as e:
-        logger.warning("anthropic stream parser.finalize failed: %s", e)
-        return parser.partial_text, []
 
 
 async def _flush_remaining_thinking(
@@ -232,19 +227,22 @@ async def _finalize_open_tools(
 
 
 def _reconcile_tool_calls(state: AnthropicStreamState) -> None:
-    if not state.all_tool_calls:
-        state.all_tool_calls = state.streamed_tool_calls
-    if state.all_tool_calls and state.stream_tool_blocks_sent:
-        state.pending_tc_count = max(
-            state.pending_tc_count,
-            min(len(state.all_tool_calls), state.stream_tool_blocks_sent),
-        )
+    state.all_tool_calls = resolve_streamed_tool_calls(
+        state.all_tool_calls, state.streamed_tool_calls,
+    )
+    state.pending_tc_count = reconcile_pending_tool_index(
+        state.pending_tc_count, state.all_tool_calls, state.stream_tool_blocks_sent,
+    )
 
 
 async def _complete_anthropic_stream(
     resp, parser, stream_state, usage_tracker, model, msg_id, req_id, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    final_text, parsed_calls = _finalize_parser(parser)
+    final_text, parsed_calls = finalize_parser_tool_calls(
+        parser,
+        warn=logger.warning,
+        warn_prefix="anthropic stream parser.finalize failed",
+    )
     stream_state.all_tool_calls = parsed_calls
 
     if not await _flush_remaining_thinking(resp, parser, stream_state, disconnected):

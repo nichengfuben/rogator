@@ -5,9 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from handlers.api_errors import safe_write as _safe_write
+from handlers.fncall_inject import STREAM_CHUNK_SIZE, iter_text_chunks
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id
-
-_STREAM_CHUNK_SIZE = 20
 
 
 def _tool_call_input_dict(tc: Dict[str, Any]) -> Dict[str, Any]:
@@ -70,13 +69,13 @@ def _tool_use_block_events(
         "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
     }]
     params_json = json.dumps(input_dict, ensure_ascii=False)
-    for i in range(0, len(params_json), _STREAM_CHUNK_SIZE):
+    for piece in iter_text_chunks(params_json, STREAM_CHUNK_SIZE):
         events.append({
             "type": "content_block_delta",
             "index": block_idx,
             "delta": {
                 "type": "input_json_delta",
-                "partial_json": params_json[i : i + _STREAM_CHUNK_SIZE],
+                "partial_json": piece,
             },
         })
     events.append(_content_block_stop_event(block_idx))
@@ -131,11 +130,11 @@ async def _send_text_block(resp, clean_text: str, block_idx: int, disconnected: 
         "index": block_idx,
         "content_block": {"type": "text", "text": ""},
     }]
-    for i in range(0, len(clean_text), _STREAM_CHUNK_SIZE):
+    for piece in iter_text_chunks(clean_text, STREAM_CHUNK_SIZE):
         events.append({
             "type": "content_block_delta",
             "index": block_idx,
-            "delta": {"type": "text_delta", "text": clean_text[i : i + _STREAM_CHUNK_SIZE]},
+            "delta": {"type": "text_delta", "text": piece},
         })
     events.append(_content_block_stop_event(block_idx))
     await _emit_anthropic_events(resp, events, disconnected)
