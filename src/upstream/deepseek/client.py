@@ -9,6 +9,9 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from server.retry.http_client import client_session
+
+from core.transport.http import reset_upstream_transport
 from core.session.accounts import Account, accounts_for_upstream
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
@@ -16,8 +19,9 @@ from upstream.deepseek.lib.adapter.client import DeepseekClient
 from upstream.deepseek.lib.adapter.helpers.pmtutil import Account as DsAccount
 from upstream.deepseek.lib.guard.hif import fetch_hif_tokens
 from upstream.deepseek.lib.protocol.consts import MODELS
-from upstream.deepseek.lib.adapter.helpers.biz_error import DeepSeekUserMutedError
+from upstream.deepseek.lib.adapter.helpers.biz_error import DeepSeekUserMutedError, DeepSeekWafChallengeError
 from upstream.deepseek.lib.user.userapi import login
+from server.formats import UpstreamUnavailableError
 
 logger = logging.getLogger("rogator")
 
@@ -95,7 +99,7 @@ class DeepSeekClient(SessionLoginMixin):
             token, user_id = await login(  # noqa: SLF001
                 inner._session, account.username, account.password
             )
-        except DeepSeekUserMutedError:
+        except (DeepSeekUserMutedError, DeepSeekWafChallengeError):
             self.handle_account_muted(account.username, mute_at=time.time())
             return None
         mgr = inner._hif_managers.get(account.username)  # noqa: SLF001
@@ -125,7 +129,7 @@ class DeepSeekClient(SessionLoginMixin):
                 logger.warning("DeepSeek: 无可用账号")
                 self._startup_done = True
                 return
-            self._http = aiohttp.ClientSession()
+            self._http = client_session()
             ds_accounts = [
                 DsAccount(username=a.username, password=a.password)
                 for a in pool
@@ -146,7 +150,7 @@ class DeepSeekClient(SessionLoginMixin):
         if not self._startup_done:
             if skip_background:
                 if self._http is None:
-                    self._http = aiohttp.ClientSession()
+                    self._http = client_session()
                 if self._inner is None:
                     pool = accounts_for_upstream(self.UPSTREAM_NAME)
                     ds_accounts = [
@@ -159,13 +163,19 @@ class DeepSeekClient(SessionLoginMixin):
             else:
                 await self.startup()
         if self._inner is None:
-            raise RuntimeError("DeepSeek client not initialized (no accounts?)")
+            raise UpstreamUnavailableError(
+                "DeepSeek 未初始化或无可用账号",
+                upstream="deepseek",
+            )
         return self._inner
 
     async def pick_candidate(self) -> Any:
         session = await self.get_valid_session()
         if session is None:
-            raise RuntimeError("No DeepSeek session available")
+            raise UpstreamUnavailableError(
+                "DeepSeek 无可用会话，请检查账号配置与登录状态",
+                upstream="deepseek",
+            )
         inner = await self._ensure_ready()
         for cand in await inner.candidates():
             if cand.meta.get("identifier") == session.username:
@@ -174,17 +184,25 @@ class DeepSeekClient(SessionLoginMixin):
         for cand in await inner.candidates():
             if cand.meta.get("identifier") == session.username:
                 return cand
-        raise RuntimeError(f"No DeepSeek candidate for {session.username[:6]}")
+        raise UpstreamUnavailableError(
+            f"DeepSeek 账号 {session.username[:6]} 无可用候选",
+            upstream="deepseek",
+        )
 
     async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[PlatformSession]:
         return await SessionLoginMixin.switch_to_next(self, exclude_username=exclude_username)
+
+    async def reset_http_transport(self) -> None:
+        await reset_upstream_transport(self._http)
+        self._http = None
+        if self._inner is not None and self._startup_done:
+            self._http = client_session()
+            self._inner._session = self._http  # noqa: SLF001
 
     async def shutdown(self) -> None:
         if self._inner is not None:
             await self._inner.close()
             self._inner = None
-        if self._http is not None:
-            await self._http.close()
-            self._http = None
+        await self.reset_http_transport()
         self._startup_done = False
         logger.debug("DeepSeek client shut down")

@@ -27,6 +27,7 @@ from state_sched import (
     start_background_tasks,
     tracked_request,
 )
+from core.transport.http import close_shared_connector
 
 logger = get_logger("rogator")
 
@@ -247,6 +248,7 @@ class AppState:
                 await shutdown()
             except Exception as exc:
                 logger.debug("Upstream shutdown failed: %s", exc)
+        await close_shared_connector()
 
     async def shutdown(self) -> None:
         if getattr(self, "_shutdown_complete", False):

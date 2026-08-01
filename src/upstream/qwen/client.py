@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Qwen session and client implementation。"""
+"""Qwen session and client implementation."""
 
 import asyncio
 import logging
@@ -21,6 +21,8 @@ from upstream.qwen.chat.store import (
     mark_invalid as mark_invalid_in,
 )
 from upstream.qwen.chat.upload.files import UploadMixin
+from upstream.qwen.auth.http import create_http_session, map_connection_error, run_with_connection_retry
+from core.transport.http import reset_upstream_transport, upstream_timeout
 from server.formats import (
     DEFAULT_MODELS,
     REQUEST_TOTAL_TIMEOUT,
@@ -39,6 +41,7 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
         self._splitter = splitter
         self._init_session_pool()
         self._lock = asyncio.Lock()
+        self._http_session: Optional[aiohttp.ClientSession] = None
         self._models: List[str] = list(DEFAULT_MODELS)
         self._model_meta: Dict[str, ModelMeta] = {}
         self._models_fetch_time: float = 0.0
@@ -59,6 +62,15 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def describe_sessions(self) -> Dict[str, Any]:
         return describe_sessions(self._sessions)
 
+    async def _ensure_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = create_http_session()
+        return self._http_session
+
+    async def reset_http_transport(self) -> None:
+        await reset_upstream_transport(self._http_session)
+        self._http_session = None
+
     @property
     def session_count(self) -> int:
         return len(self._sessions)
@@ -78,13 +90,16 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
         image_name: str = "source.png",
         download: bool = True,
     ) -> Dict[str, Any]:
-        async with aiohttp.ClientSession() as s:
+        async def _run() -> Dict[str, Any]:
+            s = await self._ensure_http_session()
             chat_session = ChatSession(s, lambda: None, lambda: {}, lambda: "")
             video_service = VideoService(s, lambda: None, lambda: {}, chat_session.create, chat_session.cleanup)
             return await video_service.generate(
                 prompt, image_url, token, user_id, model=model, size=size,
                 image_name=image_name, download=download,
             )
+
+        return await run_with_connection_retry("generate_video", _run)
 
     async def synthesize_tts(
         self,
@@ -95,13 +110,16 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     ) -> Optional[str]:
         from upstream.qwen.chat.routes import TTS_DIR
 
-        async with aiohttp.ClientSession() as s:
+        async def _run() -> Optional[str]:
+            s = await self._ensure_http_session()
             chat_session = ChatSession(s, lambda: None, lambda: {}, lambda: "")
             tts_service = TtsService(
                 s, lambda: None, lambda: {}, lambda: "",
                 chat_session.create, chat_session.send_placeholder_message, chat_session.cleanup,
             )
             return await tts_service.synthesize(text, token, model=model, save_dir=save_dir or TTS_DIR)
+
+        return await run_with_connection_retry("synthesize_tts", _run)
 
     async def create_chat(self, session: QwenSession, model: str) -> str:
         return await create_chat_for_session(self, session, model)
@@ -129,13 +147,22 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
         )
         payload = build_chat_payload(chat_id, model, qwen_message)
         headers = build_headers(session.token, chat_id=chat_id, include_sse=True)
-        async with aiohttp.ClientSession() as s:
+        try:
+            s = await self._ensure_http_session()
             async with s.post(
                 f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}", json=payload,
-                headers=headers, ssl=False,
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TOTAL_TIMEOUT),
+                headers=headers,
+                timeout=upstream_timeout(REQUEST_TOTAL_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
                     await handle_chat_error(self, resp, session)
                 async for event in iter_sse_events(self, resp, session):
                     yield event
+        except Exception as exc:
+            conn_err = map_connection_error(exc)
+            if conn_err is not None:
+                raise conn_err from exc
+            raise
+
+    async def shutdown(self) -> None:
+        await self.reset_http_transport()

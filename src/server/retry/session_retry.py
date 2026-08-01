@@ -6,7 +6,12 @@ import re
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable, Optional, TypeVar
 
 from server.config import CONFIG
-from server.formats import PayloadTooLargeError, TokenExpiredError, UpstreamTimeoutError
+from server.formats import (
+    PayloadTooLargeError,
+    TokenExpiredError,
+    UpstreamConnectionError,
+    UpstreamTimeoutError,
+)
 from upstream.qwen.chat.store import mask_username
 
 if TYPE_CHECKING:
@@ -19,8 +24,14 @@ T = TypeVar("T")
 _RATE_LIMIT_HOURS_RE = re.compile(r'"num"\s*:\s*(\d+)')
 
 
+async def _reset_client_transport(client: Optional[Any]) -> None:
+    reset = getattr(client, "reset_http_transport", None)
+    if callable(reset):
+        await reset()
+
+
 def is_retryable_error(exc: BaseException) -> bool:
-    return isinstance(exc, (TokenExpiredError, UpstreamTimeoutError))
+    return isinstance(exc, (TokenExpiredError, UpstreamTimeoutError, UpstreamConnectionError))
 
 
 def _is_shutting_down(state: Any) -> bool:
@@ -58,6 +69,25 @@ def _handle_upstream_timeout_retry(
         raise exc
     logger.warning(
         "Upstream timeout for %s (retry %d/%d): %s",
+        req_id, retries, limit, exc,
+    )
+
+
+def _handle_upstream_connection_retry(
+    req_id: str,
+    exc: UpstreamConnectionError,
+    *,
+    retries: int,
+    limit: int,
+    state: Any | None = None,
+) -> None:
+    if state is not None and _is_shutting_down(state):
+        raise asyncio.CancelledError("Shutting down") from exc
+    if retries > limit:
+        _log_retry_exhausted(req_id, retries, limit, exc)
+        raise exc
+    logger.warning(
+        "Upstream connection failed for %s (retry %d/%d): %s",
         req_id, retries, limit, exc,
     )
 
@@ -148,7 +178,13 @@ async def run_with_session_retry(
         except UpstreamTimeoutError as exc:
             _raise_if_shutting_down(state)
             retries += 1
+            await _reset_client_transport(client)
             _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
+        except UpstreamConnectionError as exc:
+            _raise_if_shutting_down(state)
+            retries += 1
+            await _reset_client_transport(client)
+            _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
         except Exception:
             raise
 
@@ -184,6 +220,39 @@ async def _consume_stream_once(
         yield event
 
 
+async def _reset_stream(inner: Optional[AsyncGenerator[dict, None]]) -> None:
+    await _close_async_generator(inner)
+
+
+async def _handle_stream_retry_error(
+    req_id: str,
+    state: Any,
+    exc: BaseException,
+    retries: int,
+    limit: int,
+    client: Any | None,
+) -> int:
+    _raise_if_shutting_down(state)
+    retries += 1
+    if isinstance(exc, TokenExpiredError):
+        await _switch_session_after_token_error(
+            req_id, state, exc, retries=retries, limit=limit, client=client,
+        )
+        return retries
+    if isinstance(exc, PayloadTooLargeError):
+        _shrink_payload_limit_or_raise(state, req_id, exc, retries)
+        return retries
+    if isinstance(exc, UpstreamTimeoutError):
+        await _reset_client_transport(client)
+        _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
+        return retries
+    if isinstance(exc, UpstreamConnectionError):
+        await _reset_client_transport(client)
+        _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
+        return retries
+    raise exc
+
+
 async def stream_with_session_retry(
     req_id: str,
     state: Any,
@@ -205,32 +274,18 @@ async def stream_with_session_retry(
                     yield event
                 return
             except asyncio.CancelledError:
-                await _close_async_generator(inner)
+                await _reset_stream(inner)
                 inner = None
                 raise
-            except TokenExpiredError as exc:
-                await _close_async_generator(inner)
+            except (TokenExpiredError, PayloadTooLargeError, UpstreamTimeoutError, UpstreamConnectionError) as exc:
+                await _reset_stream(inner)
                 inner = None
-                _raise_if_shutting_down(state)
-                retries += 1
-                await _switch_session_after_token_error(
-                req_id, state, exc, retries=retries, limit=limit, client=client,
-            )
-            except PayloadTooLargeError as exc:
-                await _close_async_generator(inner)
-                inner = None
-                _raise_if_shutting_down(state)
-                retries += 1
-                _shrink_payload_limit_or_raise(state, req_id, exc, retries)
-            except UpstreamTimeoutError as exc:
-                await _close_async_generator(inner)
-                inner = None
-                _raise_if_shutting_down(state)
-                retries += 1
-                _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
+                retries = await _handle_stream_retry_error(
+                    req_id, state, exc, retries, limit, client,
+                )
             except Exception:
-                await _close_async_generator(inner)
+                await _reset_stream(inner)
                 inner = None
                 raise
     finally:
-        await _close_async_generator(inner)
+        await _reset_stream(inner)
