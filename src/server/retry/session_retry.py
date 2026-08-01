@@ -150,6 +150,37 @@ def _shrink_payload_limit_or_raise(state: Any, req_id: str, exc: PayloadTooLarge
     )
 
 
+async def _dispatch_session_retry(
+    req_id: str,
+    state: Any,
+    exc: BaseException,
+    *,
+    retries: int,
+    limit: int,
+    client: Any | None,
+) -> int:
+    """分派可重试异常；返回更新后的 retries。不可重试则 raise。"""
+    _raise_if_shutting_down(state)
+    retries += 1
+    if isinstance(exc, TokenExpiredError):
+        await _switch_session_after_token_error(
+            req_id, state, exc, retries=retries, limit=limit, client=client,
+        )
+        return retries
+    if isinstance(exc, PayloadTooLargeError):
+        _shrink_payload_limit_or_raise(state, req_id, exc, retries)
+        return retries
+    if isinstance(exc, UpstreamTimeoutError):
+        await _reset_client_transport(client)
+        _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
+        return retries
+    if isinstance(exc, UpstreamConnectionError):
+        await _reset_client_transport(client)
+        _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
+        return retries
+    raise exc
+
+
 async def run_with_session_retry(
     req_id: str,
     state: Any,
@@ -161,30 +192,15 @@ async def run_with_session_retry(
     """非流式换号重试。"""
     limit = CONFIG.max_retry_on_error if max_retry is None else max_retry
     retries = 0
+    retryable = (TokenExpiredError, PayloadTooLargeError, UpstreamTimeoutError, UpstreamConnectionError)
 
     while True:
         try:
             return await func()
-        except TokenExpiredError as exc:
-            _raise_if_shutting_down(state)
-            retries += 1
-            await _switch_session_after_token_error(
+        except retryable as exc:
+            retries = await _dispatch_session_retry(
                 req_id, state, exc, retries=retries, limit=limit, client=client,
             )
-        except PayloadTooLargeError as exc:
-            _raise_if_shutting_down(state)
-            retries += 1
-            _shrink_payload_limit_or_raise(state, req_id, exc, retries)
-        except UpstreamTimeoutError as exc:
-            _raise_if_shutting_down(state)
-            retries += 1
-            await _reset_client_transport(client)
-            _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
-        except UpstreamConnectionError as exc:
-            _raise_if_shutting_down(state)
-            retries += 1
-            await _reset_client_transport(client)
-            _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
         except Exception:
             raise
 
@@ -232,25 +248,9 @@ async def _handle_stream_retry_error(
     limit: int,
     client: Any | None,
 ) -> int:
-    _raise_if_shutting_down(state)
-    retries += 1
-    if isinstance(exc, TokenExpiredError):
-        await _switch_session_after_token_error(
-            req_id, state, exc, retries=retries, limit=limit, client=client,
-        )
-        return retries
-    if isinstance(exc, PayloadTooLargeError):
-        _shrink_payload_limit_or_raise(state, req_id, exc, retries)
-        return retries
-    if isinstance(exc, UpstreamTimeoutError):
-        await _reset_client_transport(client)
-        _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
-        return retries
-    if isinstance(exc, UpstreamConnectionError):
-        await _reset_client_transport(client)
-        _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
-        return retries
-    raise exc
+    return await _dispatch_session_retry(
+        req_id, state, exc, retries=retries, limit=limit, client=client,
+    )
 
 
 async def stream_with_session_retry(

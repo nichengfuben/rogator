@@ -32,6 +32,18 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
     return StreamErrorInfo("server_error", str(exc), 500)
 
 
+def log_classified_stream_error(exc: BaseException, *, label: str) -> StreamErrorInfo:
+    """分类流式异常并按 kind 打日志；协议层只负责写 SSE。"""
+    info = classify_stream_error(exc)
+    if info.kind == "rate_limited":
+        logger.warning("%s token expired: %s", label, exc)
+    elif info.kind == "timeout":
+        logger.warning("%s upstream timeout: %s", label, exc)
+    else:
+        logger.error("%s error: %s", label, exc, exc_info=True)
+    return info
+
+
 async def safe_write(resp, data: bytes, disconnected: list) -> bool:
     if disconnected[0]:
         return False

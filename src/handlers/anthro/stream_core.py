@@ -12,8 +12,9 @@ from server.records.response_record import record_raw_response
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
-from handlers.api_errors import classify_stream_error
+from handlers.api_errors import log_classified_stream_error
 from handlers.fncall_inject import (
+    advance_partial_buffer,
     finalize_parser_tool_calls,
     reconcile_pending_tool_index,
     resolve_streamed_tool_calls,
@@ -71,13 +72,7 @@ async def _maybe_emit_message_start(
 async def _handle_classified_stream_error(
     resp, state, usage_tracker, e, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    info = classify_stream_error(e)
-    if info.kind == "rate_limited":
-        logger.warning("Anthropic stream token expired: %s", e)
-    elif info.kind == "timeout":
-        logger.warning("Anthropic stream upstream timeout: %s", e)
-    else:
-        logger.error("Anthropic stream error: %s", e, exc_info=True)
+    info = log_classified_stream_error(e, label="Anthropic stream")
     err_body: Dict[str, Any] = {"message": info.message}
     if info.kind != "server_error":
         err_body["type"] = info.kind
@@ -90,11 +85,9 @@ async def _flush_remaining_thinking(
 ) -> bool:
     if disconnected[0]:
         return True
-    pt = parser.partial_thinking
-    if len(pt) <= state.last_thinking_len:
-        return True
-    new_thinking = pt[state.last_thinking_len:]
-    state.last_thinking_len = len(pt)
+    new_thinking, state.last_thinking_len = advance_partial_buffer(
+        state.last_thinking_len, parser.partial_thinking,
+    )
     if not new_thinking:
         return True
     state.block_idx, state.block_type, state.stream_tool, ok = await _send_thinking_delta(
@@ -137,10 +130,7 @@ async def _flush_remaining_text(
     if disconnected[0]:
         return True
     safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
-    if len(safe_text) <= state.last_safe_len:
-        return True
-    new_text = safe_text[state.last_safe_len:]
-    state.last_safe_len = len(safe_text)
+    new_text, state.last_safe_len = advance_partial_buffer(state.last_safe_len, safe_text)
     if not new_text:
         return True
     if state.stream_tool is not None:

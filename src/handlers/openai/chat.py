@@ -5,7 +5,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from echotools.exec.fncall.protocols.entml_think.parse import split_entml_thinking
 from echotools.logger import get_logger
 
-from core.dispatch import resolve_upstream, stream_openai_chat
+from core.dispatch import stream_openai_chat
 from handlers import EmptyResponseError
 from handlers.openai.tools import _parse_tool_calls
 from server.formats import (
@@ -14,9 +14,15 @@ from server.formats import (
     log_qwen_upstream_usage,
 )
 from server.records.response_record import record_raw_response
-from server.retry import run_with_session_retry, stream_with_session_retry
+from server.retry import run_with_session_retry
 
 logger = get_logger("rogator")
+
+
+def _resolve_retry_client(state, model, messages, tools):
+    """兼容旧路径；实现位于 chat_request（惰性导入避免循环）。"""
+    from handlers.chat_request import resolve_retry_client
+    return resolve_retry_client(state, model, messages, tools)
 
 
 async def _chat_once(
@@ -57,13 +63,15 @@ async def _collect_non_stream_response(
             prompt_api="openai",
         ):
             event_count += 1
+            # 非流式仅累积上游 usage 快照，不用流式 //4 估算（避免改变响应 usage）
             usage_tracker.ingest_event(event)
             raw_recorder.ingest_event(event)
-            if event.get("type") in ("response_created", "usage", "prompt_meta"):
+            etype = event.get("type")
+            if etype in ("response_created", "usage", "prompt_meta"):
                 continue
-            if event.get("type") == "answer":
+            if etype == "answer":
                 response_parts.append(event.get("content", ""))
-            elif event.get("type") == "thinking":
+            elif etype == "thinking":
                 think_parts.append(event.get("content", ""))
     if event_count == 0:
         logger.warning("No events received from upstream for req %s", req_id)
@@ -91,8 +99,3 @@ async def _process_openai_non_stream(state, messages, model, req_id, tools, prot
         )
 
     return await run_with_session_retry(req_id, state, _run, client=retry_client)
-
-
-def _resolve_retry_client(state, model, messages, tools):
-    _, client = resolve_upstream(state, model, messages, tools)
-    return client

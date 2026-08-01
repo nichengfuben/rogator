@@ -24,6 +24,7 @@ from server.formats import fix_tool_call_id
 
 __all__ = [
     "STREAM_CHUNK_SIZE",
+    "advance_partial_buffer",
     "emit_parser_stream_deltas",
     "finalize_parser_tool_calls",
     "inject_fncall_for_request",
@@ -32,6 +33,7 @@ __all__ = [
     "prompt_dump_dir",
     "reconcile_pending_tool_index",
     "resolve_streamed_tool_calls",
+    "take_parser_final_delta",
 ]
 
 logger = get_logger("rogator")
@@ -162,3 +164,23 @@ def reconcile_pending_tool_index(
     if all_tool_calls and stream_tool_blocks_sent:
         return max(pending, min(len(all_tool_calls), stream_tool_blocks_sent))
     return pending
+
+
+def take_parser_final_delta(parser) -> Optional[Tuple[str, str]]:
+    """流结束时补全未闭合 invoke 的最终 delta；已 closed 或无内容则 None。"""
+    if parser.streaming_invoke_closed:
+        return None
+    final_delta = parser.complete_stream_delta_if_needed()
+    if not final_delta:
+        return None
+    name, piece = final_delta
+    if not piece:
+        return None
+    return name, piece
+
+
+def advance_partial_buffer(last_len: int, current: str) -> Tuple[str, int]:
+    """返回相对 last_len 的新增片段与新长度。"""
+    if len(current) <= last_len:
+        return "", last_len
+    return current[last_len:], len(current)

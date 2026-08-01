@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -10,13 +9,15 @@ from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
 from handlers import get_state
-from handlers.api_errors import classify_stream_error, handler_error_response
+from handlers.api_errors import handler_error_response, log_classified_stream_error
 from handlers.fncall_inject import (
+    advance_partial_buffer,
     finalize_parser_tool_calls,
     reconcile_pending_tool_index,
     resolve_streamed_tool_calls,
+    take_parser_final_delta,
 )
-from handlers.openai.chat import _chat_once, _process_openai_non_stream, _resolve_retry_client
+from handlers.openai.chat import _chat_once, _process_openai_non_stream
 from handlers.openai.protocol import _build_protocol_options
 from handlers.openai.stream_tools import (
     _emit_chunk,
@@ -39,7 +40,6 @@ from server.formats import (
     build_openai_chunk,
 )
 from server.records.response_record import record_raw_response
-from server.retry import stream_with_session_retry
 from state import QueueFullError, tracked_request
 
 logger = get_logger("rogator")
@@ -92,22 +92,22 @@ async def _emit_ready_tool_calls(
 
 
 async def _emit_partial_thinking(st: OpenAIStreamState) -> bool:
-    pt = st.parser.partial_thinking
-    if len(pt) <= st.last_thinking_len:
+    new_thinking, st.last_thinking_len = advance_partial_buffer(
+        st.last_thinking_len, st.parser.partial_thinking,
+    )
+    if not new_thinking:
         return True
-    new_thinking = pt[st.last_thinking_len:]
-    st.last_thinking_len = len(pt)
     st.full_thinking += new_thinking
     chunk = st.stream_chunk(reasoning=new_thinking)
     return await _emit_chunk(st.resp, chunk, st.disconnected)
 
 
 async def _emit_partial_text(st: OpenAIStreamState) -> bool:
-    safe_text = st.parser.partial_text
-    if len(safe_text) <= st.last_safe_len:
+    new_text, st.last_safe_len = advance_partial_buffer(
+        st.last_safe_len, st.parser.partial_text,
+    )
+    if not new_text:
         return True
-    new_text = safe_text[st.last_safe_len:]
-    st.last_safe_len = len(safe_text)
     chunk = st.stream_chunk(content=new_text)
     return await _emit_chunk(st.resp, chunk, st.disconnected)
 
@@ -146,16 +146,10 @@ async def _process_openai_stream_answer(st: OpenAIStreamState, content: str) -> 
 
 async def _process_openai_stream_event(st: OpenAIStreamState, event: Dict[str, Any]) -> bool:
     """处理单个上游事件；返回 False 表示应中断流。"""
-    etype = event.get("type")
-    if etype == "prompt_meta":
-        st.usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
-        return True
-    st.usage_tracker.ingest_event(event)
-    if etype in ("response_created", "usage"):
+    etype = st.usage_tracker.ingest_upstream_event(event)
+    if etype in ("prompt_meta", "response_created", "usage"):
         return True
     content = event.get("content", "")
-    if content and etype in ("thinking", "answer"):
-        st.usage_tracker.add_output_chars(len(content))
     if etype == "thinking":
         return await _process_openai_stream_thinking(st, content)
     if etype != "answer":
@@ -173,12 +167,10 @@ async def _flush_remaining_thinking_and_text(
     if st.disconnected[0]:
         return
     safe_text = st.parser.partial_text if st.parser.has_calls else (final_text or st.parser.partial_text)
-    if len(safe_text) > st.last_safe_len:
-        new_text = safe_text[st.last_safe_len:]
-        st.last_safe_len = len(safe_text)
-        if new_text:
-            chunk = st.stream_chunk(content=new_text)
-            await _emit_chunk(st.resp, chunk, st.disconnected)
+    new_text, st.last_safe_len = advance_partial_buffer(st.last_safe_len, safe_text)
+    if new_text:
+        chunk = st.stream_chunk(content=new_text)
+        await _emit_chunk(st.resp, chunk, st.disconnected)
 
 
 async def _finalize_openai_stream_tool(st: OpenAIStreamState, all_tool_calls: List[Dict[str, Any]]) -> None:
@@ -190,15 +182,14 @@ async def _finalize_openai_stream_tool(st: OpenAIStreamState, all_tool_calls: Li
         return
     if st.stream_tool is None:
         return
-    if not st.parser.streaming_invoke_closed:
-        final_delta = st.parser.complete_stream_delta_if_needed()
-        if final_delta:
-            _, piece = final_delta
-            if piece:
-                await _emit_openai_streaming_tool_argument_pieces(
-                    st.resp, st.model, st.chunk_id, st.stream_tool, piece, st.disconnected,
-                    include_usage=st.include_usage,
-                )
+    final_delta = take_parser_final_delta(st.parser)
+    if final_delta:
+        _, piece = final_delta
+        if piece:
+            await _emit_openai_streaming_tool_argument_pieces(
+                st.resp, st.model, st.chunk_id, st.stream_tool, piece, st.disconnected,
+                include_usage=st.include_usage,
+            )
     st.stream_tool = None
     if st.parser.streaming_invoke_closed or all_tool_calls:
         st.pending_tc_index += 1
@@ -217,7 +208,8 @@ def _resolve_all_tool_calls(
 
 
 async def _run_openai_event_stream(st: OpenAIStreamState, state, messages, model, tools, protocol_options) -> None:
-    retry_client = _resolve_retry_client(state, model, messages, tools)
+    # 惰性导入：避免 chat_request ↔ openai 包初始化循环
+    from handlers.chat_request import iter_retried_chat_events
 
     async def _make_stream():
         async for event in _chat_once(
@@ -227,25 +219,19 @@ async def _run_openai_event_stream(st: OpenAIStreamState, state, messages, model
             yield event
 
     with record_raw_response(st.req_id) as raw_recorder:
-        async with aclosing(
-            stream_with_session_retry(st.req_id, state, _make_stream, client=retry_client),
-        ) as event_stream:
-            async for event in event_stream:
-                if st.disconnected[0]:
-                    break
-                raw_recorder.ingest_event(event)
-                if not await _process_openai_stream_event(st, event):
-                    break
+        async def _on_event(event: Dict[str, Any]) -> bool:
+            raw_recorder.ingest_event(event)
+            return await _process_openai_stream_event(st, event)
+
+        await iter_retried_chat_events(
+            st.req_id, state, _make_stream,
+            model=model, messages=messages, tools=tools,
+            disconnected=st.disconnected, on_event=_on_event,
+        )
 
 
 async def _write_classified_openai_stream_error(resp, exc: BaseException, disconnected: list) -> None:
-    info = classify_stream_error(exc)
-    if info.kind == "rate_limited":
-        logger.warning("OpenAI stream token expired: %s", exc)
-    elif info.kind == "timeout":
-        logger.warning("OpenAI stream upstream timeout: %s", exc)
-    else:
-        logger.error("OpenAI stream error: %s", exc, exc_info=True)
+    info = log_classified_stream_error(exc, label="OpenAI stream")
     await _write_openai_stream_error(
         resp, info.message, disconnected, error_type=info.kind, code=info.code,
     )

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
+from contextlib import aclosing
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 from aiohttp import web
 
+from core.dispatch import resolve_upstream
 from handlers import extract_system_for_inject
 from handlers.api_errors import model_resolve_error_response, resolve_handler_model
 from handlers.fncall_inject import inject_fncall_for_request
@@ -23,12 +25,14 @@ from server.formats import (
 )
 from server.model.model_registry import ModelResolveError
 from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
+from server.retry import stream_with_session_retry
 
 logger = logging.getLogger("rogator")
 
 ChatJsonResult = Union[dict, web.Response]
 ChatModelResult = Union[str, web.Response]
 PrepareResult = Tuple[List[Dict[str, Any]], str, bool, str, bool]
+StreamEventHandler = Callable[[Dict[str, Any]], Awaitable[bool]]
 
 
 async def read_chat_json(request: web.Request, *, protocol: str) -> ChatJsonResult:
@@ -80,6 +84,35 @@ def log_chat_request(
 
 def new_request_id() -> str:
     return _gen_request_id()
+
+
+def resolve_retry_client(state: Any, model: str, messages: list, tools: list) -> Any:
+    """按当前请求解析用于 session_retry 的上游 client。"""
+    _, client = resolve_upstream(state, model, messages, tools)
+    return client
+
+
+async def iter_retried_chat_events(
+    req_id: str,
+    state: Any,
+    make_stream: Callable[[], AsyncGenerator[Dict[str, Any], None]],
+    *,
+    model: str,
+    messages: list,
+    tools: list,
+    disconnected: list,
+    on_event: StreamEventHandler,
+) -> None:
+    """带换号重试的上游事件循环；on_event 返回 False 时中止。"""
+    retry_client = resolve_retry_client(state, model, messages, tools)
+    async with aclosing(
+        stream_with_session_retry(req_id, state, make_stream, client=retry_client),
+    ) as event_stream:
+        async for event in event_stream:
+            if disconnected[0]:
+                break
+            if not await on_event(event):
+                break
 
 
 def prepare_injected_messages(

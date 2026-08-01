@@ -7,7 +7,12 @@ from echotools.logger import get_logger
 
 from server.formats import _fix_tool_call_id, _gen_tool_id
 
-from handlers.fncall_inject import STREAM_CHUNK_SIZE, emit_parser_stream_deltas, iter_text_chunks
+from handlers.fncall_inject import (
+    STREAM_CHUNK_SIZE,
+    emit_parser_stream_deltas,
+    iter_text_chunks,
+    take_parser_final_delta,
+)
 from handlers.anthro.events import (
     _close_block,
     _content_block_stop_event,
@@ -62,15 +67,11 @@ async def _emit_parser_final_delta(
     stream_tool: Dict[str, Any],
     disconnected: list,
 ) -> bool:
-    if parser.streaming_invoke_closed:
-        return True
-    final_delta = parser.complete_stream_delta_if_needed()
+    final_delta = take_parser_final_delta(parser)
     if not final_delta:
         return True
     _name, piece = final_delta
-    if piece:
-        return await _emit_tool_json_pieces(resp, stream_tool, piece, disconnected)
-    return True
+    return await _emit_tool_json_pieces(resp, stream_tool, piece, disconnected)
 
 
 async def _sync_json_buf_prefix(

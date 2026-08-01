@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
-from contextlib import aclosing
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id, should_emit_anthropic_message_start
-from server.retry import stream_with_session_retry
 
+from handlers.chat_request import iter_retried_chat_events
+from handlers.fncall_inject import advance_partial_buffer
 from handlers.openai import _chat_once
-from handlers.openai.chat import _resolve_retry_client
 
 from handlers.anthro.events import _close_block, _emit_anthropic_event
 from handlers.anthro.events import AnthropicStreamState, expected_arguments_for_stream_tool
@@ -43,11 +41,9 @@ async def _emit_partial_thinking(
     state: AnthropicStreamState,
     disconnected: list,
 ) -> bool:
-    pt = parser.partial_thinking
-    if len(pt) <= state.last_thinking_len:
-        return True
-    new_thinking = pt[state.last_thinking_len:]
-    state.last_thinking_len = len(pt)
+    new_thinking, state.last_thinking_len = advance_partial_buffer(
+        state.last_thinking_len, parser.partial_thinking,
+    )
     if not new_thinking:
         return True
     state.block_idx, state.block_type, state.stream_tool, ok = await _send_thinking_delta(
@@ -101,11 +97,9 @@ async def _emit_safe_text_delta(
     state: AnthropicStreamState,
     disconnected: list,
 ) -> bool:
-    safe_text = parser.partial_text
-    if len(safe_text) <= state.last_safe_len:
-        return True
-    new_text = safe_text[state.last_safe_len:]
-    state.last_safe_len = len(safe_text)
+    new_text, state.last_safe_len = advance_partial_buffer(
+        state.last_safe_len, parser.partial_text,
+    )
     if not new_text:
         return True
     if state.stream_tool is not None:
@@ -248,20 +242,14 @@ async def _ingest_stream_event(
     """处理单条上游事件：True=继续下一条，None=进入内容解析。"""
     from handlers.anthro.stream_core import _ensure_anthropic_message_start
 
-    etype = event.get("type")
+    etype = usage_tracker.ingest_upstream_event(event)
     if etype == "prompt_meta":
-        usage_tracker.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
         await _ensure_anthropic_message_start(
             resp, model, msg_id, usage_tracker, stream_state, disconnected,
         )
         return True
 
-    usage_tracker.ingest_event(event)
     raw_recorder.ingest_event(event)
-
-    content = event.get("content", "")
-    if content and etype in ("thinking", "answer"):
-        usage_tracker.add_output_chars(len(content))
 
     if not stream_state.message_started:
         if etype in ("response_created",):
@@ -288,30 +276,25 @@ async def _stream_event_loop(
     usage_tracker,
     raw_recorder,
 ) -> None:
-    retry_client = _resolve_retry_client(state_obj, model, messages, tools)
-    async with aclosing(
-        stream_with_session_retry(
-            req_id,
-            state_obj,
-            lambda: _make_anthropic_chat_stream(
-                state_obj, messages, model, tools, req_id, protocol_options,
-            ),
-            client=retry_client,
+    async def _on_event(event: Dict[str, Any]) -> bool:
+        ingest = await _ingest_stream_event(
+            resp, event, model=model, msg_id=msg_id, stream_state=stream_state,
+            usage_tracker=usage_tracker, raw_recorder=raw_recorder, disconnected=disconnected,
+        )
+        if ingest is True:
+            return True
+        to_process = await _events_to_process(event, stream_state)
+        if to_process is None:
+            return True
+        return await _process_anthropic_content_events(
+            resp, to_process, parser, stream_state, disconnected,
+        )
+
+    await iter_retried_chat_events(
+        req_id, state_obj,
+        lambda: _make_anthropic_chat_stream(
+            state_obj, messages, model, tools, req_id, protocol_options,
         ),
-    ) as event_stream:
-        async for event in event_stream:
-            if disconnected[0]:
-                break
-            ingest = await _ingest_stream_event(
-                resp, event, model=model, msg_id=msg_id, stream_state=stream_state,
-                usage_tracker=usage_tracker, raw_recorder=raw_recorder, disconnected=disconnected,
-            )
-            if ingest is True:
-                continue
-            to_process = await _events_to_process(event, stream_state)
-            if to_process is None:
-                continue
-            if not await _process_anthropic_content_events(
-                resp, to_process, parser, stream_state, disconnected,
-            ):
-                break
+        model=model, messages=messages, tools=tools,
+        disconnected=disconnected, on_event=_on_event,
+    )

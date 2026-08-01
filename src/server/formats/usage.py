@@ -135,6 +135,19 @@ class UpstreamUsageTracker:
         self._usage = normalize_upstream_usage(raw)
         self._cached_tokens = extract_cached_tokens(raw)
 
+    def ingest_upstream_event(self, event: Dict[str, Any]) -> Optional[str]:
+        """流式摄取：prompt_meta / usage / thinking|answer 计字；返回 etype。"""
+        etype = event.get("type")
+        etype_s = etype if isinstance(etype, str) else None
+        if etype_s == "prompt_meta":
+            self.set_estimated_input_from_prompt_chars(int(event.get("prompt_chars") or 0))
+            return etype_s
+        self.ingest_event(event)
+        content = event.get("content", "")
+        if content and etype_s in ("thinking", "answer"):
+            self.add_output_chars(len(content))
+        return etype_s
+
     @property
     def last_raw_usage(self) -> Optional[Dict[str, Any]]:
         """chat.qwen.ai 上游 usage 原始 JSON（最后一次快照）。"""
