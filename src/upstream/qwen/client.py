@@ -41,6 +41,7 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
         self._splitter = splitter
         self._init_session_pool()
         self._lock = asyncio.Lock()
+        self._transport_lock = asyncio.Lock()
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._models: List[str] = list(DEFAULT_MODELS)
         self._model_meta: Dict[str, ModelMeta] = {}
@@ -63,13 +64,16 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
         return describe_sessions(self._sessions)
 
     async def _ensure_http_session(self) -> aiohttp.ClientSession:
-        if self._http_session is None or self._http_session.closed:
-            self._http_session = create_http_session()
-        return self._http_session
+        async with self._transport_lock:
+            if self._http_session is None or self._http_session.closed:
+                self._http_session = create_http_session()
+            return self._http_session
 
     async def reset_http_transport(self) -> None:
-        await reset_upstream_transport(self._http_session)
-        self._http_session = None
+        async with self._transport_lock:
+            session = self._http_session
+            self._http_session = None
+            await reset_upstream_transport(session)
 
     @property
     def session_count(self) -> int:
@@ -99,7 +103,9 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
                 image_name=image_name, download=download,
             )
 
-        return await run_with_connection_retry("generate_video", _run)
+        return await run_with_connection_retry(
+            "generate_video", _run, transport_owner=self,
+        )
 
     async def synthesize_tts(
         self,
@@ -119,7 +125,9 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
             )
             return await tts_service.synthesize(text, token, model=model, save_dir=save_dir or TTS_DIR)
 
-        return await run_with_connection_retry("synthesize_tts", _run)
+        return await run_with_connection_retry(
+            "synthesize_tts", _run, transport_owner=self,
+        )
 
     async def create_chat(self, session: QwenSession, model: str) -> str:
         return await create_chat_for_session(self, session, model)

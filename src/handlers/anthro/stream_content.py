@@ -8,6 +8,7 @@ from server.formats import UpstreamUsageTracker, _fix_tool_call_id, should_emit_
 from server.retry import stream_with_session_retry
 
 from handlers.openai import _chat_once
+from handlers.openai.chat import _resolve_retry_client
 
 from handlers.anthro.events import _close_block, _emit_anthropic_event
 from handlers.anthro.events import AnthropicStreamState, expected_arguments_for_stream_tool
@@ -287,10 +288,16 @@ async def _stream_event_loop(
     usage_tracker,
     raw_recorder,
 ) -> None:
+    retry_client = _resolve_retry_client(state_obj, model, messages, tools)
     async with aclosing(
-        stream_with_session_retry(req_id, state_obj, lambda: _make_anthropic_chat_stream(
-            state_obj, messages, model, tools, req_id, protocol_options,
-        )),
+        stream_with_session_retry(
+            req_id,
+            state_obj,
+            lambda: _make_anthropic_chat_stream(
+                state_obj, messages, model, tools, req_id, protocol_options,
+            ),
+            client=retry_client,
+        ),
     ) as event_stream:
         async for event in event_stream:
             if disconnected[0]:

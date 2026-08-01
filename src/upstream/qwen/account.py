@@ -50,9 +50,9 @@ class QwenLoginMixin(SessionLoginMixin):
     UPSTREAM_NAME = "qwen"
 
     async def _perform_login(self, account: Account) -> Optional[PlatformSession]:
-        session = await self._ensure_http_session()
-
         async def _run() -> Optional[PlatformSession]:
+            # 每次尝试取新 session，避免 reset 后仍持有已关闭引用
+            session = await self._ensure_http_session()
             payload = {
                 "email": account.username,
                 "password": hash_password(account.password),
@@ -152,10 +152,12 @@ class ModelsFetchMixin:
         if not session:
             return _keep_cached()
         try:
-            s = await self._ensure_http_session()
+            async def _run() -> List[str]:
+                s = await self._ensure_http_session()
+                return await self._fetch_models_remote(s, session, now, _keep_cached)
+
             return await run_with_connection_retry(
-                "fetch_models",
-                lambda: self._fetch_models_remote(s, session, now, _keep_cached),
+                "fetch_models", _run, transport_owner=self,
             )
         except Exception:
             return _keep_cached()

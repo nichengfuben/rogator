@@ -129,28 +129,39 @@ def fix_tool_call_id(tc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _connection_error_message(hint: str, *, upstream: str = "") -> str:
+    if upstream:
+        return "{0} 连接失败: {1}".format(upstream, hint)
+    return "上游连接失败: {0}".format(hint)
+
+
 def as_upstream_connection_error(
     exc: BaseException,
     *,
     upstream: str = "",
 ) -> Optional[UpstreamConnectionError]:
-    # Py3.8+?TimeoutError ? OSError ?????? OSError ??????????????
+    # TimeoutError 走独立超时重试路径，不当作连接错误。
     if isinstance(exc, asyncio.TimeoutError):
         return None
+    if isinstance(exc, RuntimeError):
+        text = str(exc).strip().lower()
+        if "session is closed" in text or "connector is closed" in text:
+            return UpstreamConnectionError(
+                _connection_error_message(str(exc).strip() or exc.__class__.__name__, upstream=upstream),
+                upstream=upstream,
+            )
     if isinstance(exc, (ClientConnectorError, ServerConnectionError, ConnectionResetError)):
         hint = str(exc).strip() or exc.__class__.__name__
-        if upstream:
-            msg = "{0} ????: {1}".format(upstream, hint)
-        else:
-            msg = "??????: {0}".format(hint)
-        return UpstreamConnectionError(msg, upstream=upstream)
+        return UpstreamConnectionError(
+            _connection_error_message(hint, upstream=upstream),
+            upstream=upstream,
+        )
     if isinstance(exc, OSError):
         hint = str(exc).strip() or exc.__class__.__name__
-        if upstream:
-            msg = "{0} ????: {1}".format(upstream, hint)
-        else:
-            msg = "??????: {0}".format(hint)
-        return UpstreamConnectionError(msg, upstream=upstream)
+        return UpstreamConnectionError(
+            _connection_error_message(hint, upstream=upstream),
+            upstream=upstream,
+        )
     if isinstance(exc, ClientError) and not isinstance(exc, ClientConnectorError):
         return UpstreamConnectionError(str(exc), upstream=upstream)
     return None

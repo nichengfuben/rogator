@@ -39,13 +39,16 @@ class TestUpstreamTransport(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tm.sock_connect, 10.0)
         self.assertEqual(tm.sock_read, 600.0)
 
-    async def test_reset_upstream_transport_recreates_connector(self) -> None:
+    async def test_reset_upstream_transport_keeps_shared_connector(self) -> None:
         session = client_session()
+        other = client_session()
         first_conn = make_connector()
         await reset_upstream_transport(session)
         second_conn = make_connector()
-        self.assertIsNot(first_conn, second_conn)
-        self.assertTrue(first_conn.closed)
+        self.assertIs(first_conn, second_conn)
+        self.assertFalse(first_conn.closed)
+        self.assertFalse(other.closed)
+        await other.close()
         await close_shared_connector()
 
     async def test_client_session_uses_shared_connector(self) -> None:

@@ -104,6 +104,7 @@ class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
         with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())):
             client = DeepSeekClient(MagicMock())
         client._save_meta = MagicMock(return_value=[])
+        client._http = MagicMock(closed=False)
         client._ensure_ready = AsyncMock(return_value=MagicMock(_session=MagicMock(), _hif_managers={}))
 
         with patch(

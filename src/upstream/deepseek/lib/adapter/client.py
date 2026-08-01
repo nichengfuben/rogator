@@ -129,6 +129,12 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         self._rebuild_candidates()
         logger.info("deepseek 客户端已初始化（等待后台登录）")
 
+    def rebind_http_session(self, session: aiohttp.ClientSession) -> None:
+        """transport 重建后同步 ClientSession 与全部 HIF 管理器。"""
+        self._session = session
+        for mgr in self._hif_managers.values():
+            mgr.bind_session(session)
+
     def set_proxy_enabled(self, enabled: bool) -> None:
         """设置此平台的代理覆盖开关。
 

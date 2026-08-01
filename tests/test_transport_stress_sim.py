@@ -217,7 +217,9 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
 
     async def test_connector_reset_under_concurrency(self) -> None:
         async def _worker(worker_id: int) -> int:
-            session = aiohttp.ClientSession(connector=make_connector())
+            session = aiohttp.ClientSession(
+                connector=make_connector(), connector_owner=False
+            )
             try:
                 if worker_id % 3 == 0:
                     await reset_upstream_transport(session)
@@ -235,17 +237,42 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
 
     async def test_many_reset_cycles_keep_ssl_context_valid(self) -> None:
         for _ in range(32):
-            session = aiohttp.ClientSession(connector=make_connector())
+            session = aiohttp.ClientSession(
+                connector=make_connector(), connector_owner=False
+            )
             ctx = get_upstream_ssl_context()
             self.assertFalse(ctx.check_hostname)
             await reset_upstream_transport(session)
         ctx_after = get_upstream_ssl_context()
         self.assertFalse(ctx_after.check_hostname)
+        self.assertFalse(make_connector().closed)
 
     async def test_timeout_error_not_treated_as_connection_error(self) -> None:
         from server.formats import as_upstream_connection_error
 
         self.assertIsNone(as_upstream_connection_error(asyncio.TimeoutError()))
+
+    async def test_session_closed_mapped_as_connection_error(self) -> None:
+        from server.formats import as_upstream_connection_error
+
+        err = as_upstream_connection_error(
+            RuntimeError("Session is closed"), upstream="deepseek",
+        )
+        self.assertIsNotNone(err)
+        assert err is not None
+        self.assertEqual(err.upstream, "deepseek")
+        self.assertIn("Session is closed", err.message)
+
+    async def test_closing_one_unowned_session_keeps_peer_alive(self) -> None:
+        from server.retry.http_client import client_session
+
+        s1 = client_session()
+        s2 = client_session()
+        self.assertIs(s1.connector, s2.connector)
+        await reset_upstream_transport(s1)
+        self.assertFalse(s2.closed)
+        self.assertFalse(make_connector().closed)
+        await s2.close()
 
     async def test_connection_error_retry_resets_transport(self) -> None:
         script = PostScript(

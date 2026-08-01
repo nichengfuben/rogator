@@ -57,10 +57,13 @@ async def close_shared_connector() -> None:
 
 
 async def reset_upstream_transport(session: Optional[aiohttp.ClientSession] = None) -> None:
-    """关闭 ClientSession 并丢弃共享 connector，供 transport 重试前调用。"""
+    """关闭指定 ClientSession，供 transport 重试前调用。
+
+    注意：不再关闭共享 connector，避免其他并发 client 的 session 被连带失效。
+    共享 connector 仅在进程 shutdown 时由 ``close_shared_connector()`` 关闭。
+    """
     if session is not None and not session.closed:
         await session.close()
-    await close_shared_connector()
 
 
 def build_connector(*, ssl: bool = False) -> aiohttp.TCPConnector:

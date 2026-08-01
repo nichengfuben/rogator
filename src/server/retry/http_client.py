@@ -70,7 +70,12 @@ def _socks_connector(proxy_url: str) -> Optional[aiohttp.BaseConnector]:
 
 
 def client_session(**kwargs: Any) -> aiohttp.ClientSession:
-    """创建尊重环境变量代理的 ClientSession。"""
+    """创建尊重环境变量代理的 ClientSession。
+
+    使用进程级共享 ``make_connector()`` 时必须 ``connector_owner=False``，
+    否则任一 session.close() 会关闭共享 connector，导致其它 client 报
+    ``Session is closed``（aiohttp 以 connector.closed 判定 session.closed）。
+    """
     if "connector" not in kwargs:
         proxy = active_proxy_url()
         if proxy and proxy.lower().startswith("socks"):
@@ -79,6 +84,7 @@ def client_session(**kwargs: Any) -> aiohttp.ClientSession:
                 kwargs["connector"] = connector
                 return aiohttp.ClientSession(**kwargs)
         kwargs["connector"] = make_connector()
+        kwargs.setdefault("connector_owner", False)
     if "trust_env" not in kwargs:
         kwargs["trust_env"] = True
     return aiohttp.ClientSession(**kwargs)
