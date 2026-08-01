@@ -76,10 +76,21 @@ def build_openai_model_entry(
         "capabilities": capabilities_for_api(meta.capabilities),
         "modality": list(meta.modality),
     }
+    raw_meta = meta_by_id.get(internal_id) if meta_by_id else None
+    if isinstance(raw_meta, dict):
+        display_name = raw_meta.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            entry["display_name"] = display_name.strip()
+        cursor_efforts = raw_meta.get("think_efforts")
+        if isinstance(cursor_efforts, dict) and cursor_efforts:
+            entry["think_efforts"] = dict(cursor_efforts)
     if model_supports_thinking(registry_entry):
         if always_qwen_thinking(internal_id):
             entry["always_thinking"] = True
-        elif registry_entry.uses_entml:
+        elif registry_entry.uses_entml and "think_efforts" not in entry:
+            entry["think_efforts"] = dict(THINK_EFFORTS)
+    elif not registry_entry.uses_entml and not registry_entry.uses_entml_tools:
+        if "think_efforts" not in entry:
             entry["think_efforts"] = dict(THINK_EFFORTS)
     return entry
 

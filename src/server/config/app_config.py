@@ -61,6 +61,12 @@ class AppConfig:
     log_color: bool
     access_log: bool
     upstream_enabled: tuple[str, ...]
+    schedule_enabled: bool
+    schedule_persist: bool
+    schedule_max_consecutive_skips_login: int
+    schedule_max_consecutive_skips_poll: int
+    schedule_alpha: float
+    schedule_lambda: float
 
 
 def resolve_log_path(path: str, *, project_root: Path | None = None) -> Path:
@@ -134,6 +140,16 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         upstream_enabled=_parse_upstream_enabled(
             _require_get(raw, "upstream", "enabled")
         ),
+        schedule_enabled=bool(_require_get(raw, "schedule", "enabled")),
+        schedule_persist=bool(_require_get(raw, "schedule", "persist")),
+        schedule_max_consecutive_skips_login=int(
+            _require_get(raw, "schedule", "max_consecutive_skips_login")
+        ),
+        schedule_max_consecutive_skips_poll=int(
+            _require_get(raw, "schedule", "max_consecutive_skips_poll")
+        ),
+        schedule_alpha=float(_require_get(raw, "schedule", "alpha")),
+        schedule_lambda=float(_require_get(raw, "schedule", "lambda")),
     )
 
 

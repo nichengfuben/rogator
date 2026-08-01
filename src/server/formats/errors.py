@@ -5,7 +5,13 @@ import json
 from typing import Any, Dict
 
 from aiohttp import web
-from aiohttp.client_exceptions import ClientConnectionError, ServerDisconnectedError
+from aiohttp.client_exceptions import (
+    ClientConnectionError,
+    ClientConnectorError,
+    ClientError,
+    ServerConnectionError,
+    ServerDisconnectedError,
+)
 
 
 class PayloadTooLargeError(RuntimeError):
@@ -14,6 +20,30 @@ class PayloadTooLargeError(RuntimeError):
 
 class UpstreamTimeoutError(RuntimeError):
     """上游 HTTP / SSE 读超时。"""
+
+
+class UpstreamUnavailableError(RuntimeError):
+    """上游无可用会话、账号或凭证。"""
+
+    status: int = 503
+    error_type: str = "upstream_unavailable"
+
+    def __init__(self, message: str, *, upstream: str = "") -> None:
+        super().__init__(message)
+        self.message = message
+        self.upstream = upstream
+
+
+class UpstreamConnectionError(RuntimeError):
+    """无法连接上游（网络/代理/DNS）。"""
+
+    status: int = 502
+    error_type: str = "upstream_connection_error"
+
+    def __init__(self, message: str, *, upstream: str = "") -> None:
+        super().__init__(message)
+        self.message = message
+        self.upstream = upstream
 
 
 class TokenExpiredError(Exception):
@@ -97,3 +127,30 @@ def fix_tool_call_id(tc: Dict[str, Any]) -> Dict[str, Any]:
             "arguments": func.get("arguments", "{}"),
         },
     }
+
+
+def as_upstream_connection_error(
+    exc: BaseException,
+    *,
+    upstream: str = "",
+) -> UpstreamConnectionError | None:
+    # Py3.8+：TimeoutError 是 OSError 子类，须先于 OSError 排除，否则会误判为连接失败。
+    if isinstance(exc, asyncio.TimeoutError):
+        return None
+    if isinstance(exc, (ClientConnectorError, ServerConnectionError, ConnectionResetError)):
+        hint = str(exc).strip() or exc.__class__.__name__
+        if upstream:
+            msg = "{0} 连接失败: {1}".format(upstream, hint)
+        else:
+            msg = "上游连接失败: {0}".format(hint)
+        return UpstreamConnectionError(msg, upstream=upstream)
+    if isinstance(exc, OSError):
+        hint = str(exc).strip() or exc.__class__.__name__
+        if upstream:
+            msg = "{0} 连接失败: {1}".format(upstream, hint)
+        else:
+            msg = "上游连接失败: {0}".format(hint)
+        return UpstreamConnectionError(msg, upstream=upstream)
+    if isinstance(exc, ClientError) and not isinstance(exc, ClientConnectorError):
+        return UpstreamConnectionError(str(exc), upstream=upstream)
+    return None

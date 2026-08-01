@@ -39,6 +39,10 @@ from echotools.logger import get_logger
 
 _LOG_FILE = setup_logging()
 logger = get_logger("rogator")
+
+from server.retry.http_client import init_http_proxy_from_env
+
+init_http_proxy_from_env(logger)
 warn_if_config_version_mismatch(user_config_path(), logger)
 
 # ============================================================

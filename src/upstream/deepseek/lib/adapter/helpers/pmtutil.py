@@ -9,43 +9,38 @@ prompt 拼装、chunk 协议转换、模型能力判断、账号凭证 dataclass
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+
 def _message_text(content: Any) -> str:
-    if not isinstance(content, list):
-        return str(content)
-    return "\n".join(
-        p.get("text", "")
-        for p in content
-        if isinstance(p, dict) and p.get("type") == "text"
-    )
-
-
-def _format_message(role: str, content: str) -> Optional[str]:
-    if role == "system":
-        return "系统指令: {}".format(content)
-    if role == "user":
-        return "用户: {}".format(content)
-    if role == "assistant":
-        return "助手: {}".format(content)
-    if role == "tool":
-        return "工具结果: {}".format(content)
-    return None
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            str(p.get("text") or "")
+            for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        )
+    return str(content)
 
 
 def build_prompt(messages: List[Dict[str, Any]]) -> str:
-    """将 OpenAI 格式消息列表转为 DeepSeek 单 prompt 字符串。
+    """将消息转为 DeepSeek 单 prompt（与 Qwen entml 路径一致）。
 
-    Args:
-        messages: OpenAI 格式消息列表。
-
-    Returns:
-        拼接后的提示文本。
+    Rogator 经 ``inject_fncall`` 后通常只发一条 user，正文已是完整 entml prompt。
+    不再拼接「用户: / 系统指令: / 助手:」等角色前缀。
     """
+    if not messages:
+        return ""
+    # 与 Qwen ``chat_completion`` 一致：优先取首条 content
+    first = _message_text(messages[0].get("content", "")).strip()
+    if first:
+        return first
     parts: List[str] = []
     for m in messages:
-        role = m.get("role", "user")
-        formatted = _format_message(role, _message_text(m.get("content", "")))
-        if formatted is not None:
-            parts.append(formatted)
+        text = _message_text(m.get("content", "")).strip()
+        if text:
+            parts.append(text)
     return "\n\n".join(parts)
 
 

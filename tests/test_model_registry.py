@@ -22,6 +22,7 @@ class TestModelRegistry(unittest.TestCase):
             p.write_text(
                 "qwen3-7-max:qwen3.7-max:true:true\n"
                 "qwen3-8-max-preview:qwen3.8-max-preview:false:true\n"
+                "cursor-fast:composer-2.5-fast:false:false\n"
                 "deepseek-v4-flash:deepseek-v4-flash:false:false\n",
                 encoding="utf-8",
             )
@@ -30,6 +31,7 @@ class TestModelRegistry(unittest.TestCase):
             self.assertTrue(reg.by_external["qwen3-7-max"].uses_entml_tools)
             self.assertFalse(reg.by_external["qwen3-8-max-preview"].uses_entml)
             self.assertTrue(reg.by_external["qwen3-8-max-preview"].uses_entml_tools)
+            self.assertFalse(reg.by_external["cursor-fast"].uses_entml_tools)
             self.assertFalse(reg.by_external["deepseek-v4-flash"].uses_entml_tools)
 
     def test_legacy_three_field_defaults_tools_to_thinking(self) -> None:
@@ -75,6 +77,26 @@ class TestModelRegistry(unittest.TestCase):
         with self.assertRaises(ModelNotFoundError):
             resolve_request_model("no-such-model", ["qwen3.7-max"])
 
+    def test_cursor_external_maps_to_internal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "registry.jsonl"
+            p.write_text(
+                "cursor-composer-2-5-fast:composer-2.5-fast:false:false\n"
+                "gpt-4:gpt-4:false:false\n",
+                encoding="utf-8",
+            )
+            reload_model_registry(p)
+            entry = resolve_request_model(
+                "cursor-composer-2-5-fast",
+                ["composer-2.5-fast"],
+            )
+            self.assertEqual(entry.internal_id, "composer-2.5-fast")
+            self.assertFalse(entry.uses_entml)
+            self.assertFalse(entry.uses_entml_tools)
+            alias = resolve_request_model("gpt-4", ["gpt-4"])
+            self.assertEqual(alias.internal_id, "gpt-4")
+            reload_model_registry()
+
     def test_native_tools_external_maps_to_internal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "registry.jsonl"
@@ -103,15 +125,22 @@ class TestModelRegistry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "registry.jsonl"
             p.write_text(
+                "cursor-fast:composer-2.5-fast:false:false\n"
                 "deepseek-v4-flash:deepseek-v4-flash:false:false\n",
                 encoding="utf-8",
             )
             reload_model_registry(p)
-            entry = resolve_request_model("deepseek-v4-flash", ["deepseek-v4-flash"])
-            self.assertTrue(is_native_upstream_event(entry, {"type": "tool_call"}))
-            self.assertTrue(is_native_upstream_event(entry, {"type": "thinking"}))
+            cursor = resolve_request_model("cursor-fast", ["composer-2.5-fast"])
+            self.assertTrue(is_native_upstream_event(cursor, {"type": "tool_call"}))
+            self.assertTrue(is_native_upstream_event(cursor, {"type": "thinking"}))
             self.assertTrue(
-                is_native_upstream_event(entry, {"type": "answer", "content": "hi"})
+                is_native_upstream_event(cursor, {"type": "answer", "content": "hi"})
+            )
+            deepseek = resolve_request_model("deepseek-v4-flash", ["deepseek-v4-flash"])
+            self.assertTrue(is_native_upstream_event(deepseek, {"type": "tool_call"}))
+            self.assertTrue(is_native_upstream_event(deepseek, {"type": "thinking"}))
+            self.assertTrue(
+                is_native_upstream_event(deepseek, {"type": "answer", "content": "hi"})
             )
             reload_model_registry()
 

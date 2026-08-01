@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Qwen 聊天创建与 SSE 流解析。"""
+"""Qwen chat creation and SSE parsing."""
 
 import asyncio
 import json
@@ -13,6 +13,8 @@ import aiohttp
 from upstream.qwen.auth.crypto import build_headers
 from upstream.qwen.chat.routes import BASE_URL, NEW_CHAT_PATH
 from upstream.qwen.chat.sse import parse_sse_event
+from upstream.qwen.auth.http import run_with_connection_retry
+from core.transport.http import upstream_timeout
 from server.config import CONFIG
 from server.formats import PayloadTooLargeError, TokenExpiredError, UpstreamTimeoutError
 from upstream.qwen.chat.store import QwenSession, is_session_fatal_error
@@ -34,7 +36,7 @@ def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict
     raise RuntimeError(f"Create chat failed: {data}")
 
 
-async def _post_create_chat(session: QwenSession, model: str, timeout_s: float) -> Dict[str, Any]:
+async def _post_create_chat(client: QwenClient, session: QwenSession, model: str, timeout_s: float) -> Dict[str, Any]:
     payload = {
         "title": "新建对话",
         "models": [model],
@@ -44,17 +46,19 @@ async def _post_create_chat(session: QwenSession, model: str, timeout_s: float) 
         "project_id": "",
     }
     headers = build_headers(session.token, include_version=False)
-    async with aiohttp.ClientSession() as http:
+
+    async def _run() -> Dict[str, Any]:
+        http = await client._ensure_http_session()
         async with http.post(
             f"{BASE_URL}{NEW_CHAT_PATH}",
             json=payload,
             headers=headers,
-            ssl=False,
-            timeout=aiohttp.ClientTimeout(total=timeout_s),
+            timeout=upstream_timeout(timeout_s),
         ) as resp:
             if resp.status != 200:
                 return {"_http_status": resp.status}
             return await resp.json()
+    return await run_with_connection_retry("create_chat", _run, transport_owner=client)
 
 
 async def create_chat_for_session(
@@ -64,7 +68,7 @@ async def create_chat_for_session(
 ) -> str:
     timeout_s = CONFIG.create_chat_timeout
     try:
-        data = await _post_create_chat(session, model, timeout_s)
+        data = await _post_create_chat(client, session, model, timeout_s)
     except asyncio.TimeoutError as exc:
         raise UpstreamTimeoutError(f"Create chat timed out after {timeout_s}s") from exc
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Rogator 日志：控制台 + logs/{log_name}-{YYYYMMDD-HHmmss}.log。"""
 
+import importlib
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,13 @@ from echotools.logger import configure
 
 from server.config.app_config import CONFIG, LOG_DIR
 
-__all__ = ["setup_logging", "resolve_log_file_path", "shutdown_logging", "resolve_access_log"]
+__all__ = [
+    "setup_logging",
+    "resolve_log_file_path",
+    "shutdown_logging",
+    "resolve_access_log",
+    "silence_hpack_debug",
+]
 
 
 def resolve_log_file_path(*, log_name: Optional[str] = None) -> Optional[Path]:
@@ -24,6 +31,23 @@ def resolve_log_file_path(*, log_name: Optional[str] = None) -> Optional[Path]:
     return LOG_DIR / f"{name}-{stamp}.log"
 
 
+def silence_hpack_debug() -> None:
+    """猴子补丁：把 hpack 的 log.debug 换成空操作，避免 HTTP/2 刷屏。"""
+
+    def _noop(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    for mod_name in ("hpack.hpack", "hpack.table"):
+        try:
+            mod = importlib.import_module(mod_name)
+        except ImportError:
+            continue
+        log = getattr(mod, "log", None)
+        if log is None or not hasattr(log, "debug"):
+            continue
+        log.debug = _noop  # type: ignore[method-assign]
+
+
 def setup_logging(level: Optional[str] = None) -> Optional[Path]:
     log_level = (level or CONFIG.log_level or "INFO").upper()
     log_path = resolve_log_file_path()
@@ -32,6 +56,7 @@ def setup_logging(level: Optional[str] = None) -> Optional[Path]:
         color=CONFIG.log_color,
         log_file=str(log_path) if log_path is not None else None,
     )
+    silence_hpack_debug()
     return log_path
 
 

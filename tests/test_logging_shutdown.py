@@ -4,7 +4,12 @@ import logging
 import unittest
 from unittest.mock import patch
 
-from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.logging_setup import (
+    setup_logging,
+    shutdown_logging,
+    resolve_access_log,
+    silence_hpack_debug,
+)
 
 
 class TestLoggingShutdown(unittest.TestCase):
@@ -58,6 +63,22 @@ class TestAccessLog(unittest.TestCase):
 
     def test_resolve_access_log_disabled(self) -> None:
         self.assertIsNone(resolve_access_log(False))
+
+
+class TestHpackSilence(unittest.TestCase):
+    def test_silence_hpack_debug_noop(self) -> None:
+        import hpack.hpack as hpack_mod
+        import hpack.table as table_mod
+
+        silence_hpack_debug()
+        # Must not emit even when logger level is DEBUG
+        with self.assertLogs(level="DEBUG") as cm:
+            logging.getLogger("rogator").debug("probe")
+            hpack_mod.log.debug("Adding %s=%s", b"k", b"v")
+            table_mod.log.debug("Resizing header table to %d from %d", 0, 4096)
+        self.assertTrue(any("probe" in r.getMessage() for r in cm.records))
+        self.assertFalse(any("Adding" in r.getMessage() for r in cm.records))
+        self.assertFalse(any("Resizing" in r.getMessage() for r in cm.records))
 
 
 if __name__ == "__main__":

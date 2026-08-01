@@ -32,3 +32,11 @@ jobs:
         env:
           PYTHONPATH: src:.
         run: python -m pytest tests -q
+
+      - name: Achecker
+        run: |
+          if [ -f achecker.py ]; then
+            python achecker.py
+          else
+            echo "achecker.py not in tree; skip"
+          fi

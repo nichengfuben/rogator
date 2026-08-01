@@ -7,9 +7,12 @@ from server.formats import (
     TokenExpiredError,
     UpstreamUsageTracker,
     UpstreamTimeoutError,
+    UpstreamUnavailableError,
+    UpstreamConnectionError,
     _fix_tool_call_id,
     log_qwen_upstream_usage,
 )
+from server.formats import as_upstream_connection_error
 from server.records.response_record import record_raw_response
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
@@ -80,6 +83,36 @@ async def _handle_stream_upstream_timeout(
     logger.warning("Anthropic stream upstream timeout: %s", e)
     await _write_stream_error(
         resp, {"type": "error", "error": {"message": str(e), "type": "timeout"}}, disconnected,
+    )
+    return stream_result_tuple(state, usage_tracker, early_return=True)
+
+
+async def _handle_stream_upstream_unavailable(
+    resp, state, usage_tracker, e: UpstreamUnavailableError, disconnected,
+) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+    logger.warning("Anthropic stream upstream unavailable: %s", e.message)
+    await _write_stream_error(
+        resp,
+        {
+            "type": "error",
+            "error": {"message": e.message, "type": e.error_type, "code": e.status},
+        },
+        disconnected,
+    )
+    return stream_result_tuple(state, usage_tracker, early_return=True)
+
+
+async def _handle_stream_upstream_connection(
+    resp, state, usage_tracker, e: UpstreamConnectionError, disconnected,
+) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+    logger.warning("Anthropic stream upstream connection: %s", e.message)
+    await _write_stream_error(
+        resp,
+        {
+            "type": "error",
+            "error": {"message": e.message, "type": e.error_type, "code": e.status},
+        },
+        disconnected,
     )
     return stream_result_tuple(state, usage_tracker, early_return=True)
 
@@ -258,6 +291,19 @@ def _reconcile_tool_calls(state: AnthropicStreamState) -> None:
 async def _complete_anthropic_stream(
     resp, parser, stream_state, usage_tracker, model, msg_id, req_id, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+    if stream_state.native_upstream:
+        stream_state.all_tool_calls = list(stream_state.streamed_tool_calls)
+        await _maybe_emit_message_start(
+            resp, model, msg_id, usage_tracker, stream_state, disconnected,
+        )
+        if stream_state.deferred_content and not disconnected[0]:
+            if not await _process_anthropic_content_events(
+                resp, stream_state.deferred_content, parser, stream_state, disconnected,
+            ):
+                return stream_result_tuple(stream_state, usage_tracker, early_return=True)
+            stream_state.deferred_content = []
+        return stream_result_tuple(stream_state, usage_tracker, early_return=False)
+
     final_text, parsed_calls = _finalize_parser(parser)
     stream_state.all_tool_calls = parsed_calls
 
@@ -285,9 +331,9 @@ async def _complete_anthropic_stream(
 
 async def _stream_anthropic(
     resp, state, messages, model, tools, req_id, disconnected, protocol_options=None,
-    *, msg_id: str,
+    *, msg_id: str, registry_entry=None,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    stream_state = AnthropicStreamState()
+    stream_state = AnthropicStreamState(registry_entry=registry_entry)
     parser = FncallStreamParser(protocol=state.protocol, tools=tools, protocol_options=protocol_options)
     usage_tracker = UpstreamUsageTracker()
 
@@ -308,7 +354,20 @@ async def _stream_anthropic(
             return await _handle_stream_upstream_timeout(
                 resp, stream_state, usage_tracker, e, disconnected,
             )
+        except UpstreamUnavailableError as e:
+            return await _handle_stream_upstream_unavailable(
+                resp, stream_state, usage_tracker, e, disconnected,
+            )
+        except UpstreamConnectionError as e:
+            return await _handle_stream_upstream_connection(
+                resp, stream_state, usage_tracker, e, disconnected,
+            )
         except Exception as e:
+            conn_err = as_upstream_connection_error(e)
+            if conn_err is not None:
+                return await _handle_stream_upstream_connection(
+                    resp, stream_state, usage_tracker, conn_err, disconnected,
+                )
             return await _handle_stream_generic_error(
                 resp, stream_state, usage_tracker, e, disconnected,
             )

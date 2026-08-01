@@ -7,8 +7,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id, should_emit_anthropic_message_start
 from server.retry import stream_with_session_retry
 
-from handlers.openai import _chat_once
+from server.model.model_registry import ModelRegistryEntry, is_native_upstream_event
 
+from handlers.openai import _chat_once
 from handlers.anthro.events import _close_block, _emit_anthropic_event
 from handlers.anthro.events import AnthropicStreamState, expected_arguments_for_stream_tool
 from handlers.anthro.stream_tools import (
@@ -179,6 +180,28 @@ async def _process_anthropic_content_event(
     state: AnthropicStreamState,
     disconnected: list,
 ) -> bool:
+    if is_native_upstream_event(state.registry_entry, proc_event):
+        state.native_upstream = True
+        etype = proc_event.get("type")
+        content = proc_event.get("content", "")
+        if etype in ("response_created", "usage"):
+            return True
+        if etype == "thinking":
+            return await _process_thinking_content_event(
+                resp, content, state, disconnected, parser=parser,
+            )
+        if etype == "answer":
+            state.full_answer += content
+            if not content:
+                return True
+            if state.stream_tool is not None:
+                if not await _flush_open_stream_tool(resp, parser, state.stream_tool, disconnected):
+                    return False
+                state.stream_tool = None
+                state.block_type = None
+            return await _emit_text_delta(resp, content, state, disconnected)
+        return True
+
     etype = proc_event.get("type")
     content = proc_event.get("content", "")
     if etype in ("response_created", "usage"):
@@ -222,6 +245,12 @@ async def _events_to_process(
     stream_state: AnthropicStreamState,
 ) -> Optional[List[Dict[str, Any]]]:
     etype = event.get("type")
+    if is_native_upstream_event(stream_state.registry_entry, event) and etype in ("thinking", "answer"):
+        if not stream_state.message_started:
+            to_process = stream_state.deferred_content + [event]
+            stream_state.deferred_content = []
+            return to_process
+        return [event]
     if not stream_state.message_started:
         if etype in ("response_created",):
             return None
@@ -272,6 +301,49 @@ async def _ingest_stream_event(
     return None
 
 
+async def _handle_native_tool_event(
+    resp, event, parser, stream_state, disconnected,
+) -> bool:
+    """处理原生 tool_call 事件；返回 False 表示应中断流。"""
+    stream_state.native_upstream = True
+    tc = event.get("tool_call")
+    if not tc:
+        return True
+    from server.formats import _fix_tool_call_id
+    return await _handle_ready_tool_calls_in_event(
+        resp, parser, stream_state, disconnected, [_fix_tool_call_id(tc)],
+    )
+
+
+async def _dispatch_stream_event(
+    resp,
+    event,
+    *,
+    model,
+    msg_id,
+    stream_state,
+    parser,
+    usage_tracker,
+    raw_recorder,
+    disconnected,
+) -> bool:
+    """处理单条流事件；返回 False 表示应中断外层循环。"""
+    if is_native_upstream_event(stream_state.registry_entry, event) and event.get("type") == "tool_call":
+        return await _handle_native_tool_event(resp, event, parser, stream_state, disconnected)
+    ingest = await _ingest_stream_event(
+        resp, event, model=model, msg_id=msg_id, stream_state=stream_state,
+        usage_tracker=usage_tracker, raw_recorder=raw_recorder, disconnected=disconnected,
+    )
+    if ingest is True:
+        return True
+    to_process = await _events_to_process(event, stream_state)
+    if to_process is None:
+        return True
+    return await _process_anthropic_content_events(
+        resp, to_process, parser, stream_state, disconnected,
+    )
+
+
 async def _stream_event_loop(
     resp,
     state_obj,
@@ -295,16 +367,9 @@ async def _stream_event_loop(
         async for event in event_stream:
             if disconnected[0]:
                 break
-            ingest = await _ingest_stream_event(
+            if not await _dispatch_stream_event(
                 resp, event, model=model, msg_id=msg_id, stream_state=stream_state,
-                usage_tracker=usage_tracker, raw_recorder=raw_recorder, disconnected=disconnected,
-            )
-            if ingest is True:
-                continue
-            to_process = await _events_to_process(event, stream_state)
-            if to_process is None:
-                continue
-            if not await _process_anthropic_content_events(
-                resp, to_process, parser, stream_state, disconnected,
+                parser=parser, usage_tracker=usage_tracker, raw_recorder=raw_recorder,
+                disconnected=disconnected,
             ):
                 break

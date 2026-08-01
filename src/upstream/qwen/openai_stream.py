@@ -11,7 +11,7 @@ from handlers.fncall_inject import inject_fncall_for_request
 from handlers.openai.protocol import _inject_protocol_options
 from handlers.openai.thinking import protocol_thinking_level
 from handlers.openai.tools import convert_tools_to_openai
-from server.formats import TokenExpiredError
+from server.formats import TokenExpiredError, UpstreamUnavailableError
 from server.model.model_thinking import resolve_qwen_thinking
 
 logger = get_logger("rogator")
@@ -80,7 +80,10 @@ async def _prepare_stream(
 
     session = await client.get_valid_session()
     if not session:
-        raise TokenExpiredError("No valid session available")
+        raise UpstreamUnavailableError(
+            "Qwen 无可用会话，请检查账号配置与登录状态",
+            upstream="qwen",
+        )
 
     image_uris = client.extract_base64_images(messages)
     media_urls = client.extract_remote_media_urls(messages)

@@ -61,11 +61,12 @@ async def _send_post_stream(
     )
 
 
-async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None):
+async def _handle_non_stream(state, messages, model, req_id, tools, protocol_options=None, *, registry_entry=None):
     try:
         result = await state.scheduler.submit(
             lambda: _process_openai_non_stream(
                 state, messages, model, req_id, tools, protocol_options,
+                registry_entry=registry_entry,
             )
         )
         return _json_response(convert_to_anthropic(result))
@@ -82,7 +83,7 @@ async def _emit_anthropic_handler_stream_error(
     await _write_stream_error(resp, {"type": "error", "error": err_body}, disconnected)
 
 
-async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None):
+async def _handle_stream(request, state, messages, model, req_id, tools, protocol_options=None, *, registry_entry=None):
     try:
         async with tracked_request(state, req_id):
             resp = web.StreamResponse(
@@ -96,7 +97,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
             try:
                 block_idx, block_type, _full_answer, early_return, pending_tc_count, all_tool_calls, usage_tracker = await _stream_anthropic(
                     resp, state, messages, model, tools, req_id, disconnected, protocol_options,
-                    msg_id=msg_id,
+                    msg_id=msg_id, registry_entry=registry_entry,
                 )
             except asyncio.CancelledError:
                 logger.info("Anthropic stream cancelled during shutdown %s", req_id)
@@ -122,6 +123,26 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
         return handler_error_response(exc, label="Anthropic stream")
 
 
+def _resolve_anthropic_model(state, requested_model: str):
+    from handlers.model_resolve import resolve_handler_model_entry
+    from server.model.model_registry import ModelResolveError
+
+    registry_entry = resolve_handler_model_entry(state, str(requested_model))
+    return registry_entry, registry_entry.internal_id
+
+
+def _parse_anthropic_body(body: Dict[str, Any], state):
+    raw_messages = body.get("messages", [])
+    system = body.get("system")
+    requested_model = body.get("model", state.model)
+    registry_entry, model = _resolve_anthropic_model(state, requested_model)
+    stream = body.get("stream", False)
+    tools = _normalize_anthropic_tools(body.get("tools", []) or [])
+    messages = prepend_anthropic_system(_normalize_anthropic_messages(raw_messages), system)
+    protocol_options = _build_anthropic_protocol_options(body)
+    return registry_entry, model, stream, tools, messages, protocol_options
+
+
 async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse:
     state = get_state()
     if state.is_shutting_down:
@@ -133,29 +154,19 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
         return client_disconnected_response()
     except json.JSONDecodeError:
         return _error_response(400, "Invalid JSON body")
-    raw_messages = body.get("messages", [])
-    system = body.get("system")
-    requested_model = body.get("model", state.model)
     try:
-        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
-
-        model = resolve_handler_model(state, str(requested_model))
+        registry_entry, model, stream, tools, messages, protocol_options = _parse_anthropic_body(body, state)
     except Exception as exc:
+        from handlers.model_resolve import model_resolve_error_response
         from server.model.model_registry import ModelResolveError
 
+        if isinstance(exc, ValueError):
+            return _error_response(400, str(exc))
         if isinstance(exc, ModelResolveError):
             return model_resolve_error_response(exc)
         raise
-    stream = body.get("stream", False)
-    tools = _normalize_anthropic_tools(body.get("tools", []) or [])
-    messages = _normalize_anthropic_messages(raw_messages)
-    messages = prepend_anthropic_system(messages, system)
     if not messages:
         return _error_response(400, "messages is required")
-    try:
-        protocol_options = _build_anthropic_protocol_options(body)
-    except ValueError as e:
-        return _error_response(400, str(e))
     req_level = protocol_thinking_level(protocol_options)
     _, _, use_entml = resolve_qwen_thinking(model, req_level)
     qwen_thinking = not use_entml and (always_qwen_thinking(model) or thinking_level_is_active(req_level))
@@ -167,7 +178,9 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     if not stream:
         return await _handle_non_stream(
             state, messages, model, req_id, tools, protocol_options,
+            registry_entry=registry_entry,
         )
     return await _handle_stream(
         request, state, messages, model, req_id, tools, protocol_options,
+        registry_entry=registry_entry,
     )
