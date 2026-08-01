@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any, Dict, List, Optional
 
+from handlers.api_errors import safe_write as _safe_write
 from server.formats import build_openai_chunk, build_openai_stream_usage_chunk, _fix_tool_call_id, _gen_tool_id
 
 _STREAM_CHUNK_SIZE = 20
-
-
-async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
-    if disconnected[0]:
-        return False
-    try:
-        await resp.write(data)
-        return True
-    except (ConnectionError, OSError, asyncio.CancelledError):
-        disconnected[0] = True
-        return False
 
 
 async def _emit_chunk(resp, chunk: Dict[str, Any], disconnected: list) -> bool:

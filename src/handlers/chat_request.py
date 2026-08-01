@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+"""双协议 chat 入口样板 + 上游 inject/截断准备。"""
+
+import json
+import logging
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+from aiohttp import web
+
+from handlers import extract_system_for_inject
+from handlers.api_errors import model_resolve_error_response, resolve_handler_model
+from handlers.fncall_inject import inject_fncall_for_request
+from handlers.openai.protocol import _inject_protocol_options
+from handlers.openai.thinking import protocol_thinking_level, thinking_level_is_active
+from handlers.openai.tools import convert_tools_to_openai
+from server.formats import (
+    ClientDisconnectedError,
+    _error_response,
+    _gen_request_id,
+    client_disconnected_response,
+    read_request_json,
+)
+from server.model.model_registry import ModelResolveError
+from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
+
+logger = logging.getLogger("rogator")
+
+ChatJsonResult = Union[dict, web.Response]
+ChatModelResult = Union[str, web.Response]
+PrepareResult = Tuple[List[Dict[str, Any]], str, bool, str, bool]
+
+
+async def read_chat_json(request: web.Request, *, protocol: str) -> ChatJsonResult:
+    try:
+        return await read_request_json(request)
+    except ClientDisconnectedError:
+        logger.info(
+            "%s client disconnected while reading body from %s",
+            protocol.capitalize(),
+            request.remote,
+        )
+        return client_disconnected_response()
+    except json.JSONDecodeError:
+        return _error_response(400, "Invalid JSON body")
+
+
+def resolve_chat_model(state: Any, requested: Any) -> ChatModelResult:
+    try:
+        return resolve_handler_model(state, str(requested))
+    except ModelResolveError as exc:
+        return model_resolve_error_response(exc)
+
+
+def log_chat_request(
+    *,
+    protocol: str,
+    messages: list,
+    model: str,
+    stream: bool,
+    tools: list,
+    protocol_options: Optional[dict],
+) -> None:
+    req_level = protocol_thinking_level(protocol_options)
+    _, _, use_entml = resolve_qwen_thinking(model, req_level)
+    qwen_thinking = not use_entml and (
+        always_qwen_thinking(model) or thinking_level_is_active(req_level)
+    )
+    logger.info(
+        "%s: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
+        protocol.capitalize(),
+        len(messages),
+        model,
+        stream,
+        len(tools),
+        req_level,
+        qwen_thinking,
+    )
+
+
+def new_request_id() -> str:
+    return _gen_request_id()
+
+
+def prepare_injected_messages(
+    state: Any,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]],
+    req_id: str,
+    model: str,
+    protocol_options: Optional[Dict[str, Any]],
+    prompt_api: str,
+) -> PrepareResult:
+    """返回 (injected_messages, full_content, qwen_enabled, qwen_mode, use_entml)。"""
+    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
+        model, protocol_thinking_level(protocol_options),
+    )
+    inject_options = _inject_protocol_options(protocol_options, use_entml)
+    user_system_prompt, messages = extract_system_for_inject(messages)
+    injected = inject_fncall_for_request(
+        messages,
+        convert_tools_to_openai(tools),
+        state.protocol,
+        req_id=req_id,
+        api=prompt_api,
+        model=model,
+        lang="zh",
+        user_system_prompt=user_system_prompt,
+        protocol_options=inject_options,
+    )
+    full_content = injected[0].get("content") or ""
+    return injected, full_content, qwen_enabled, qwen_mode, use_entml
+
+
+def apply_prompt_budget(
+    state: Any,
+    injected: List[Dict[str, Any]],
+    full_content: str,
+    *,
+    use_file_split: bool = False,
+) -> Tuple[List[Dict[str, Any]], str, Optional[str], Optional[bytes]]:
+    """截断 prompt；``use_file_split=True`` 走 splitter.split（Qwen）。"""
+    splitter = getattr(state, "splitter", None)
+    if use_file_split and splitter is not None and hasattr(splitter, "split"):
+        send_text, filename, file_bytes = splitter.split(full_content)
+        messages = list(injected)
+        messages[0] = {**messages[0], "content": send_text}
+        return messages, send_text, filename, file_bytes
+    send_text = full_content
+    max_chars = int(getattr(splitter, "max_chars", 0) or 0) if splitter else 0
+    send_full = bool(getattr(splitter, "send_full_prompt", True)) if splitter else True
+    if not send_full and max_chars > 0 and len(send_text) > max_chars:
+        send_text = send_text[-max_chars:]
+        return [{**injected[0], "content": send_text}], send_text, None, None
+    return injected, send_text, None, None

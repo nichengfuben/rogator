@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from handlers.api_errors import safe_write as _safe_write
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id
 
 _STREAM_CHUNK_SIZE = 20
@@ -88,17 +88,6 @@ def _anthropic_event_bytes(event: Dict[str, Any]) -> bytes:
         f"event: {event['type']}\n"
         f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
     ).encode("utf-8")
-
-
-async def _safe_write(resp, data: bytes, disconnected: list) -> bool:
-    if disconnected[0]:
-        return False
-    try:
-        await resp.write(data)
-        return True
-    except (ConnectionError, OSError, asyncio.CancelledError):
-        disconnected[0] = True
-        return False
 
 
 async def _write_stream_error(resp, error_msg: dict, disconnected: list) -> None:

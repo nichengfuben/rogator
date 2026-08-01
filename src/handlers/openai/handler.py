@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -11,7 +10,7 @@ from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
 from handlers import get_state
-from handlers.api_errors import handler_error_response
+from handlers.api_errors import classify_stream_error, handler_error_response
 from handlers.openai.chat import _chat_once, _process_openai_non_stream, _resolve_retry_client
 from handlers.openai.protocol import _build_protocol_options
 from handlers.openai.stream_tools import (
@@ -23,25 +22,17 @@ from handlers.openai.stream_tools import (
     _send_stream_finish,
     _write_openai_stream_error,
 )
-from handlers.openai.thinking import protocol_thinking_level, thinking_level_is_active
 from server.config import CONFIG
 from server.formats import (
-    TokenExpiredError,
-    UpstreamTimeoutError,
     UpstreamUsageTracker,
     log_qwen_upstream_usage,
     openai_stream_include_usage,
-    ClientDisconnectedError,
     _error_response,
     _fix_tool_call_id,
     _gen_chatcmpl_id,
-    _gen_request_id,
     _json_response,
     build_openai_chunk,
-    client_disconnected_response,
-    read_request_json,
 )
-from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
 from server.records.response_record import record_raw_response
 from server.retry import stream_with_session_retry
 from state import QueueFullError, tracked_request
@@ -254,6 +245,19 @@ async def _run_openai_event_stream(st: OpenAIStreamState, state, messages, model
                     break
 
 
+async def _write_classified_openai_stream_error(resp, exc: BaseException, disconnected: list) -> None:
+    info = classify_stream_error(exc)
+    if info.kind == "rate_limited":
+        logger.warning("OpenAI stream token expired: %s", exc)
+    elif info.kind == "timeout":
+        logger.warning("OpenAI stream upstream timeout: %s", exc)
+    else:
+        logger.error("OpenAI stream error: %s", exc, exc_info=True)
+    await _write_openai_stream_error(
+        resp, info.message, disconnected, error_type=info.kind, code=info.code,
+    )
+
+
 async def _run_openai_stream_guarded(
     st: OpenAIStreamState, state, messages, model, tools, protocol_options, req_id, resp,
 ) -> Optional[web.StreamResponse]:
@@ -263,17 +267,8 @@ async def _run_openai_stream_guarded(
         logger.info("OpenAI stream cancelled %s", req_id)
         await _safe_write(resp, b"data: [DONE]\n\n", st.disconnected)
         raise
-    except TokenExpiredError as e:
-        logger.warning("OpenAI stream token expired: %s", e)
-        await _write_openai_stream_error(resp, str(e), st.disconnected, error_type="rate_limited", code=429)
-        return resp
-    except UpstreamTimeoutError as e:
-        logger.warning("OpenAI stream upstream timeout: %s", e)
-        await _write_openai_stream_error(resp, str(e), st.disconnected, error_type="timeout", code=504)
-        return resp
     except Exception as e:
-        logger.error("OpenAI stream error: %s", e, exc_info=True)
-        await _write_openai_stream_error(resp, str(e), st.disconnected)
+        await _write_classified_openai_stream_error(resp, e, st.disconnected)
         return resp
     return None
 
@@ -329,13 +324,9 @@ async def _handle_stream(
             except asyncio.CancelledError:
                 logger.info("OpenAI stream cancelled during shutdown %s", req_id)
                 raise
-            except UpstreamTimeoutError as e:
-                logger.warning("OpenAI stream upstream timeout (uncaught path) %s: %s", req_id, e)
-                await _write_openai_stream_error(resp, str(e), st.disconnected, error_type="timeout", code=504)
-                return resp
             except Exception as e:
                 logger.error("OpenAI stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
-                await _write_openai_stream_error(resp, str(e), st.disconnected)
+                await _write_classified_openai_stream_error(resp, e, st.disconnected)
                 return resp
             finally:
                 log_qwen_upstream_usage(req_id, st.usage_tracker)
@@ -344,43 +335,39 @@ async def _handle_stream(
 
 
 async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
+    from handlers.chat_request import (
+        log_chat_request,
+        new_request_id,
+        read_chat_json,
+        resolve_chat_model,
+    )
+
     state = get_state()
     if state.is_shutting_down:
         return web.Response(status=503, text="Shutting down")
     if state.scheduler.pending >= CONFIG.max_queue_size:
         return web.Response(status=503, text="Busy")
-    try:
-        body = await read_request_json(request)
-    except ClientDisconnectedError:
-        logger.info("OpenAI client disconnected while reading body from %s", request.remote)
-        return client_disconnected_response()
-    except json.JSONDecodeError:
-        return _error_response(400, "Invalid JSON body")
+    body = await read_chat_json(request, protocol="openai")
+    if isinstance(body, web.Response):
+        return body
     messages = body.get("messages", [])
-    requested_model = body.get("model", state.model)
-    try:
-        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
-
-        model = resolve_handler_model(state, str(requested_model))
-    except Exception as exc:
-        from server.model.model_registry import ModelResolveError
-
-        if isinstance(exc, ModelResolveError):
-            return model_resolve_error_response(exc)
-        raise
+    model = resolve_chat_model(state, body.get("model", state.model))
+    if isinstance(model, web.Response):
+        return model
     stream = body.get("stream", False)
     tools = body.get("tools", [])
     if not messages:
         return _error_response(400, "messages is required")
     protocol_options = _build_protocol_options(body)
-    req_level = protocol_thinking_level(protocol_options)
-    _, _, use_entml = resolve_qwen_thinking(model, req_level)
-    qwen_thinking = not use_entml and (always_qwen_thinking(model) or thinking_level_is_active(req_level))
-    logger.info(
-        "OpenAI: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
-        len(messages), model, stream, len(tools), req_level, qwen_thinking,
+    log_chat_request(
+        protocol="openai",
+        messages=messages,
+        model=model,
+        stream=stream,
+        tools=tools,
+        protocol_options=protocol_options,
     )
-    req_id = _gen_request_id()
+    req_id = new_request_id()
     if not stream:
         return await _handle_non_stream(state, messages, model, req_id, tools, protocol_options)
     return await _handle_stream(

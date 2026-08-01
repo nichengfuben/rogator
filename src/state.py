@@ -21,7 +21,6 @@ from state_sched import (
     ActiveRequestTracker,
     RequestScheduler,
     models_refresh_loop,
-    run_resilient,
     start_background_tasks,
     tracked_request,
 )
@@ -29,7 +28,6 @@ from core.transport.http import close_shared_connector
 
 logger = get_logger("rogator")
 
-_run_resilient = run_resilient
 MAX_QUEUE_SIZE = CONFIG.max_queue_size
 
 
@@ -157,39 +155,41 @@ class AppState:
     def is_shutting_down(self) -> bool:
         return self._shutdown_requested or self.shutdown_event.is_set()
 
+    def _should_skip_model_refresh(
+        self, name: str, client: Any, *, require_session: bool, force: bool, interval: float,
+    ) -> bool:
+        if not force and hasattr(client, "models_refresh_due"):
+            if not client.models_refresh_due(interval):
+                if name == "qwen":
+                    logger.debug(
+                        "Refresh models skipped: cache fresh (%.0fs ago, interval=%.0fs)",
+                        time.time() - getattr(client, "_models_fetch_time", 0.0),
+                        interval,
+                    )
+                return True
+        if name == "qwen" and require_session and valid_session_count(client._sessions) == 0:
+            logger.debug("Refresh models skipped: no valid session")
+            return True
+        return False
+
     async def refresh_models(self, *, require_session: bool = False, force: bool = False) -> None:
         try:
             updated = False
-            qwen = self._clients.get("qwen")
-            if qwen is not None:
-                if not force and not qwen.models_refresh_due(CONFIG.models_refresh_interval):
-                    logger.debug(
-                        "Refresh models skipped: cache fresh (%.0fs ago, interval=%.0fs)",
-                        time.time() - qwen._models_fetch_time,
-                        CONFIG.models_refresh_interval,
-                    )
-                elif require_session and valid_session_count(qwen._sessions) == 0:
-                    logger.debug("Refresh models skipped: no valid session")
-                else:
-                    models = await qwen.fetch_models(use_cache=not force)
-                    if models:
-                        self._models_inventory["qwen"] = set(models)
-                        updated = True
-                        logger.info("Refreshed qwen models: %d", len(models))
+            interval = CONFIG.models_refresh_interval
             for name, client in self._clients.items():
-                if name == "qwen":
-                    continue
                 fetch = getattr(client, "fetch_models", None)
                 if not callable(fetch):
                     continue
-                if not force and hasattr(client, "models_refresh_due"):
-                    if not client.models_refresh_due(CONFIG.models_refresh_interval):
-                        continue
+                if self._should_skip_model_refresh(
+                    name, client, require_session=require_session, force=force, interval=interval,
+                ):
+                    continue
                 models = await fetch(use_cache=not force)
-                if models:
-                    self._models_inventory[name] = set(models)
-                    updated = True
-                    logger.info("Refreshed %s models: %d", name, len(models))
+                if not models:
+                    continue
+                self._models_inventory[name] = set(models)
+                updated = True
+                logger.info("Refreshed %s models: %d", name, len(models))
             if updated:
                 self._rebuild_unified_models()
         except Exception as e:

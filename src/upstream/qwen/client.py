@@ -30,7 +30,6 @@ from server.formats import (
     extract_last_user_content,
 )
 from server.config import CONFIG
-from server.model.model_meta import ModelMeta
 
 logger = logging.getLogger("rogator")
 
@@ -40,10 +39,8 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         self._splitter = splitter
         self._init_session_pool()
         self._init_http_transport()
+        self._init_models_cache(list(DEFAULT_MODELS))
         self._lock = asyncio.Lock()
-        self._models: List[str] = list(DEFAULT_MODELS)
-        self._model_meta: Dict[str, ModelMeta] = {}
-        self._models_fetch_time: float = 0.0
         self._prelogin_target: int = CONFIG.prelogin
         self._login_interval: float = CONFIG.login_interval
 

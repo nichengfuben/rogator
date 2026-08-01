@@ -1,17 +1,55 @@
 from __future__ import annotations
 
-"""Handler 层共享的 HTTP / SSE 错误响应映射。"""
+"""Handler 层共享：HTTP/SSE 错误映射、模型解析、断连安全 write。"""
 
 import asyncio
+from dataclasses import dataclass
 
 from aiohttp import web
 
 from echotools.logger import get_logger
 from server.formats import TokenExpiredError, UpstreamTimeoutError, _error_response
-from server.model.model_registry import ModelResolveError
-from state import QueueFullError
+from server.model.model_registry import ModelResolveError, resolve_request_model
+from state import AppState, QueueFullError
 
 logger = get_logger("rogator")
+
+
+@dataclass(frozen=True)
+class StreamErrorInfo:
+    """流式错误分类：协议层只负责按 kind 写 SSE。"""
+
+    kind: str
+    message: str
+    code: int
+
+
+def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
+    if isinstance(exc, TokenExpiredError):
+        return StreamErrorInfo("rate_limited", str(exc), 429)
+    if isinstance(exc, UpstreamTimeoutError):
+        return StreamErrorInfo("timeout", str(exc), 504)
+    return StreamErrorInfo("server_error", str(exc), 500)
+
+
+async def safe_write(resp, data: bytes, disconnected: list) -> bool:
+    if disconnected[0]:
+        return False
+    try:
+        await resp.write(data)
+        return True
+    except (ConnectionError, OSError, asyncio.CancelledError):
+        disconnected[0] = True
+        return False
+
+
+def resolve_handler_model(state: AppState, requested: str) -> str:
+    """解析 API 模型外键，返回上游内键。"""
+    return resolve_request_model(requested, state._models).internal_id
+
+
+def model_resolve_error_response(exc: ModelResolveError) -> web.Response:
+    return _error_response(exc.status, exc.message, exc.error_type)
 
 
 def handler_error_response(exc: BaseException, *, label: str) -> web.Response:

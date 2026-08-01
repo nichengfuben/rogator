@@ -12,6 +12,7 @@ import aiohttp
 from core.transport.conn_retry import run_with_connection_retry
 from core.transport.owned import HttpTransportMixin
 from core.session.accounts import Account, accounts_for_upstream
+from core.session.models_cache import ModelsCacheMixin
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
 from upstream.deepseek.lib.adapter.client import DeepseekClient
@@ -25,18 +26,16 @@ from server.formats import UpstreamUnavailableError
 logger = logging.getLogger("rogator")
 
 
-class DeepSeekClient(HttpTransportMixin, SessionLoginMixin):
+class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
     UPSTREAM_NAME = "deepseek"
 
     def __init__(self, splitter: Any = None) -> None:
         self._splitter = splitter
         self._init_session_pool()
         self._init_http_transport()
+        self._init_models_cache(list(MODELS))
         self._lock = asyncio.Lock()
         self._inner: Optional[DeepseekClient] = None
-        self._models: List[str] = list(MODELS)
-        self._model_meta: Dict[str, Any] = {}
-        self._models_fetch_time: float = 0.0
         self._startup_done: bool = False
         self._startup_lock = asyncio.Lock()
         from server.config import CONFIG
@@ -46,13 +45,6 @@ class DeepSeekClient(HttpTransportMixin, SessionLoginMixin):
 
     def load_models_cache(self) -> List[str]:
         return list(self._models)
-
-    def models_refresh_due(self, interval: float) -> bool:
-        if interval <= 0:
-            return True
-        if self._models_fetch_time <= 0:
-            return True
-        return (time.time() - self._models_fetch_time) >= interval
 
     async def fetch_models(self, *, use_cache: bool = True) -> List[str]:
         self._models_fetch_time = time.time()

@@ -9,7 +9,7 @@ from aiohttp import web
 
 from echotools.logger import get_logger
 from handlers import get_state
-from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
+from handlers.api_errors import model_resolve_error_response, resolve_handler_model
 from core.registry import get_registry
 from server.formats import (
     ClientDisconnectedError,

@@ -4,9 +4,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from server.formats import (
-    TokenExpiredError,
     UpstreamUsageTracker,
-    UpstreamTimeoutError,
     _fix_tool_call_id,
     log_qwen_upstream_usage,
 )
@@ -14,6 +12,7 @@ from server.records.response_record import record_raw_response
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
+from handlers.api_errors import classify_stream_error
 from handlers.anthro.stream_content import _process_anthropic_content_events, _stream_event_loop
 from handlers.anthro.events import (
     AnthropicStreamState,
@@ -64,33 +63,20 @@ async def _maybe_emit_message_start(
     )
 
 
-async def _handle_stream_token_expired(
-    resp, state, usage_tracker, req_id, e, disconnected,
-) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    logger.warning("Anthropic stream token expired: %s", e)
-    await _write_stream_error(
-        resp, {"type": "error", "error": {"message": str(e), "type": "rate_limited"}}, disconnected,
-    )
-    return stream_result_tuple(state, usage_tracker, early_return=True)
-
-
-async def _handle_stream_upstream_timeout(
+async def _handle_classified_stream_error(
     resp, state, usage_tracker, e, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    logger.warning("Anthropic stream upstream timeout: %s", e)
-    await _write_stream_error(
-        resp, {"type": "error", "error": {"message": str(e), "type": "timeout"}}, disconnected,
-    )
-    return stream_result_tuple(state, usage_tracker, early_return=True)
-
-
-async def _handle_stream_generic_error(
-    resp, state, usage_tracker, e, disconnected,
-) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
-    logger.error("Anthropic stream error: %s", e, exc_info=True)
-    await _write_stream_error(
-        resp, {"type": "error", "error": {"message": str(e)}}, disconnected,
-    )
+    info = classify_stream_error(e)
+    if info.kind == "rate_limited":
+        logger.warning("Anthropic stream token expired: %s", e)
+    elif info.kind == "timeout":
+        logger.warning("Anthropic stream upstream timeout: %s", e)
+    else:
+        logger.error("Anthropic stream error: %s", e, exc_info=True)
+    err_body: Dict[str, Any] = {"message": info.message}
+    if info.kind != "server_error":
+        err_body["type"] = info.kind
+    await _write_stream_error(resp, {"type": "error", "error": err_body}, disconnected)
     return stream_result_tuple(state, usage_tracker, early_return=True)
 
 
@@ -300,16 +286,8 @@ async def _stream_anthropic(
         except asyncio.CancelledError:
             logger.info("Stream cancelled %s", req_id)
             raise
-        except TokenExpiredError as e:
-            return await _handle_stream_token_expired(
-                resp, stream_state, usage_tracker, req_id, e, disconnected,
-            )
-        except UpstreamTimeoutError as e:
-            return await _handle_stream_upstream_timeout(
-                resp, stream_state, usage_tracker, e, disconnected,
-            )
         except Exception as e:
-            return await _handle_stream_generic_error(
+            return await _handle_classified_stream_error(
                 resp, stream_state, usage_tracker, e, disconnected,
             )
         finally:

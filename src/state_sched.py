@@ -10,11 +10,6 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 from echotools.logger import get_logger
 
 from server.config import CONFIG
-from server.formats import (
-    MAX_REQUEST_RESTARTS,
-    RESTART_DELAY,
-    TokenExpiredError,
-)
 
 if TYPE_CHECKING:
     from state import AppState, QueueFullError
@@ -161,51 +156,6 @@ async def tracked_request(state: "AppState", req_id: str) -> AsyncIterator[None]
         if slot_acquired:
             await state.scheduler.release_slot()
         await state.tracker.unregister(req_id)
-
-
-async def run_resilient(req_id: str, state: "AppState", func) -> Any:
-    attempts = 0
-    last_error: Optional[Exception] = None
-    qwen = state._clients.get("qwen")
-    while True:
-        if state.is_shutting_down:
-            raise asyncio.CancelledError("Shutting down")
-        task = asyncio.current_task()
-        await state.tracker.register(req_id, task)
-        try:
-            return await func()
-        except asyncio.CancelledError:
-            if state.is_shutting_down:
-                raise
-            attempts += 1
-            logger.debug("Resilient: %s cancelled (restart #%d)", req_id, attempts)
-        except TokenExpiredError as e:
-            logger.warning("Token expired for %s: %s", req_id, e)
-            if qwen is None:
-                raise RuntimeError("No Qwen client for token retry") from e
-            new_session = await qwen.switch_to_next()
-            if new_session is None:
-                raise RuntimeError("All sessions expired, no valid session available") from e
-            logger.info("Switched to session %s, retrying %s", new_session.username[:6], req_id)
-            attempts += 1
-        except Exception as e:
-            last_error = e
-            attempts += 1
-            error_str = str(e)
-            logger.debug("Resilient retry %s #%d: %s", req_id, attempts, error_str[:200])
-            if qwen and ("401" in error_str or "unauthorized" in error_str.lower()):
-                await qwen.switch_to_next()
-        finally:
-            await state.tracker.unregister(req_id)
-        if MAX_REQUEST_RESTARTS != -1 and attempts >= MAX_REQUEST_RESTARTS:
-            raise RuntimeError(f"Max restarts ({MAX_REQUEST_RESTARTS}) exceeded for {req_id}") from last_error
-        delay = RESTART_DELAY * (2 ** (attempts - 1))
-        try:
-            await asyncio.wait_for(state.shutdown_event.wait(), timeout=delay)
-        except asyncio.TimeoutError:
-            pass
-        else:
-            raise asyncio.CancelledError("Shutting down")
 
 
 async def models_refresh_loop(state: "AppState") -> None:

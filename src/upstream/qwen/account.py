@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from core.session.accounts import Account
+from core.session.models_cache import ModelsCacheMixin
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
 from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
@@ -100,18 +101,7 @@ class QwenLoginMixin(SessionLoginMixin):
             return None
 
 
-class ModelsFetchMixin:
-    _models: List[str]
-    _model_meta: Dict[str, ModelMeta]
-    _models_fetch_time: float
-
-    def models_refresh_due(self, interval: float) -> bool:
-        if interval <= 0:
-            return True
-        if self._models_fetch_time <= 0:
-            return True
-        return (time.time() - self._models_fetch_time) >= interval
-
+class ModelsFetchMixin(ModelsCacheMixin):
     async def _fetch_models_remote(self, s, session, now: float, keep_cached) -> List[str]:
         headers = build_headers(session.token)
         headers["Accept"] = "application/json"

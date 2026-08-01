@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any, Dict, Optional
 
 from aiohttp import web
@@ -9,25 +8,20 @@ from aiohttp import web
 from echotools.logger import get_logger
 
 from server.formats import (
-    ClientDisconnectedError,
-    UpstreamTimeoutError,
     _error_response,
     _gen_msg_id,
-    _gen_request_id,
     _json_response,
-    client_disconnected_response,
     convert_to_anthropic,
-    read_request_json,
 )
-from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
-
 from handlers import get_state, prepend_anthropic_system
-from handlers.api_errors import handler_error_response
-from handlers.openai import (
-    _process_openai_non_stream,
-    protocol_thinking_level,
-    thinking_level_is_active,
+from handlers.api_errors import classify_stream_error, handler_error_response
+from handlers.chat_request import (
+    log_chat_request,
+    new_request_id,
+    read_chat_json,
+    resolve_chat_model,
 )
+from handlers.openai import _process_openai_non_stream
 from handlers.anthro.events import (
     _close_block,
     _send_anthropic_finish,
@@ -74,11 +68,16 @@ async def _handle_non_stream(state, messages, model, req_id, tools, protocol_opt
 
 
 async def _emit_anthropic_handler_stream_error(
-    resp, req_id: str, exc: Exception, disconnected: list, *, error_type: Optional[str] = None,
+    resp, req_id: str, exc: BaseException, disconnected: list,
 ) -> None:
-    err_body: Dict[str, Any] = {"message": str(exc)}
-    if error_type:
-        err_body["type"] = error_type
+    info = classify_stream_error(exc)
+    if info.kind == "timeout":
+        logger.warning("Anthropic stream upstream timeout (uncaught path) %s: %s", req_id, exc)
+    else:
+        logger.error("Anthropic stream error (uncaught path) %s: %s", req_id, exc, exc_info=True)
+    err_body: Dict[str, Any] = {"message": info.message}
+    if info.kind != "server_error":
+        err_body["type"] = info.kind
     await _write_stream_error(resp, {"type": "error", "error": err_body}, disconnected)
 
 
@@ -101,12 +100,7 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
             except asyncio.CancelledError:
                 logger.info("Anthropic stream cancelled during shutdown %s", req_id)
                 raise
-            except UpstreamTimeoutError as e:
-                logger.warning("Anthropic stream upstream timeout (uncaught path) %s: %s", req_id, e)
-                await _emit_anthropic_handler_stream_error(resp, req_id, e, disconnected, error_type="timeout")
-                return resp
             except Exception as e:
-                logger.error("Anthropic stream error (uncaught path) %s: %s", req_id, e, exc_info=True)
                 await _emit_anthropic_handler_stream_error(resp, req_id, e, disconnected)
                 return resp
             if disconnected[0] or early_return:
@@ -126,26 +120,14 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
     state = get_state()
     if state.is_shutting_down:
         return web.Response(status=503, text="Shutting down")
-    try:
-        body = await read_request_json(request)
-    except ClientDisconnectedError:
-        logger.info("Anthropic client disconnected while reading body from %s", request.remote)
-        return client_disconnected_response()
-    except json.JSONDecodeError:
-        return _error_response(400, "Invalid JSON body")
+    body = await read_chat_json(request, protocol="anthropic")
+    if isinstance(body, web.Response):
+        return body
     raw_messages = body.get("messages", [])
     system = body.get("system")
-    requested_model = body.get("model", state.model)
-    try:
-        from handlers.model_resolve import model_resolve_error_response, resolve_handler_model
-
-        model = resolve_handler_model(state, str(requested_model))
-    except Exception as exc:
-        from server.model.model_registry import ModelResolveError
-
-        if isinstance(exc, ModelResolveError):
-            return model_resolve_error_response(exc)
-        raise
+    model = resolve_chat_model(state, body.get("model", state.model))
+    if isinstance(model, web.Response):
+        return model
     stream = body.get("stream", False)
     tools = _normalize_anthropic_tools(body.get("tools", []) or [])
     messages = _normalize_anthropic_messages(raw_messages)
@@ -156,14 +138,15 @@ async def anthropic_messages_handler(request: web.Request) -> web.StreamResponse
         protocol_options = _build_anthropic_protocol_options(body)
     except ValueError as e:
         return _error_response(400, str(e))
-    req_level = protocol_thinking_level(protocol_options)
-    _, _, use_entml = resolve_qwen_thinking(model, req_level)
-    qwen_thinking = not use_entml and (always_qwen_thinking(model) or thinking_level_is_active(req_level))
-    logger.info(
-        "Anthropic: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
-        len(messages), model, stream, len(tools), req_level, qwen_thinking,
+    log_chat_request(
+        protocol="anthropic",
+        messages=messages,
+        model=model,
+        stream=stream,
+        tools=tools,
+        protocol_options=protocol_options,
     )
-    req_id = _gen_request_id()
+    req_id = new_request_id()
     if not stream:
         return await _handle_non_stream(
             state, messages, model, req_id, tools, protocol_options,

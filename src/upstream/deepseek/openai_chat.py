@@ -8,12 +8,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from echotools.logger import get_logger
 
 from core.transport.conn_retry import reraise_transport_error
-from handlers import extract_system_for_inject
-from handlers.fncall_inject import inject_fncall_for_request
-from handlers.openai.protocol import _inject_protocol_options
-from handlers.openai.thinking import protocol_thinking_level
-from handlers.openai.tools import convert_tools_to_openai
-from server.model.model_thinking import resolve_qwen_thinking
+from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from upstream.deepseek.lib.adapter.helpers.biz_error import (
     DeepSeekAccountsExhaustedError,
     DeepSeekUserMutedError,
@@ -45,26 +40,14 @@ def _prepare_messages(
     model: str,
     protocol_options: Optional[Dict[str, Any]],
     prompt_api: str,
-) -> Tuple[List[Dict[str, Any]], str]:
-    _, _, use_entml = resolve_qwen_thinking(model, protocol_thinking_level(protocol_options))
-    inject_options = _inject_protocol_options(protocol_options, use_entml)
-    user_system_prompt, messages = extract_system_for_inject(messages)
-    injected = inject_fncall_for_request(
-        messages,
-        convert_tools_to_openai(tools),
-        state.protocol,
-        req_id=req_id,
-        api=prompt_api,
-        model=model,
-        lang="zh",
-        user_system_prompt=user_system_prompt,
-        protocol_options=inject_options,
+) -> Tuple[List[Dict[str, Any]], str, bool]:
+    injected, full_content, qwen_enabled, _mode, _entml = prepare_injected_messages(
+        state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
-    send_text = injected[0].get("content") or ""
-    if state.splitter.send_full_prompt or len(send_text) <= state.splitter.max_chars:
-        return injected, send_text
-    send_text = send_text[-state.splitter.max_chars:]
-    return [{**injected[0], "content": send_text}], send_text
+    final_messages, send_text, _filename, _file_bytes = apply_prompt_budget(
+        state, injected, full_content,
+    )
+    return final_messages, send_text, qwen_enabled
 
 
 async def _on_user_muted(
@@ -114,10 +97,7 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    qwen_enabled, _, _ = resolve_qwen_thinking(
-        model, protocol_thinking_level(protocol_options)
-    )
-    final_messages, send_text = _prepare_messages(
+    final_messages, send_text, qwen_enabled = _prepare_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
     if files:

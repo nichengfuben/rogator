@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-NAME = "qwen"
+from upstream.caps import load_capabilities
 
-_PLATFORM_SKIP = frozenset({"thinking", "tools", "native_tools"})
+NAME = "qwen"
 
 _DEFAULT_CAPABILITIES: Dict[str, bool] = {
     "chat": True,
@@ -16,25 +15,7 @@ _DEFAULT_CAPABILITIES: Dict[str, bool] = {
     "tts": True,
 }
 
-
-def _load_capability_overrides() -> Dict[str, bool]:
-    try:
-        from server.config.app_config import _load_upstream_toml
-    except Exception:
-        return {}
-    raw = _load_upstream_toml("qwen")
-    caps = raw.get("capabilities") if isinstance(raw, dict) else None
-    if not isinstance(caps, dict):
-        return {}
-    out: Dict[str, bool] = {}
-    for key, val in caps.items():
-        if key in _PLATFORM_SKIP or key not in _DEFAULT_CAPABILITIES:
-            continue
-        out[str(key)] = bool(val)
-    return out
-
-
-CAPABILITIES: Dict[str, bool] = {**_DEFAULT_CAPABILITIES, **_load_capability_overrides()}
+CAPABILITIES: Dict[str, bool] = load_capabilities(NAME, _DEFAULT_CAPABILITIES)
 
 
 def create_client(splitter: Any = None) -> Any:

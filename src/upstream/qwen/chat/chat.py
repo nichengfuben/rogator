@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 
 import aiohttp
 
@@ -25,14 +25,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger("rogator")
 
 
+def raise_qwen_session_error(
+    client: "QwenClient",
+    session: QwenSession,
+    text: str,
+    *,
+    http_status: Optional[int] = None,
+) -> None:
+    """若 text/status 表明会话失效则 invalidate 并抛 TokenExpiredError。"""
+    if http_status in (401, 403):
+        client._invalidate_session(session)
+        raise TokenExpiredError(f"Token expired: HTTP {http_status}")
+    if not is_session_fatal_error(text):
+        return
+    client._invalidate_session(session)
+    if "RateLimited" in text or "daily usage" in text:
+        logger.warning("Session %s rate limited", session.username[:6])
+        raise TokenExpiredError(f"Rate limited: {text[:200]}")
+    raise TokenExpiredError(f"Token expired: {text[:200]}")
+
+
 def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict[str, Any]) -> None:
     data_obj = data.get("data") or {}
     if not isinstance(data_obj, dict):
         raise RuntimeError(f"Create chat failed: {data}")
     details = str(data_obj.get("details", ""))
-    if is_session_fatal_error(f"{data_obj.get('code', '')} {details}"):
-        client._invalidate_session(session)
-        raise TokenExpiredError(f"Token expired: {details}")
+    raise_qwen_session_error(
+        client, session, f"{data_obj.get('code', '')} {details}",
+    )
     raise RuntimeError(f"Create chat failed: {data}")
 
 
@@ -73,10 +93,8 @@ async def create_chat_for_session(
         raise UpstreamTimeoutError(f"Create chat timed out after {timeout_s}s") from exc
 
     http_status = data.pop("_http_status", None)
-    if http_status in (401, 403):
-        client._invalidate_session(session)
-        raise TokenExpiredError(f"Token expired: HTTP {http_status}")
     if http_status is not None:
+        raise_qwen_session_error(client, session, "", http_status=http_status)
         raise RuntimeError(f"Create chat HTTP {http_status}")
 
     if not data.get("success"):
@@ -88,18 +106,11 @@ async def create_chat_for_session(
 
 
 async def handle_chat_error(client: QwenClient, resp: aiohttp.ClientResponse, session: QwenSession) -> None:
-    if resp.status in (401, 403):
-        client._invalidate_session(session)
-        raise TokenExpiredError(f"Token expired: HTTP {resp.status}")
+    raise_qwen_session_error(client, session, "", http_status=resp.status)
     body = await resp.text()
     if resp.status == 413:
         raise PayloadTooLargeError(f"Payload too large: {body[:200]}")
-    if is_session_fatal_error(body):
-        client._invalidate_session(session)
-        if "RateLimited" in body or "daily usage" in body:
-            logger.warning("Session %s rate limited", session.username[:6])
-            raise TokenExpiredError(f"Rate limited: {body[:200]}")
-        raise TokenExpiredError(f"Token expired: {body[:200]}")
+    raise_qwen_session_error(client, session, body)
     logger.error("Chat HTTP %d: %s", resp.status, body[:500])
     raise RuntimeError(f"Chat HTTP {resp.status}: {body[:200]}")
 
@@ -111,11 +122,7 @@ def check_sse_error_line(client: QwenClient, line: str, session: QwenSession) ->
     if err.get("success", True):
         return
     msg = json.dumps(err, ensure_ascii=False)
-    if is_session_fatal_error(msg):
-        client._invalidate_session(session)
-        if "RateLimited" in msg or "daily usage" in msg:
-            raise TokenExpiredError(f"Rate limited: {msg}")
-        raise TokenExpiredError(f"Token expired: {msg}")
+    raise_qwen_session_error(client, session, msg)
     raise RuntimeError(f"Qwen API error: {msg}")
 
 

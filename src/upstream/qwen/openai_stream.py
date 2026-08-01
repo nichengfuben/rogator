@@ -6,13 +6,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from echotools.logger import get_logger
 
-from handlers import extract_system_for_inject
-from handlers.fncall_inject import inject_fncall_for_request
-from handlers.openai.protocol import _inject_protocol_options
-from handlers.openai.thinking import protocol_thinking_level
-from handlers.openai.tools import convert_tools_to_openai
+from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from server.formats import TokenExpiredError
-from server.model.model_thinking import resolve_qwen_thinking
 
 logger = get_logger("rogator")
 
@@ -73,33 +68,18 @@ async def _prepare_stream(
     *,
     prompt_api: str = "openai",
 ) -> Tuple[Any, List, List, str, bool, str]:
-    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
-        model, protocol_thinking_level(protocol_options),
+    injected, full_content, qwen_enabled, qwen_mode, _use_entml = prepare_injected_messages(
+        state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
-    inject_options = _inject_protocol_options(protocol_options, use_entml)
-
     session = await client.get_valid_session()
     if not session:
         raise TokenExpiredError("No valid session available")
 
     image_uris = client.extract_base64_images(messages)
     media_urls = client.extract_remote_media_urls(messages)
-    user_system_prompt, messages = extract_system_for_inject(messages)
-    openai_tools = convert_tools_to_openai(tools)
-    injected = inject_fncall_for_request(
-        messages,
-        openai_tools,
-        state.protocol,
-        req_id=req_id,
-        api=prompt_api,
-        model=model,
-        lang="zh",
-        user_system_prompt=user_system_prompt,
-        protocol_options=inject_options,
+    final_messages, send_text, filename, file_bytes = apply_prompt_budget(
+        state, injected, full_content, use_file_split=True,
     )
-    full_content = injected[0]["content"]
-    final_messages = injected
-    send_text, filename, file_bytes = state.splitter.split(full_content)
     files = await _collect_uploaded_files(
         client, session, messages, image_uris, media_urls, filename, file_bytes,
     )

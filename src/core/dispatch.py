@@ -69,23 +69,6 @@ def select_upstream(
     return random.choice(cands)
 
 
-def create_client_for_request(
-    *,
-    model_id: str,
-    splitter: Any,
-    required_capabilities: Sequence[str] = ("chat",),
-    models_by_upstream: Optional[Dict[str, Set[str]]] = None,
-    registry: Optional[UpstreamRegistry] = None,
-) -> Any:
-    mod = select_upstream(
-        model_id=model_id,
-        required_capabilities=required_capabilities,
-        models_by_upstream=models_by_upstream,
-        registry=registry,
-    )
-    return mod.create_client(splitter)
-
-
 def _required_capabilities(
     tools: Optional[List[Dict[str, Any]]],
     messages: Sequence[Dict[str, Any]],
