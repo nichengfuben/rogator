@@ -264,7 +264,8 @@ async def _finish_openai_stream(st: OpenAIStreamState, resp, model, include_usag
     await _send_stream_finish(
         resp, model, st.chunk_id, all_tool_calls, st.disconnected,
         already_sent_tc_count=st.pending_tc_index,
-        usage=usage if emit_usage else None,
+        # include_usage=false 时仍可把 usage 挂在 finish chunk（非官方 null 模式）
+        usage=usage,
         include_usage=emit_usage,
     )
     return resp
