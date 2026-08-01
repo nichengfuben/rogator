@@ -14,7 +14,7 @@ from server.formats import (
     convert_to_anthropic,
 )
 from handlers import get_state, prepend_anthropic_system
-from handlers.api_errors import handler_error_response, log_classified_stream_error
+from handlers.api_errors import classify_stream_error, handler_error_response
 from handlers.chat_request import (
     log_chat_request,
     new_request_id,
@@ -70,9 +70,11 @@ async def _handle_non_stream(state, messages, model, req_id, tools, protocol_opt
 async def _emit_anthropic_handler_stream_error(
     resp, req_id: str, exc: BaseException, disconnected: list,
 ) -> None:
-    info = log_classified_stream_error(
-        exc, label=f"Anthropic stream (uncaught path) {req_id}",
-    )
+    info = classify_stream_error(exc)
+    if info.kind == "timeout":
+        logger.warning("Anthropic stream upstream timeout (uncaught path) %s: %s", req_id, exc)
+    else:
+        logger.error("Anthropic stream error (uncaught path) %s: %s", req_id, exc, exc_info=True)
     err_body: Dict[str, Any] = {"message": info.message}
     if info.kind != "server_error":
         err_body["type"] = info.kind
