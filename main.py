@@ -26,6 +26,7 @@ from aiohttp import web
 from server.config import CONFIG, load_config
 from server.config.files import user_config_path, warn_if_config_version_mismatch
 from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.reload import apply_session_pool_targets, start_config_watcher
 from server.config.shutdown import (
     cancel_leftover_tasks,
     install_asyncio_exception_handler,
@@ -216,6 +217,7 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
         _install_signal_handlers(state)
         install_asyncio_exception_handler(state)
         state.start_background_tasks()
+        state._bg_tasks.append(start_config_watcher(state))
         while not state.shutdown_event.is_set():
             try:
                 await asyncio.wait_for(state.shutdown_event.wait(), timeout=0.25)
@@ -238,15 +240,10 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
 # 异步入口
 # ============================================================
 
-def _apply_session_pool_targets(state: AppState, target: int) -> None:
-    for client in state._clients.values():
-        if hasattr(client, "_prelogin_target"):
-            client._prelogin_target = target
-
-
 async def main_async() -> None:
     """服务器异步主入口（配置来自 config.toml + template/config.toml）。"""
     cfg = load_config()
+    CONFIG.swap(cfg)
     port = cfg.port
     host = cfg.host
     prelogin_count = cfg.prelogin
@@ -259,7 +256,7 @@ async def main_async() -> None:
     app = web.Application(client_max_size=cfg.client_max_body_bytes)
     setup_routes(app)
     state = get_state()
-    _apply_session_pool_targets(state, prelogin_count)
+    apply_session_pool_targets(state, prelogin_count)
     for name, client in state._clients.items():
         cleanup = getattr(client, "cleanup_expired_sessions", None)
         if callable(cleanup):

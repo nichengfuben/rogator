@@ -11,8 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from upstream.qwen.account import Account
 from dataclasses import replace
-from server.config import CONFIG, AppConfig, load_config
-from server.config.app_config import _load_upstream_toml, _loads_toml
+from server.config import CONFIG, AppConfig, get_config, load_config, reload_config
+from server.config.app_config import LiveConfig, _load_upstream_toml, _loads_toml
+from server.config.reload import RESTART_REQUIRED, apply_runtime_config
 from server.config.files import (
     PROJECT_ROOT,
     ensure_user_config_file,
@@ -225,6 +226,92 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(read_server_version(path), None)
             cfg = load_config(path, template_path=_PROJECT_TEMPLATE)
             self.assertEqual(cfg.port, 9001)
+
+
+class TestConfigReload(unittest.TestCase):
+    def test_live_config_identity_survives_swap(self) -> None:
+        self.assertIsInstance(CONFIG, LiveConfig)
+        imported = CONFIG
+        old = get_config()
+        new = replace(old, max_retry_on_error=old.max_retry_on_error + 1)
+        try:
+            CONFIG.swap(new)
+            self.assertIs(imported, CONFIG)
+            self.assertEqual(imported.max_retry_on_error, new.max_retry_on_error)
+            self.assertEqual(get_config().max_retry_on_error, new.max_retry_on_error)
+        finally:
+            CONFIG.swap(old)
+
+    def test_reload_config_applies_hot_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(
+                tmp, "[retry]\nmax_retry_on_error = 9\n",
+            )
+            old = get_config()
+            try:
+                ok = reload_config(path=user_path, template_path=tpl_path)
+                self.assertTrue(ok)
+                self.assertEqual(CONFIG.max_retry_on_error, 9)
+            finally:
+                CONFIG.swap(old)
+
+    def test_reload_config_invalid_keeps_old(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            user_path = root / "config.toml"
+            user_path.write_text("bad[[[", encoding="utf-8")
+            old = get_config()
+            ok = reload_config(path=user_path, template_path=_PROJECT_TEMPLATE)
+            self.assertFalse(ok)
+            self.assertEqual(get_config(), old)
+
+    def test_reload_restart_required_warns(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_path, tpl_path = _write_user_config(
+                tmp, "[server]\nport = 19999\n",
+            )
+            old = get_config()
+            mock_logger = MagicMock()
+            try:
+                with patch("server.config.reload.logger", mock_logger):
+                    ok = reload_config(path=user_path, template_path=tpl_path)
+                self.assertTrue(ok)
+                self.assertEqual(CONFIG.port, 19999)
+                self.assertIn("port", RESTART_REQUIRED)
+                warn_msgs = " ".join(
+                    str(c) for c in mock_logger.warning.call_args_list
+                )
+                self.assertIn("需重启", warn_msgs)
+            finally:
+                CONFIG.swap(old)
+
+    def test_apply_runtime_updates_queue_and_splitter(self) -> None:
+        import state as state_mod
+
+        old_cfg = get_config()
+        old_queue = state_mod.MAX_QUEUE_SIZE
+        splitter = state_mod.LongTextSplitter(
+            max_chars=100, send_full_prompt=False,
+        )
+        state = MagicMock()
+        state.splitter = splitter
+        state._clients = {}
+        state.scheduler = MagicMock()
+        state.scheduler.wake_for_config = AsyncMock()
+        new_cfg = replace(
+            old_cfg,
+            max_queue_size=old_cfg.max_queue_size + 7,
+            qwen_send_max_chars=12345,
+            send_full_prompt=True,
+            prelogin=old_cfg.prelogin,
+        )
+        try:
+            apply_runtime_config(old_cfg, new_cfg, state)
+            self.assertEqual(state_mod.MAX_QUEUE_SIZE, new_cfg.max_queue_size)
+            self.assertEqual(splitter.max_chars, 12345)
+            self.assertTrue(splitter.send_full_prompt)
+        finally:
+            state_mod.MAX_QUEUE_SIZE = old_queue
 
 
 class TestModelThinking(unittest.TestCase):
@@ -524,7 +611,7 @@ class TestSessionRetry(unittest.TestCase):
             raise TokenExpiredError("Rate limited: num 12")
 
         import asyncio
-        with patch("server.retry.session_retry.CONFIG", replace(CONFIG, max_retry_on_error=1)):
+        with patch("server.retry.session_retry.CONFIG", replace(get_config(), max_retry_on_error=1)):
             with self.assertRaises(TokenExpiredError):
                 asyncio.run(run_with_session_retry("req-2", state, _run))
         self.assertEqual(calls["n"], 1)
@@ -540,7 +627,7 @@ class TestSessionRetry(unittest.TestCase):
             return "ok"
 
         import asyncio
-        with patch("server.retry.session_retry.CONFIG", replace(CONFIG, max_retry_on_error=3)):
+        with patch("server.retry.session_retry.CONFIG", replace(get_config(), max_retry_on_error=3)):
             result = asyncio.run(run_with_session_retry("req-3", state, _run))
         self.assertEqual(result, "ok")
         self.assertEqual(calls["n"], 3)
@@ -554,7 +641,7 @@ class TestSessionRetry(unittest.TestCase):
             raise UpstreamTimeoutError("Create chat timed out after 15s")
 
         import asyncio
-        with patch("server.retry.session_retry.CONFIG", replace(CONFIG, max_retry_on_error=3)):
+        with patch("server.retry.session_retry.CONFIG", replace(get_config(), max_retry_on_error=3)):
             with self.assertRaises(UpstreamTimeoutError):
                 asyncio.run(run_with_session_retry("req-4", state, _run))
         self.assertEqual(calls["n"], 4)

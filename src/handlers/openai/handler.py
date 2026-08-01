@@ -24,8 +24,8 @@ from handlers.openai.stream_tools import (
     _write_openai_stream_error,
 )
 from handlers.openai.thinking import protocol_thinking_level, thinking_level_is_active
+from server.config import CONFIG
 from server.formats import (
-    MAX_QUEUE_SIZE,
     TokenExpiredError,
     UpstreamTimeoutError,
     UpstreamUsageTracker,
@@ -347,7 +347,7 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     state = get_state()
     if state.is_shutting_down:
         return web.Response(status=503, text="Shutting down")
-    if state.scheduler.pending >= MAX_QUEUE_SIZE:
+    if state.scheduler.pending >= CONFIG.max_queue_size:
         return web.Response(status=503, text="Busy")
     try:
         body = await read_request_json(request)

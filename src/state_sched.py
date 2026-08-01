@@ -22,17 +22,36 @@ if TYPE_CHECKING:
 logger = get_logger("rogator")
 
 
-def _max_queue_size() -> int:
+def _max_queue_size(fixed: Optional[int] = None) -> int:
+    if fixed is not None:
+        return int(fixed)
     import state as state_mod
     return int(state_mod.MAX_QUEUE_SIZE)
 
 
 class RequestScheduler:
-    def __init__(self, max_concurrent: int, max_queue: int) -> None:
-        self._semaphore = asyncio.Semaphore(max_concurrent) if max_concurrent != -1 else None
+    """并发/队列上限可热更：未传固定值时读 CONFIG / state.MAX_QUEUE_SIZE。"""
+
+    def __init__(
+        self,
+        max_concurrent: Optional[int] = None,
+        max_queue: Optional[int] = None,
+    ) -> None:
+        self._fixed_concurrent = max_concurrent
+        self._fixed_queue = max_queue
+        self._active: int = 0
         self._pending: int = 0
         self._lock = asyncio.Lock()
+        self._cond = asyncio.Condition(self._lock)
         self._shutting_down: bool = False
+
+    def _concurrent_limit(self) -> int:
+        if self._fixed_concurrent is not None:
+            return int(self._fixed_concurrent)
+        return int(CONFIG.max_concurrent)
+
+    def _queue_limit(self) -> int:
+        return _max_queue_size(self._fixed_queue)
 
     @property
     def pending(self) -> int:
@@ -40,6 +59,11 @@ class RequestScheduler:
 
     def mark_shutting_down(self) -> None:
         self._shutting_down = True
+
+    async def wake_for_config(self) -> None:
+        """配置热更后唤醒等待并发槽的协程以重新读上限。"""
+        async with self._cond:
+            self._cond.notify_all()
 
     async def wait_idle(self, timeout: float = 30.0) -> bool:
         start = time.time()
@@ -53,7 +77,7 @@ class RequestScheduler:
         async with self._lock:
             if self._shutting_down:
                 raise QueueFullError("Shutting down")
-            if self._pending >= _max_queue_size():
+            if self._pending >= self._queue_limit():
                 raise QueueFullError("Queue full")
             self._pending += 1
 
@@ -61,29 +85,38 @@ class RequestScheduler:
         async with self._lock:
             self._pending = max(0, self._pending - 1)
 
+    async def _acquire_concurrent(self) -> None:
+        async with self._cond:
+            while True:
+                limit = self._concurrent_limit()
+                if limit == -1 or self._active < limit:
+                    self._active += 1
+                    return
+                await self._cond.wait()
+
+    async def _release_concurrent(self) -> None:
+        async with self._cond:
+            self._active = max(0, self._active - 1)
+            self._cond.notify_all()
+
     async def acquire_slot(self) -> None:
         await self._reserve_pending()
         try:
-            if self._semaphore is not None:
-                await self._semaphore.acquire()
+            await self._acquire_concurrent()
         except BaseException:
             await self._release_pending()
             raise
 
     async def release_slot(self) -> None:
-        if self._semaphore is not None:
-            self._semaphore.release()
+        await self._release_concurrent()
         await self._release_pending()
 
     async def submit(self, coro_factory) -> Any:
-        await self._reserve_pending()
+        await self.acquire_slot()
         try:
-            if self._semaphore is not None:
-                async with self._semaphore:
-                    return await coro_factory()
             return await coro_factory()
         finally:
-            await self._release_pending()
+            await self.release_slot()
 
 
 class ActiveRequestTracker:
@@ -176,10 +209,10 @@ async def run_resilient(req_id: str, state: "AppState", func) -> Any:
 
 
 async def models_refresh_loop(state: "AppState") -> None:
-    interval = max(0.0, CONFIG.models_refresh_interval)
-    if interval <= 0:
-        return
     while not state.is_shutting_down:
+        interval = max(0.0, CONFIG.models_refresh_interval)
+        if interval <= 0:
+            return
         await state.refresh_models(require_session=True)
         try:
             await asyncio.wait_for(state.shutdown_event.wait(), timeout=interval)

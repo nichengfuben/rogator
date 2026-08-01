@@ -1,6 +1,23 @@
 from __future__ import annotations
 
-from server.config.app_config import CONFIG, AppConfig, LOG_DIR, load_config, resolve_log_path
+from server.config.app_config import (
+    CONFIG,
+    AppConfig,
+    LOG_DIR,
+    LiveConfig,
+    get_config,
+    load_config,
+    resolve_log_path,
+)
+from server.config.reload import (
+    RESTART_REQUIRED,
+    apply_runtime_config,
+    apply_session_pool_targets,
+    config_watch_loop,
+    reload_config,
+    start_config_watcher,
+    watched_config_paths,
+)
 from server.config.files import (
     LEGACY_DIR_CONFIG,
     LEGACY_UPSTREAM_DEFAULTS_NAME,
@@ -35,19 +52,26 @@ from server.config.shutdown import (
 __all__ = [
     "CONFIG",
     "AppConfig",
+    "LiveConfig",
     "LOG_DIR",
     "LEGACY_DIR_CONFIG",
     "LEGACY_UPSTREAM_DEFAULTS_NAME",
     "PROJECT_ROOT",
+    "RESTART_REQUIRED",
     "TEMPLATE_DIR",
     "UPSTREAM_CONFIG_TEMPLATE_NAME",
     "UPSTREAM_TEMPLATE_DIR_NAME",
     "USER_CONFIG_PATH",
     "USER_CONFIGS_DIR",
+    "apply_runtime_config",
+    "apply_session_pool_targets",
+    "config_watch_loop",
     "ensure_user_config_file",
+    "get_config",
     "load_config",
     "overlay_user_config",
     "read_server_version",
+    "reload_config",
     "resolve_access_log",
     "resolve_log_file_path",
     "resolve_log_path",
@@ -57,9 +81,11 @@ __all__ = [
     "install_asyncio_exception_handler",
     "install_signal_handlers",
     "reset_shutdown_signal_state_for_tests",
+    "start_config_watcher",
     "template_config_path",
     "upstream_config_template_path",
     "upstream_template_dir",
     "user_config_path",
     "warn_if_config_version_mismatch",
+    "watched_config_paths",
 ]

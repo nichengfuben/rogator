@@ -11,7 +11,7 @@ import pytest
 
 from echotools.fncall import get_protocol
 from handlers.fncall_inject import inject_fncall_for_request, prompt_dump_dir
-from server.config import CONFIG
+from server.config import get_config
 
 
 @pytest.fixture
@@ -48,7 +48,7 @@ def test_prompt_dump_disabled_no_file(
     monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: dump)
     monkeypatch.setattr(
         "handlers.fncall_inject.CONFIG",
-        replace(CONFIG, record_prompt=False, print_prompt=False),
+        replace(get_config(), record_prompt=False, print_prompt=False),
     )
     injected = inject_fncall_for_request(
         sample_messages,
@@ -76,7 +76,7 @@ def test_record_prompt_writes_req_id_file(
     monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: dump)
     monkeypatch.setattr(
         "handlers.fncall_inject.CONFIG",
-        replace(CONFIG, record_prompt=True, print_prompt=False),
+        replace(get_config(), record_prompt=True, print_prompt=False),
     )
     injected = inject_fncall_for_request(
         sample_messages,
@@ -103,7 +103,7 @@ def test_print_prompt_also_dumps_file(
     monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: dump)
     monkeypatch.setattr(
         "handlers.fncall_inject.CONFIG",
-        replace(CONFIG, record_prompt=False, print_prompt=True),
+        replace(get_config(), record_prompt=False, print_prompt=True),
     )
     inject_fncall_for_request(
         sample_messages,
@@ -169,7 +169,7 @@ def test_resolve_log_file_path_format(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("server.config.logging_setup.LOG_DIR", tmp_path / "logs")
     monkeypatch.setattr(
         "server.config.logging_setup.CONFIG",
-        replace(CONFIG, log_to_file=True, log_name="rogator"),
+        replace(get_config(), log_to_file=True, log_name="rogator"),
     )
     path = resolve_log_file_path()
     assert path is not None
@@ -187,7 +187,7 @@ def test_setup_logging_writes_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         "server.config.logging_setup.CONFIG",
         replace(
-            CONFIG,
+            get_config(),
             log_to_file=True,
             log_name="rogator",
             log_level="INFO",

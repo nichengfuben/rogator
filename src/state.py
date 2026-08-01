@@ -11,8 +11,6 @@ from echotools.logger import get_logger
 
 from server.config import CONFIG
 from server.formats import (
-    MAX_CONCURRENT,
-    MAX_QUEUE_SIZE,
     SHUTDOWN_CANCEL_GRACE,
     DEFAULT_MODEL,
 )
@@ -67,7 +65,10 @@ class AppState:
     def __init__(self) -> None:
         self.shutdown_event = asyncio.Event()
         self._shutdown_requested = False
-        self.splitter = LongTextSplitter(send_full_prompt=CONFIG.send_full_prompt)
+        self.splitter = LongTextSplitter(
+            max_chars=CONFIG.qwen_send_max_chars,
+            send_full_prompt=CONFIG.send_full_prompt,
+        )
         self._registry = load_upstreams()
         self._clients: Dict[str, Any] = {}
         self._models_inventory: Dict[str, set[str]] = {}
@@ -78,7 +79,7 @@ class AppState:
             self._models_inventory[name] = set(client.load_models_cache())
         self._rebuild_unified_models()
         self.client = self._clients.get("qwen") or self.client_for(DEFAULT_MODEL, ("chat",))
-        self.scheduler = RequestScheduler(MAX_CONCURRENT, MAX_QUEUE_SIZE)
+        self.scheduler = RequestScheduler()
         self.tracker = ActiveRequestTracker()
         self.protocol: ToolProtocol = get_protocol("entml")
         self.model: str = DEFAULT_MODEL

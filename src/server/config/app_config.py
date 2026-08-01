@@ -3,9 +3,9 @@ from __future__ import annotations
 """配置加载：用户 config.toml 覆盖 template/config.toml，不使用代码内置默认值。"""
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Iterator
 
 from server.config.files import (
     PROJECT_ROOT,
@@ -61,6 +61,32 @@ class AppConfig:
     log_color: bool
     access_log: bool
     upstream_enabled: tuple[str, ...]
+
+
+class LiveConfig:
+    """稳定 identity 的配置代理；``from X import CONFIG`` 后仍读到热更新快照。"""
+
+    __slots__ = ("_current",)
+
+    def __init__(self, current: AppConfig) -> None:
+        object.__setattr__(self, "_current", current)
+
+    def snapshot(self) -> AppConfig:
+        return self._current
+
+    def swap(self, new: AppConfig) -> AppConfig:
+        old = self._current
+        object.__setattr__(self, "_current", new)
+        return old
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._current, name)
+
+    def __iter__(self) -> Iterator[str]:
+        return (f.name for f in fields(self._current))
+
+    def __repr__(self) -> str:
+        return f"LiveConfig({self._current!r})"
 
 
 def resolve_log_path(path: str, *, project_root: Path | None = None) -> Path:
@@ -204,5 +230,10 @@ def load_config(
     return _build_app_config(merged)
 
 
-# 模块级单例，启动时加载
-CONFIG: AppConfig = load_config()
+# 模块级单例：identity 稳定，热重载只 swap 内部快照
+CONFIG = LiveConfig(load_config())
+
+
+def get_config() -> AppConfig:
+    """当前不可变快照（供 ``dataclasses.replace`` / 对比用）。"""
+    return CONFIG.snapshot()

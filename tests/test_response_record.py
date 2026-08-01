@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from server.config import CONFIG
+from server.config import get_config
 from server.records.response_record import RawResponseRecorder, record_raw_response, response_dump_dir
 
 
@@ -22,7 +22,7 @@ def test_record_response_disabled_no_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: dump)
     monkeypatch.setattr(
         "server.records.response_record.CONFIG",
-        replace(CONFIG, record_response=False),
+        replace(get_config(), record_response=False),
     )
     recorder = RawResponseRecorder("req_off")
     recorder.ingest_event({"type": "answer", "content": "hello"})
@@ -40,7 +40,7 @@ def test_record_response_writes_req_id_file(
     monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: dump)
     monkeypatch.setattr(
         "server.records.response_record.CONFIG",
-        replace(CONFIG, record_response=True),
+        replace(get_config(), record_response=True),
     )
     recorder = RawResponseRecorder("req_abc")
     recorder.ingest_event({"type": "thinking", "content": "plan "})
@@ -58,7 +58,7 @@ def test_record_raw_response_context_manager_finalizes(tmp_path, monkeypatch) ->
     monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: dump)
     monkeypatch.setattr(
         "server.records.response_record.CONFIG",
-        replace(CONFIG, record_response=True),
+        replace(get_config(), record_response=True),
     )
     with record_raw_response("req_ctx") as recorder:
         recorder.ingest_event({"type": "answer", "content": "x"})
@@ -79,11 +79,11 @@ def test_prompt_and_response_share_req_id(
     monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: responses)
     monkeypatch.setattr(
         "handlers.fncall_inject.CONFIG",
-        replace(CONFIG, record_prompt=True, print_prompt=False, record_response=True),
+        replace(get_config(), record_prompt=True, print_prompt=False, record_response=True),
     )
     monkeypatch.setattr(
         "server.records.response_record.CONFIG",
-        replace(CONFIG, record_prompt=True, print_prompt=False, record_response=True),
+        replace(get_config(), record_prompt=True, print_prompt=False, record_response=True),
     )
 
     req_id = "req-pair-001"
