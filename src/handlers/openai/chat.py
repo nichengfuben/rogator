@@ -52,6 +52,8 @@ async def _chat_once(
 
 async def _collect_non_stream_response(
     state, messages, model, tools, req_id, protocol_options,
+    *,
+    prompt_api: str = "openai",
 ) -> Dict[str, Any]:
     response_parts: List[str] = []
     think_parts: List[str] = []
@@ -60,7 +62,7 @@ async def _collect_non_stream_response(
     with record_raw_response(req_id) as raw_recorder:
         async for event in _chat_once(
             state, messages, model, tools, req_id, protocol_options=protocol_options,
-            prompt_api="openai",
+            prompt_api=prompt_api,
         ):
             event_count += 1
             # 非流式仅累积上游 usage 快照，不用流式 //4 估算（避免改变响应 usage）
@@ -89,13 +91,17 @@ async def _collect_non_stream_response(
     )
 
 
-async def _process_openai_non_stream(state, messages, model, req_id, tools, protocol_options=None):
+async def _process_openai_non_stream(
+    state, messages, model, req_id, tools, protocol_options=None, *,
+    prompt_api: str = "openai",
+):
     """非流式处理 - 含换号重试"""
     retry_client = _resolve_retry_client(state, model, messages, tools)
 
     async def _run():
         return await _collect_non_stream_response(
             state, messages, model, tools, req_id, protocol_options,
+            prompt_api=prompt_api,
         )
 
     return await run_with_session_retry(req_id, state, _run, client=retry_client)

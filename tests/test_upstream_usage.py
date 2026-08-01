@@ -59,7 +59,10 @@ class TestUpstreamUsageTracker(unittest.TestCase):
             "output_tokens": 0,
         })
         tracker.add_output_chars(1200)
-        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 300})
+        self.assertEqual(tracker.anthropic_message_delta_usage, {
+            "input_tokens": 166_107,
+            "output_tokens": 300,
+        })
         usage = tracker.openai_stream_usage()
         assert usage is not None
         self.assertEqual(usage["prompt_tokens"], 166_107)
@@ -74,7 +77,10 @@ class TestUpstreamUsageTracker(unittest.TestCase):
             "data": {"input_tokens": 185251, "output_tokens": 300},
         })
         self.assertEqual(tracker.anthropic_message_start_usage["input_tokens"], 185251)
-        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 300})
+        self.assertEqual(tracker.anthropic_message_delta_usage, {
+            "input_tokens": 185251,
+            "output_tokens": 300,
+        })
         assert tracker.openai_stream_usage() is not None
         self.assertEqual(tracker.openai_stream_usage()["prompt_tokens"], 185251)
 
@@ -96,7 +102,10 @@ class TestUpstreamUsageTracker(unittest.TestCase):
             "input_tokens": 8,
             "output_tokens": 0,
         })
-        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 2})
+        self.assertEqual(tracker.anthropic_message_delta_usage, {
+            "input_tokens": 8,
+            "output_tokens": 2,
+        })
 
     def test_anthropic_message_start_includes_cache_read(self) -> None:
         tracker = UpstreamUsageTracker()
@@ -177,14 +186,16 @@ class TestAnthropicMessageStartTiming(unittest.TestCase):
         self.assertFalse(should_emit_anthropic_message_start(ev, True))
 
 
-    def test_message_delta_only_output_tokens(self) -> None:
+    def test_message_delta_includes_cumulative_input_output(self) -> None:
         tracker = UpstreamUsageTracker()
         tracker.ingest_event({
             "type": "usage",
             "data": {"input_tokens": 100, "output_tokens": 42},
         })
-        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 42})
-        self.assertNotIn("input_tokens", tracker.anthropic_message_delta_usage)
+        self.assertEqual(tracker.anthropic_message_delta_usage, {
+            "input_tokens": 100,
+            "output_tokens": 42,
+        })
 
 
 class TestUsageInResponses(unittest.TestCase):

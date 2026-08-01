@@ -3,13 +3,18 @@ from __future__ import annotations
 """Health、模型列表、TTS/图生、管理端点等 HTTP handlers。"""
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from aiohttp import web
 
 from echotools.logger import get_logger
 from handlers import get_state
-from handlers.api_errors import model_resolve_error_response, resolve_handler_model
+from handlers.api_errors import (
+    anthropic_error_response,
+    model_resolve_error_response,
+    resolve_handler_model,
+)
 from core.registry import get_registry
 from server.formats import (
     ClientDisconnectedError,
@@ -68,32 +73,39 @@ async def anthropic_list_models_handler(request: web.Request) -> web.Response:
     registry = get_model_registry()
     external_ids = list_external_models(state._models)
     fetch_ts = int(state.models_fetch_timestamp()) if state.models_fetch_timestamp() > 0 else 0
-    created = fetch_ts or int(__import__("time").time())
+    created_unix = fetch_ts or int(__import__("time").time())
+    created_at = datetime.fromtimestamp(created_unix, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+    )
     meta = state.merged_model_meta()
-    return _json_response({
-        "type": "list",
-        "data": [
-            {
-                "type": "model",
-                "id": entry["id"],
-                "display_name": entry["id"],
-                "created_at": created,
-                "context_length": entry["context_length"],
-                "capabilities": entry.get("capabilities"),
-                "modality": entry.get("modality"),
-            }
-            for eid in external_ids
-            for entry in [build_openai_model_entry(
-                eid,
-                registry_entry=registry.by_external[eid],
-                meta_by_id=meta,
-                created=created,
-                owned_by=state.owner_of_model(registry.by_external[eid].internal_id),
-            )]
-        ],
+    data = [
+        {
+            "type": "model",
+            "id": entry["id"],
+            "display_name": entry["id"],
+            "created_at": created_at,
+            "max_input_tokens": entry["context_length"],
+            "capabilities": entry.get("capabilities"),
+            "modality": entry.get("modality"),
+        }
+        for eid in external_ids
+        for entry in [build_openai_model_entry(
+            eid,
+            registry_entry=registry.by_external[eid],
+            meta_by_id=meta,
+            created=created_unix,
+            owned_by=state.owner_of_model(registry.by_external[eid].internal_id),
+        )]
+    ]
+    payload: Dict[str, Any] = {
+        "data": data,
         "has_more": False,
-        **({"updated_at": fetch_ts} if fetch_ts > 0 else {}),
-    })
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
+    }
+    if fetch_ts > 0:
+        payload["updated_at"] = fetch_ts
+    return _json_response(payload)
 
 
 async def anthropic_root_handler(request: web.Request) -> web.Response:
@@ -119,13 +131,13 @@ async def count_tokens_handler(request: web.Request) -> web.Response:
         logger.info("Client disconnected while reading body from %s", request.remote)
         return client_disconnected_response()
     except (json.JSONDecodeError, ValueError):
-        return _json_response({"input_tokens": 0})
+        return anthropic_error_response(400, "Invalid JSON body")
     state = get_state()
     requested = str(body.get("model") or state.model)
     try:
         model = resolve_handler_model(state, requested)
     except ModelResolveError as exc:
-        return model_resolve_error_response(exc)
+        return model_resolve_error_response(exc, protocol="anthropic")
     try:
         from handlers.anthro.normalize import _build_anthropic_protocol_options
 
@@ -157,6 +169,8 @@ async def audio_speech_handler(request: web.Request) -> web.Response:
     text = body.get("input", "")
     if not text:
         return _error_response(400, "Missing required field: input")
+    if not body.get("voice"):
+        return _error_response(400, "Missing required field: voice")
     try:
         model = resolve_handler_model(state, str(body.get("model") or state.model))
     except ModelResolveError as exc:
@@ -184,8 +198,13 @@ async def images_generations_handler(request: web.Request) -> web.Response:
         return _error_response(400, "Invalid JSON body")
     prompt = body.get("prompt", "")
     image_url = body.get("image") or body.get("image_url", "")
-    if not prompt or not image_url:
-        return _error_response(400, "Missing required fields: prompt, image")
+    if not prompt:
+        return _error_response(400, "Missing required field: prompt")
+    if not image_url:
+        return _error_response(
+            400,
+            "Missing required field: image (Rogator /v1/images/generations is image-to-video)",
+        )
     try:
         model = resolve_handler_model(state, str(body.get("model") or state.model))
     except ModelResolveError as exc:
@@ -200,9 +219,14 @@ async def images_generations_handler(request: web.Request) -> web.Response:
     )
     if not result.get("success"):
         return _error_response(502, result.get("error", "Generation failed"))
+    video_url = result.get("video_url", "")
     return _json_response({
         "created": int(__import__("time").time()),
-        "data": [{"url": result.get("video_url", ""), "local_path": result.get("local_path", "")}],
+        "data": [{
+            "url": video_url,
+            "revised_prompt": prompt,
+            "local_path": result.get("local_path", ""),
+        }],
     })
 
 

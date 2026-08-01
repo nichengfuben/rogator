@@ -82,7 +82,10 @@ class TestMessageUsageUsesUpstreamInput(unittest.TestCase):
             "input_tokens": 500,
             "output_tokens": 0,
         })
-        self.assertEqual(tracker.anthropic_message_delta_usage, {"output_tokens": 7})
+        self.assertEqual(tracker.anthropic_message_delta_usage, {
+            "input_tokens": 500,
+            "output_tokens": 7,
+        })
 
 
 if __name__ == "__main__":

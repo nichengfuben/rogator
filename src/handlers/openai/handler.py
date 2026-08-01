@@ -9,7 +9,7 @@ from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
 from handlers import get_state
-from handlers.api_errors import handler_error_response, log_classified_stream_error
+from handlers.api_errors import apply_tool_choice, handler_error_response, log_classified_stream_error
 from handlers.fncall_inject import (
     advance_partial_buffer,
     finalize_parser_tool_calls,
@@ -264,7 +264,7 @@ async def _finish_openai_stream(st: OpenAIStreamState, resp, model, include_usag
     await _send_stream_finish(
         resp, model, st.chunk_id, all_tool_calls, st.disconnected,
         already_sent_tc_count=st.pending_tc_index,
-        usage=usage,
+        usage=usage if emit_usage else None,
         include_usage=emit_usage,
     )
     return resp
@@ -325,9 +325,9 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
 
     state = get_state()
     if state.is_shutting_down:
-        return web.Response(status=503, text="Shutting down")
+        return _error_response(503, "Shutting down", "server_error")
     if state.scheduler.pending >= CONFIG.max_queue_size:
-        return web.Response(status=503, text="Busy")
+        return _error_response(503, "Busy", "server_error")
     body = await read_chat_json(request, protocol="openai")
     if isinstance(body, web.Response):
         return body
@@ -336,7 +336,7 @@ async def openai_chat_handler(request: web.Request) -> web.StreamResponse:
     if isinstance(model, web.Response):
         return model
     stream = body.get("stream", False)
-    tools = body.get("tools", [])
+    tools = apply_tool_choice(body.get("tools", []), body.get("tool_choice"))
     if not messages:
         return _error_response(400, "messages is required")
     protocol_options = _build_protocol_options(body)

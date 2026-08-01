@@ -187,10 +187,19 @@ class UpstreamUsageTracker:
 
     @property
     def anthropic_message_delta_usage(self) -> Dict[str, int]:
-        """Anthropic message_delta：有上游用上游 output，否则已生成字符 // 4。"""
+        """Anthropic message_delta：累计 usage（含 input + output）。"""
         if self._seen:
-            return {"output_tokens": self._usage["completion_tokens"]}
-        return {"output_tokens": estimate_stream_tokens_from_char_count(self._output_chars)}
+            usage: Dict[str, int] = {
+                "input_tokens": self._usage["prompt_tokens"],
+                "output_tokens": self._usage["completion_tokens"],
+            }
+            if self._cached_tokens:
+                usage["cache_read_input_tokens"] = self._cached_tokens
+            return usage
+        return {
+            "input_tokens": self._estimated_input,
+            "output_tokens": estimate_stream_tokens_from_char_count(self._output_chars),
+        }
 
     def openai_stream_usage(self) -> Optional[Dict[str, Any]]:
         """流式 usage：上游到达后用真实值，否则 prompt/output 均用 // 4 估算。"""

@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Union
 
 from aiohttp import web
 
 from echotools.logger import get_logger
-from server.formats import TokenExpiredError, UpstreamTimeoutError, _error_response
+from server.formats import TokenExpiredError, UpstreamTimeoutError, _error_response, _json_response
 from server.model.model_registry import ModelResolveError, resolve_request_model
 from state import AppState, QueueFullError
 
 logger = get_logger("rogator")
+
+_ANTHROPIC_ERROR_TYPES = {
+    "rate_limited": "rate_limit_error",
+    "timeout": "timeout_error",
+    "server_error": "api_error",
+    "invalid_request_error": "invalid_request_error",
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,70 @@ def log_classified_stream_error(exc: BaseException, *, label: str) -> StreamErro
     return info
 
 
+def anthropic_error_type(kind: str) -> str:
+    if kind in _ANTHROPIC_ERROR_TYPES.values():
+        return kind
+    return _ANTHROPIC_ERROR_TYPES.get(kind, "api_error")
+
+
+def anthropic_error_event(info: StreamErrorInfo) -> Dict[str, Any]:
+    """Anthropic 流式 error 事件体。"""
+    return {
+        "type": "error",
+        "error": {
+            "type": anthropic_error_type(info.kind),
+            "message": info.message,
+        },
+    }
+
+
+def anthropic_error_response(
+    status: int,
+    message: str,
+    error_type: str = "invalid_request_error",
+) -> web.Response:
+    """Anthropic HTTP 错误 envelope：``{type:error, error:{type,message}}``。"""
+    return _json_response(
+        {
+            "type": "error",
+            "error": {
+                "type": anthropic_error_type(error_type),
+                "message": message,
+            },
+        },
+        status=status,
+    )
+
+
+def apply_tool_choice(
+    tools: Optional[List[Dict[str, Any]]],
+    tool_choice: Any,
+) -> List[Dict[str, Any]]:
+    """``none`` 清空工具；其余（auto/any/tool/required）保留（上游无强制能力）。"""
+    tools_list = list(tools or [])
+    if tool_choice is None or tool_choice == "auto":
+        return tools_list
+    if tool_choice == "none":
+        return []
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "none":
+        return []
+    return tools_list
+
+
+def require_anthropic_max_tokens(body: dict) -> Union[int, web.Response]:
+    """Anthropic 官方必填 max_tokens；返回正整数或 400 响应。"""
+    raw = body.get("max_tokens")
+    if raw is None:
+        return anthropic_error_response(400, "max_tokens is required")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return anthropic_error_response(400, "max_tokens must be an integer")
+    if value < 1:
+        return anthropic_error_response(400, "max_tokens must be >= 1")
+    return value
+
+
 async def safe_write(resp, data: bytes, disconnected: list) -> bool:
     if disconnected[0]:
         return False
@@ -60,23 +132,32 @@ def resolve_handler_model(state: AppState, requested: str) -> str:
     return resolve_request_model(requested, state._models).internal_id
 
 
-def model_resolve_error_response(exc: ModelResolveError) -> web.Response:
+def model_resolve_error_response(
+    exc: ModelResolveError, *, protocol: str = "openai",
+) -> web.Response:
+    if protocol == "anthropic":
+        return anthropic_error_response(exc.status, exc.message, exc.error_type)
     return _error_response(exc.status, exc.message, exc.error_type)
 
 
-def handler_error_response(exc: BaseException, *, label: str) -> web.Response:
+def handler_error_response(
+    exc: BaseException, *, label: str, protocol: str = "openai",
+) -> web.Response:
     """将 handler 常见异常映射为 aiohttp 响应（非流式）。"""
+    err = anthropic_error_response if protocol == "anthropic" else _error_response
     if isinstance(exc, ModelResolveError):
-        return _error_response(exc.status, exc.message, exc.error_type)
+        return model_resolve_error_response(exc, protocol=protocol)
     if isinstance(exc, QueueFullError):
-        return web.Response(status=503, text=str(exc))
+        return err(503, str(exc) or "Busy", "api_error" if protocol == "anthropic" else "server_error")
     if isinstance(exc, asyncio.CancelledError):
-        return web.Response(status=503, text="Shutting down")
+        return err(503, "Shutting down", "api_error" if protocol == "anthropic" else "server_error")
     if isinstance(exc, TokenExpiredError):
         logger.warning("%s token expired: %s", label, exc)
-        return _error_response(429, str(exc), "rate_limited")
+        kind = "rate_limit_error" if protocol == "anthropic" else "rate_limited"
+        return err(429, str(exc), kind)
     if isinstance(exc, UpstreamTimeoutError):
         logger.warning("%s upstream timeout: %s", label, exc)
-        return _error_response(504, str(exc), "timeout")
+        kind = "timeout_error" if protocol == "anthropic" else "timeout"
+        return err(504, str(exc), kind)
     logger.error("%s error: %s", label, exc, exc_info=True)
-    return _error_response(500, str(exc))
+    return err(500, str(exc), "api_error" if protocol == "anthropic" else "server_error")

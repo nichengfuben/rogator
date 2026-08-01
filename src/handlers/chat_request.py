@@ -11,7 +11,11 @@ from aiohttp import web
 
 from core.dispatch import resolve_upstream
 from handlers import extract_system_for_inject
-from handlers.api_errors import model_resolve_error_response, resolve_handler_model
+from handlers.api_errors import (
+    anthropic_error_response,
+    model_resolve_error_response,
+    resolve_handler_model,
+)
 from handlers.fncall_inject import inject_fncall_for_request
 from handlers.openai.protocol import _inject_protocol_options
 from handlers.openai.thinking import protocol_thinking_level, thinking_level_is_active
@@ -46,14 +50,18 @@ async def read_chat_json(request: web.Request, *, protocol: str) -> ChatJsonResu
         )
         return client_disconnected_response()
     except json.JSONDecodeError:
+        if protocol == "anthropic":
+            return anthropic_error_response(400, "Invalid JSON body")
         return _error_response(400, "Invalid JSON body")
 
 
-def resolve_chat_model(state: Any, requested: Any) -> ChatModelResult:
+def resolve_chat_model(
+    state: Any, requested: Any, *, protocol: str = "openai",
+) -> ChatModelResult:
     try:
         return resolve_handler_model(state, str(requested))
     except ModelResolveError as exc:
-        return model_resolve_error_response(exc)
+        return model_resolve_error_response(exc, protocol=protocol)
 
 
 def log_chat_request(

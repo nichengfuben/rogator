@@ -12,7 +12,7 @@ from server.records.response_record import record_raw_response
 from echotools.fncall import FncallStreamParser
 from echotools.logger import get_logger
 
-from handlers.api_errors import log_classified_stream_error
+from handlers.api_errors import anthropic_error_event, log_classified_stream_error
 from handlers.fncall_inject import (
     advance_partial_buffer,
     finalize_parser_tool_calls,
@@ -73,10 +73,7 @@ async def _handle_classified_stream_error(
     resp, state, usage_tracker, e, disconnected,
 ) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
     info = log_classified_stream_error(e, label="Anthropic stream")
-    err_body: Dict[str, Any] = {"message": info.message}
-    if info.kind != "server_error":
-        err_body["type"] = info.kind
-    await _write_stream_error(resp, {"type": "error", "error": err_body}, disconnected)
+    await _write_stream_error(resp, anthropic_error_event(info), disconnected)
     return stream_result_tuple(state, usage_tracker, early_return=True)
 
 
