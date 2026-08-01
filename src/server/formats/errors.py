@@ -134,12 +134,22 @@ def as_upstream_connection_error(
     *,
     upstream: str = "",
 ) -> UpstreamConnectionError | None:
-    if isinstance(exc, (ClientConnectorError, ServerConnectionError, ConnectionResetError, OSError)):
+    # Py3.8+：TimeoutError 是 OSError 子类，须先于 OSError 排除，否则会误判为连接失败。
+    if isinstance(exc, asyncio.TimeoutError):
+        return None
+    if isinstance(exc, (ClientConnectorError, ServerConnectionError, ConnectionResetError)):
         hint = str(exc).strip() or exc.__class__.__name__
         if upstream:
-            msg = f"{upstream} 连接失败: {hint}"
+            msg = "{0} 连接失败: {1}".format(upstream, hint)
         else:
-            msg = f"上游连接失败: {hint}"
+            msg = "上游连接失败: {0}".format(hint)
+        return UpstreamConnectionError(msg, upstream=upstream)
+    if isinstance(exc, OSError):
+        hint = str(exc).strip() or exc.__class__.__name__
+        if upstream:
+            msg = "{0} 连接失败: {1}".format(upstream, hint)
+        else:
+            msg = "上游连接失败: {0}".format(hint)
         return UpstreamConnectionError(msg, upstream=upstream)
     if isinstance(exc, ClientError) and not isinstance(exc, ClientConnectorError):
         return UpstreamConnectionError(str(exc), upstream=upstream)

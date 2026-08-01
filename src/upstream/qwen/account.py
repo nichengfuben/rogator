@@ -18,6 +18,7 @@ from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_p
 from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
 from upstream.qwen.chat.store import fetch_user_id
 from upstream.qwen.auth.http import run_with_connection_retry
+from core.transport.http import upstream_timeout
 from server.formats import (
     DEFAULT_MODELS,
     LOGIN_TIMEOUT,
@@ -61,8 +62,7 @@ class QwenLoginMixin(SessionLoginMixin):
                 f"{AUTH_BASE_URL}/api/v2/auths/signin",
                 json=payload,
                 headers=build_login_headers(),
-                ssl=False,
-                timeout=aiohttp.ClientTimeout(total=LOGIN_TIMEOUT),
+                timeout=upstream_timeout(LOGIN_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
                     logger.warning("Login %s HTTP %d", account.username[:6], resp.status)
@@ -86,7 +86,18 @@ class QwenLoginMixin(SessionLoginMixin):
                     user_id=user_id or account.username[:12],
                     upstream="qwen",
                 )
-        return await run_with_connection_retry("login", _run)
+        try:
+            return await run_with_connection_retry("login", _run, transport_owner=self)
+        except asyncio.TimeoutError:
+            reset = getattr(self, "reset_http_transport", None)
+            if callable(reset):
+                await reset()
+            logger.warning(
+                "Login %s timed out after %.0fs (transport reset)",
+                account.username[:6],
+                LOGIN_TIMEOUT,
+            )
+            return None
 
 
 class ModelsFetchMixin:

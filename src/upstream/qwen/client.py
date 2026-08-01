@@ -22,6 +22,7 @@ from upstream.qwen.chat.store import (
 )
 from upstream.qwen.chat.upload.files import UploadMixin
 from upstream.qwen.auth.http import create_http_session, map_connection_error, run_with_connection_retry
+from core.transport.http import reset_upstream_transport, upstream_timeout
 from server.formats import (
     DEFAULT_MODELS,
     REQUEST_TOTAL_TIMEOUT,
@@ -65,6 +66,10 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
         if self._http_session is None or self._http_session.closed:
             self._http_session = create_http_session()
         return self._http_session
+
+    async def reset_http_transport(self) -> None:
+        await reset_upstream_transport(self._http_session)
+        self._http_session = None
 
     @property
     def session_count(self) -> int:
@@ -146,8 +151,8 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
             s = await self._ensure_http_session()
             async with s.post(
                 f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}", json=payload,
-                headers=headers, ssl=False,
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TOTAL_TIMEOUT),
+                headers=headers,
+                timeout=upstream_timeout(REQUEST_TOTAL_TIMEOUT),
             ) as resp:
                 if resp.status != 200:
                     await handle_chat_error(self, resp, session)
@@ -160,6 +165,4 @@ class QwenClient(UploadMixin, QwenLoginMixin, ModelsFetchMixin):
             raise
 
     async def shutdown(self) -> None:
-        if self._http_session is not None and not self._http_session.closed:
-            await self._http_session.close()
-        self._http_session = None
+        await self.reset_http_transport()

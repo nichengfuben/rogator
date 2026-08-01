@@ -11,6 +11,7 @@ import aiohttp
 
 from server.retry.http_client import client_session
 
+from core.transport.http import reset_upstream_transport
 from core.session.accounts import Account, accounts_for_upstream
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
@@ -203,12 +204,17 @@ class DeepSeekClient(SessionLoginMixin):
     async def switch_to_next(self, exclude_username: Optional[str] = None) -> Optional[PlatformSession]:
         return await SessionLoginMixin.switch_to_next(self, exclude_username=exclude_username)
 
+    async def reset_http_transport(self) -> None:
+        await reset_upstream_transport(self._http)
+        self._http = None
+        if self._inner is not None and self._startup_done:
+            self._http = client_session()
+            self._inner._session = self._http  # noqa: SLF001
+
     async def shutdown(self) -> None:
         if self._inner is not None:
             await self._inner.close()
             self._inner = None
-        if self._http is not None:
-            await self._http.close()
-            self._http = None
+        await self.reset_http_transport()
         self._startup_done = False
         logger.debug("DeepSeek client shut down")

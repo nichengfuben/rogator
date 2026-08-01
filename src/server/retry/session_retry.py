@@ -24,6 +24,12 @@ T = TypeVar("T")
 _RATE_LIMIT_HOURS_RE = re.compile(r'"num"\s*:\s*(\d+)')
 
 
+async def _reset_client_transport(client: Optional[Any]) -> None:
+    reset = getattr(client, "reset_http_transport", None)
+    if callable(reset):
+        await reset()
+
+
 def is_retryable_error(exc: BaseException) -> bool:
     return isinstance(exc, (TokenExpiredError, UpstreamTimeoutError, UpstreamConnectionError))
 
@@ -172,10 +178,12 @@ async def run_with_session_retry(
         except UpstreamTimeoutError as exc:
             _raise_if_shutting_down(state)
             retries += 1
+            await _reset_client_transport(client)
             _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
         except UpstreamConnectionError as exc:
             _raise_if_shutting_down(state)
             retries += 1
+            await _reset_client_transport(client)
             _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
         except Exception:
             raise
@@ -235,9 +243,11 @@ async def _handle_stream_retry_error(
         _shrink_payload_limit_or_raise(state, req_id, exc, retries)
         return retries
     if isinstance(exc, UpstreamTimeoutError):
+        await _reset_client_transport(client)
         _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
         return retries
     if isinstance(exc, UpstreamConnectionError):
+        await _reset_client_transport(client)
         _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
         return retries
     raise exc

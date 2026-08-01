@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from core.transport.http import make_connector
+
 logger = logging.getLogger("rogator")
 
 _PROXY_PAIRS = (
@@ -69,13 +71,15 @@ def _socks_connector(proxy_url: str) -> Optional[aiohttp.BaseConnector]:
 
 def client_session(**kwargs: Any) -> aiohttp.ClientSession:
     """创建尊重环境变量代理的 ClientSession。"""
-    if "connector" not in kwargs and "trust_env" not in kwargs:
+    if "connector" not in kwargs:
         proxy = active_proxy_url()
         if proxy and proxy.lower().startswith("socks"):
             connector = _socks_connector(proxy)
             if connector is not None:
                 kwargs["connector"] = connector
                 return aiohttp.ClientSession(**kwargs)
+        kwargs["connector"] = make_connector()
+    if "trust_env" not in kwargs:
         kwargs["trust_env"] = True
     return aiohttp.ClientSession(**kwargs)
 

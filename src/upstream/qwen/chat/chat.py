@@ -14,6 +14,7 @@ from upstream.qwen.auth.crypto import build_headers
 from upstream.qwen.chat.routes import BASE_URL, NEW_CHAT_PATH
 from upstream.qwen.chat.sse import parse_sse_event
 from upstream.qwen.auth.http import run_with_connection_retry
+from core.transport.http import upstream_timeout
 from server.config import CONFIG
 from server.formats import PayloadTooLargeError, TokenExpiredError, UpstreamTimeoutError
 from upstream.qwen.chat.store import QwenSession, is_session_fatal_error
@@ -52,13 +53,12 @@ async def _post_create_chat(client: QwenClient, session: QwenSession, model: str
             f"{BASE_URL}{NEW_CHAT_PATH}",
             json=payload,
             headers=headers,
-            ssl=False,
-            timeout=aiohttp.ClientTimeout(total=timeout_s),
+            timeout=upstream_timeout(timeout_s),
         ) as resp:
             if resp.status != 200:
                 return {"_http_status": resp.status}
             return await resp.json()
-    return await run_with_connection_retry("create_chat", _run)
+    return await run_with_connection_retry("create_chat", _run, transport_owner=client)
 
 
 async def create_chat_for_session(

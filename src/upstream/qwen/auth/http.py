@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
 import aiohttp
 
@@ -44,6 +44,7 @@ async def run_with_connection_retry(
     *,
     attempts: int = 2,
     delay_seconds: float = 0.6,
+    transport_owner: Optional[Any] = None,
 ) -> T:
     """Retry transient Qwen connection failures a small number of times."""
     for attempt in range(1, attempts + 1):
@@ -55,9 +56,12 @@ async def run_with_connection_retry(
             conn_err = map_connection_error(exc)
             if conn_err is None or attempt >= attempts:
                 raise conn_err or exc
+            reset = getattr(transport_owner, "reset_http_transport", None)
+            if callable(reset):
+                await reset()
             logger.warning(
                 "Qwen %s connection failed (retry %d/%d): %s",
                 label, attempt, attempts - 1, conn_err.message,
             )
             await asyncio.sleep(delay_seconds * attempt)
-    raise RuntimeError(f"Qwen {label} retry exhausted")
+    raise RuntimeError("Qwen {0} retry exhausted".format(label))
