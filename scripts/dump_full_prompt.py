@@ -5,13 +5,19 @@
 用法（在 rogator 仓库根目录）:
   python scripts/dump_full_prompt.py
   python scripts/dump_full_prompt.py --thinking-level high
+  python scripts/dump_full_prompt.py --thinking-level auto
+  python scripts/dump_full_prompt.py --thinking-level none
   python scripts/dump_full_prompt.py --format anthropic
   python scripts/dump_full_prompt.py --demo-loop-warning
   python scripts/dump_full_prompt.py --demo-markup-warning
   python scripts/dump_full_prompt.py --input request.json --out full_prompt.txt
 
-校验项对齐 echotools 2.3.70+ 历史工具行 ``{Name: json}`` / 简单标量 ``{Name: value}``，
-以及 ``<loop_warning>`` / ``<history_markup_warning>``（需对应 --demo-* 开关）。
+校验项对齐 echotools 2.4.0+ entml prompt：
+  - history 使用 ``<entml:invoke>`` / ``<!-- Tool Result ID:… -->``（非旧 ``{Tool: …}`` / ``<tool>``）
+  - ``<entml:funtions_results>`` 与 ``<function_calling_behavior>`` 独立块
+  - thinking 规则仅在 ``<thinking_behavior>``（on/level 强制、auto 建议、off+history 禁止）
+  - ``<entml:hard_constraint_restatement>`` 不重复 thinking 约束
+  - ``<loop_warning>`` / ``<history_markup_warning>``（需对应 --demo-* 开关）
 """
 from __future__ import annotations
 
@@ -168,12 +174,85 @@ def _prepare_messages(
     return msgs
 
 
+def _block_body(prompt: str, open_tag: str, close_tag: str) -> str:
+    start = prompt.find(open_tag)
+    if start < 0:
+        return ""
+    start += len(open_tag)
+    end = prompt.find(close_tag, start)
+    if end < 0:
+        return prompt[start:]
+    return prompt[start:end]
+
+
 def _history_slice(prompt: str) -> str:
-    start = prompt.find("<entml:conversation_history>")
-    end = prompt.find("</entml:conversation_history>")
-    if start >= 0 and end >= 0:
-        return prompt[start:end]
-    return prompt
+    return _block_body(prompt, "<entml:conversation_history>", "</entml:conversation_history>")
+
+
+def _thinking_behavior_body(prompt: str) -> str:
+    return _block_body(prompt, "<thinking_behavior>", "</thinking_behavior>")
+
+
+def _hard_constraint_body(prompt: str) -> str:
+    return _block_body(
+        prompt,
+        "<entml:hard_constraint_restatement>",
+        "</entml:hard_constraint_restatement>",
+    )
+
+
+def _thinking_level_checks(prompt: str, level: str) -> Dict[str, bool]:
+    behavior = _thinking_behavior_body(prompt)
+    hard = _hard_constraint_body(prompt)
+    checks: Dict[str, bool] = {
+        "hard_constraint_omits_thinking_rule": (
+            "Every reply begins with a <entml:thinking>" not in hard
+        ),
+    }
+
+    if level == "none":
+        checks["no_thinking_mode_tag"] = "<entml:thinking_mode>" not in prompt
+        checks["thinking_off_when_history_has_thinking"] = (
+            "Do NOT output a <entml:thinking> block" in behavior
+        )
+        checks["no_forced_thinking_in_behavior"] = (
+            "Every reply begins with a <entml:thinking>" not in behavior
+        )
+        return checks
+
+    if level == "auto":
+        checks["thinking_mode_auto"] = (
+            "<entml:thinking_mode>auto</entml:thinking_mode>" in prompt
+        )
+        checks["no_default_max_length"] = "<entml:max_thinking_length>" not in prompt
+        checks["thinking_auto_advisory"] = (
+            "You decide whether extended thinking helps" in behavior
+        )
+        checks["no_forced_thinking_in_behavior"] = (
+            "Every reply begins with a <entml:thinking>" not in behavior
+        )
+        checks["thinking_behavior_has_entml_tag_hint"] = (
+            "open a <entml:thinking>" in behavior
+        )
+        return checks
+
+    checks["thinking_mode_tag"] = (
+        f"<entml:thinking_mode>{level}</entml:thinking_mode>" in prompt
+    )
+    checks["thinking_forced_entml_tag"] = (
+        "Every reply begins with a <entml:thinking>" in behavior
+    )
+    checks["thinking_invoke_separation"] = (
+        "Close </entml:thinking> before any <entml:invoke>" in behavior
+    )
+    if level in ("low", "medium", "high", "xhigh", "max"):
+        expected_max = default_max_thinking_length_for_level(level)
+        checks["default_max_for_level"] = (
+            expected_max is not None
+            and f"<entml:max_thinking_length>{expected_max}</entml:max_thinking_length>"
+            in prompt
+        )
+    return checks
 
 
 def run_checks(
@@ -200,43 +279,72 @@ def run_checks(
         ),
         "history_block": "<entml:conversation_history>" in prompt,
         "history_clarify_preamble": (
-            "All tool invocations and their results shown here have already been executed"
-            in prompt
+            "The following is a transcript of completed interactions" in prompt
+        ),
+        "history_no_repeat_tool_call_rule": (
+            "must not repeat a tool call using the same tool" in prompt
+        ),
+        "functions_results_block": "<entml:funtions_results>" in prompt,
+        "functions_results_entries": (
+            '<entml:result id="call_w1">' in prompt
+            and '<entml:result id="call_t1">' in prompt
+            and '<entml:result id="call_s1">' in prompt
         ),
         "current_user_message": "<current_user_message>" in prompt,
-        "thinking_behavior_block": "<thinking_behavior>" in prompt,
+        "function_calling_behavior_block": "<function_calling_behavior>" in prompt,
+        "hard_constraint_restatement_block": (
+            "<entml:hard_constraint_restatement>" in prompt
+        ),
         "bare_invoke_instruction": '<entml:invoke name="' in prompt,
         "no_function_calls_wrapper_instr": "<entml:function_calls>" not in prompt,
         "history_reasoning_blocks": history.count("<entml:thinking>") >= 2,
-        "weather_call_brace_json": '{get_weather: {"city": "杭州", "unit": "c"}}' in history,
-        "time_call_brace_scalar": "{get_time: 杭州}" in history,
-        "search_call_brace_scalar": "{search_web: 杭州西湖 周边热门景点}" in history,
-        "multi_tool_blocks": history.count("<tool>") >= 1,
-        "parallel_tools_one_block": (
-            "{get_time: 杭州}" in history and "{search_web: 杭州西湖 周边热门景点}" in history
+        "history_entml_invoke_weather": (
+            '<entml:invoke name="get_weather">' in history
         ),
-        "important_invoke_reminder": (
-            "IMPORTANT: Completed tool turns in conversation history" in prompt
+        "history_entml_invoke_parallel": (
+            '<entml:invoke name="get_time">' in history
+            and '<entml:invoke name="search_web">' in history
+        ),
+        "history_tool_result_id_comment": (
+            "<!-- Tool Result ID:call_w1 -->" in history
+        ),
+        "history_no_legacy_brace_tool_line": "{get_weather:" not in history,
+        "function_calling_funtions_results_rule": (
+            "You never write this block, its tag, or any <entml:result> entry"
+            in prompt
         ),
         "tools_section": "get_weather" in prompt,
-        "thinking_mode_tag": f"<entml:thinking_mode>{level}</entml:thinking_mode>" in prompt,
-        "thinking_after_current_user": (
-            prompt.find("<current_user_message>") >= 0
-            and prompt.find("<entml:thinking_mode>") > prompt.find("<current_user_message>")
-        ),
     }
 
-    if level in ("low", "medium", "high", "xhigh", "max"):
-        expected_max = default_max_thinking_length_for_level(level)
-        checks["default_max_for_level"] = (
-            expected_max is not None
-            and f"<entml:max_thinking_length>{expected_max}</entml:max_thinking_length>"
-            in prompt
+    if level != "none":
+        checks["thinking_after_current_user"] = (
+            prompt.find("<current_user_message>") >= 0
+            and prompt.find("<entml:thinking_mode>") > prompt.find("<current_user_message>")
         )
-    elif level == "auto":
-        checks["no_default_max_length"] = "<entml:max_thinking_length>" not in prompt
-    elif level == "none":
-        checks["no_thinking_mode_tag"] = "<entml:thinking_mode>" not in prompt
+        checks["prompt_section_order"] = (
+            prompt.find("<entml:conversation_history>") < prompt.find("<entml:funtions_results>")
+            < prompt.find("<function_calling_behavior>")
+            < prompt.find("<thinking_behavior>")
+            < prompt.find("<entml:hard_constraint_restatement>")
+            < prompt.find("<current_user_message>")
+            < prompt.find("<entml:thinking_mode>")
+        )
+    else:
+        checks["prompt_section_order_no_meta"] = (
+            prompt.find("<entml:conversation_history>") < prompt.find("<entml:funtions_results>")
+            < prompt.find("<function_calling_behavior>")
+            < prompt.find("<thinking_behavior>")
+            < prompt.find("<entml:hard_constraint_restatement>")
+            < prompt.find("<current_user_message>")
+            and "<entml:thinking_mode>" not in prompt
+        )
+
+    if level == "none":
+        checks["thinking_behavior_block"] = "<thinking_behavior>" in prompt
+    else:
+        checks["thinking_behavior_block"] = "<thinking_behavior>" in prompt
+
+    checks.update(_thinking_level_checks(prompt, level))
 
     checks["loop_warning_block"] = (
         "<loop_warning>" in prompt if expect_loop_warning else "<loop_warning>" not in prompt
@@ -254,6 +362,9 @@ def run_checks(
     if expect_markup_warning:
         checks["markup_warning_before_current_user"] = (
             prompt.find("<history_markup_warning>") < prompt.find("<current_user_message>")
+        )
+        checks["markup_warning_mentions_entml_thinking"] = (
+            "Use <entml:thinking> for private reasoning" in prompt
         )
 
     return checks
