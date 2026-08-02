@@ -17,14 +17,15 @@ class TestTokenEstimate(unittest.TestCase):
     def test_char_count_div_three(self) -> None:
         self.assertEqual(estimate_tokens_from_char_count(0), 0)
         self.assertEqual(estimate_tokens_from_char_count(9), 3)
-        self.assertEqual(estimate_tokens_from_char_count(10), 3)
+        self.assertEqual(estimate_tokens_from_char_count(10), 4)
 
     def test_stream_char_count_div_four(self) -> None:
         from server.model.token_estimate import estimate_stream_tokens_from_char_count
 
         self.assertEqual(estimate_stream_tokens_from_char_count(0), 0)
+        self.assertEqual(estimate_stream_tokens_from_char_count(1), 1)
         self.assertEqual(estimate_stream_tokens_from_char_count(8), 2)
-        self.assertEqual(estimate_stream_tokens_from_char_count(664430), 166107)
+        self.assertEqual(estimate_stream_tokens_from_char_count(664430), 166108)
 
     def test_anthropic_count_tokens_includes_system_tools_and_blocks(self) -> None:
         body = {
@@ -56,7 +57,7 @@ class TestTokenEstimate(unittest.TestCase):
             "tools": [{"type": "function", "function": {"name": "x"}}],
         }
         raw_len = 6 + len(json.dumps(body["tools"], ensure_ascii=False))
-        self.assertEqual(estimate_openai_request_input_tokens(body), raw_len // 3)
+        self.assertEqual(estimate_openai_request_input_tokens(body), estimate_tokens_from_char_count(raw_len))
 
 
 class TestMessageUsageUsesUpstreamInput(unittest.TestCase):
@@ -86,6 +87,15 @@ class TestMessageUsageUsesUpstreamInput(unittest.TestCase):
             "input_tokens": 500,
             "output_tokens": 7,
         })
+
+    def test_stream_single_punctuation_counts_one_token(self) -> None:
+        tracker = UpstreamUsageTracker()
+        tracker.set_estimated_input_from_prompt_chars(100)
+        tracker.ingest_upstream_event({"type": "answer", "content": "。"})
+        usage = tracker.openai_stream_usage()
+        self.assertIsNotNone(usage)
+        assert usage is not None
+        self.assertEqual(usage["completion_tokens"], 1)
 
 
 if __name__ == "__main__":

@@ -101,3 +101,37 @@ async def test_record_sse_survives_async_generator_aclose(tmp_path, monkeypatch)
         await gen.aclose()
 
     assert (dump / "req_aclose.sse").read_bytes() == b"data: partial\n\n"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_parse_sse_stream_appends_raw_bytes(tmp_path, monkeypatch) -> None:
+    from upstream.deepseek.lib.adapter.strmrun import _StreamRunMixin
+    from upstream.deepseek.lib.stream.strmpars import StreamParser
+
+    class _FakeContent:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self._chunks = chunks
+
+        async def iter_chunked(self, _n: int):
+            for chunk in self._chunks:
+                yield chunk
+
+    class _FakeResp:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self.content = _FakeContent(chunks)
+
+    raw = b"event: ready\ndata: {}\n\n"
+    dump = tmp_path / "sse"
+    monkeypatch.setattr("server.records.sse_record.sse_dump_dir", lambda: dump)
+    monkeypatch.setattr(
+        "server.records.sse_record.CONFIG",
+        replace(get_config(), record_sse=True),
+    )
+
+    parser = StreamParser(include_thinking=False)
+    mixin = _StreamRunMixin()
+    with record_sse_stream("req_ds"):
+        async for _ in mixin._parse_sse_stream(_FakeResp([raw]), parser):
+            pass
+
+    assert (dump / "req_ds.sse").read_bytes() == raw

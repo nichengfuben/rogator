@@ -70,6 +70,11 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
         return self._think
 
     @property
+    def accumulated_token_usage(self) -> int:
+        """上游 SSE 报告的 accumulated_token_usage（0 表示未收到）。"""
+        return self._tok_usage
+
+    @property
     def should_continue(self) -> bool:
         """当前流结束后是否应继续调用 /continue。"""
         if self._should_continue:

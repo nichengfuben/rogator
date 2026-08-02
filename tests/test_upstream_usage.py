@@ -55,17 +55,17 @@ class TestUpstreamUsageTracker(unittest.TestCase):
         tracker = UpstreamUsageTracker()
         tracker.set_estimated_input_from_prompt_chars(664_430)
         self.assertEqual(tracker.anthropic_message_start_usage, {
-            "input_tokens": 166_107,
+            "input_tokens": 166_108,
             "output_tokens": 0,
         })
         tracker.add_output_chars(1200)
         self.assertEqual(tracker.anthropic_message_delta_usage, {
-            "input_tokens": 166_107,
+            "input_tokens": 166_108,
             "output_tokens": 300,
         })
         usage = tracker.openai_stream_usage()
         assert usage is not None
-        self.assertEqual(usage["prompt_tokens"], 166_107)
+        self.assertEqual(usage["prompt_tokens"], 166_108)
         self.assertEqual(usage["completion_tokens"], 300)
 
     def test_upstream_overrides_stream_estimate_at_finish(self) -> None:

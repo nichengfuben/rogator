@@ -14,6 +14,7 @@ from upstream.deepseek.lib.protocol.headers import build_headers
 from upstream.deepseek.lib.adapter.helpers.pmtutil import translate_chunk
 from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_user_muted
 from upstream.deepseek.lib.stream.strmpars import StreamParser
+from server.records.sse_record import append_sse_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -132,20 +133,24 @@ class _StreamRunMixin:
     def _compute_usage(
         self, parser: StreamParser, prompt: str
     ) -> List[Dict[str, Any]]:
-        """根据累积内容估算 token 用量。
-
-        Args:
-            parser: 已完成本次请求解析的 StreamParser。
-            prompt: 本次请求的提示词。
-
-        Returns:
-            仅包含一个 usage 字典的列表，便于以 for 循环 yield。
-        """
+        """根据上游 accumulated_token_usage 或累积字符估算 token 用量。"""
+        prompt_tokens = max(len(prompt) // 3, 1)
+        upstream_total = parser.accumulated_token_usage
+        if upstream_total > 0:
+            completion_tokens = max(upstream_total - prompt_tokens, 0)
+            return [
+                {
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": upstream_total,
+                    }
+                }
+            ]
         content_len = len(parser.accumulated_content)
         think_len = len(parser.accumulated_thinking)
         total_chars = content_len + think_len
-        prompt_tokens = max(len(prompt) // 3, 1)
-        completion_tokens = max(total_chars // 3, 0)
+        completion_tokens = (total_chars + 2) // 3 if total_chars > 0 else 0
         return [
             {
                 "usage": {
@@ -183,6 +188,7 @@ class _StreamRunMixin:
         async for raw_chunk in resp.content.iter_chunked(4096):
             if not raw_chunk:
                 continue
+            append_sse_bytes(raw_chunk)
             buf += raw_chunk.decode("utf-8", errors="ignore")
             lines = buf.split("\n")
             buf = lines[-1]

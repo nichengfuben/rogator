@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Qwen 上游 SSE 原始流实时落盘（parse 前）。"""
+"""上游 SSE 原始流实时落盘（parse 前）。"""
 
 from contextlib import contextmanager
 from contextvars import ContextVar

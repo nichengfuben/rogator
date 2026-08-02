@@ -16,13 +16,17 @@ __all__ = [
 
 
 def estimate_tokens_from_char_count(total_chars: int) -> int:
-    """按字符数 // 3 估算 input token（与 count_tokens 一致）。"""
-    return max(0, total_chars // 3)
+    """按字符数向上取整 // 3 估算 input token。"""
+    if total_chars <= 0:
+        return 0
+    return (total_chars + 2) // 3
 
 
 def estimate_stream_tokens_from_char_count(total_chars: int) -> int:
-    """流式实时估算：实际发送 prompt 或已生成字符 // 4。"""
-    return max(0, total_chars // 4)
+    """流式实时估算：已生成字符向上取整 // 4（单字符标点亦计 1 token）。"""
+    if total_chars <= 0:
+        return 0
+    return (total_chars + 3) // 4
 
 
 def _serialize_for_estimate(value: Any) -> str:

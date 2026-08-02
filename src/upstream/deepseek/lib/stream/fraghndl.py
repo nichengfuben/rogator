@@ -183,7 +183,7 @@ class _FragmentHandlerMixin:
                 "status": str(op_v),
                 "needs_continue": True,
             }
-        if op_p == "fragments" and op.get("o") == "APPEND":
+        if op_p in ("fragments", "response/fragments") and op.get("o") == "APPEND":
             return self._proc_batch_fragments_append(op_v)
         if op_p == "content" and op.get("o") == "APPEND":
             content_str = str(op_v) if op_v else ""
@@ -202,19 +202,13 @@ class _FragmentHandlerMixin:
     def _proc_fragments_append(
         self, p: str, o: Any, v: Any
     ) -> Optional[Dict[str, Any]]:
-        """处理顶层 ``fragments`` + ``APPEND`` 操作。
-
-        Args:
-            p: data 中的 ``p`` 字段。
-            o: data 中的 ``o`` 字段。
-            v: data 中的 ``v`` 字段。
-
-        Returns:
-            fragment 处理结果字典，或 None。
-        """
-        if p == "fragments" and o == "APPEND" and isinstance(v, list) and v:
-            if isinstance(v[0], dict):
-                return self._handle_frag(v[0])
+        """处理 ``fragments`` / ``response/fragments`` + ``APPEND`` 操作。"""
+        if o != "APPEND" or not isinstance(v, list) or not v:
+            return None
+        if p not in ("fragments", "response/fragments"):
+            return None
+        if isinstance(v[0], dict):
+            return self._handle_frag(v[0])
         return None
 
     def _proc_content_delta(self, p: str, v: Any) -> Optional[Dict[str, Any]]:
