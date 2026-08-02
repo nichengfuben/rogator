@@ -31,9 +31,9 @@ def _normalize_chunk(chunk: Any) -> Optional[Dict[str, Any]]:
         return None
     if "usage" in chunk:
         return {"type": "usage", "data": chunk["usage"]}
-    thinking = chunk.get("thinking")
-    if thinking:
-        return {"type": "thinking", "content": thinking}
+    # 思考与工具走 entml；忽略 DS 原生 THINK 增量
+    if chunk.get("thinking"):
+        return None
     return None
 
 
@@ -45,14 +45,14 @@ def _prepare_messages(
     model: str,
     protocol_options: Optional[Dict[str, Any]],
     prompt_api: str,
-) -> Tuple[List[Dict[str, Any]], str, bool, Optional[str], Optional[bytes]]:
-    injected, full_content, qwen_enabled, _mode, _entml = prepare_injected_messages(
+) -> Tuple[List[Dict[str, Any]], str, Optional[str], Optional[bytes]]:
+    injected, full_content, _qwen_enabled, _mode, _entml = prepare_injected_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
     final_messages, send_text, filename, file_bytes = apply_prompt_budget(
         state, injected, full_content, use_file_split=True,
     )
-    return final_messages, send_text, qwen_enabled, filename, file_bytes
+    return final_messages, send_text, filename, file_bytes
 
 
 def _extract_preuploaded_ids(files: Optional[List[Any]]) -> List[str]:
@@ -82,24 +82,21 @@ async def _upload_message_files(
     filename: Optional[str],
     file_bytes: Optional[bytes],
     preuploaded: Optional[List[Any]],
-    thinking_enabled: bool,
-) -> Tuple[List[str], bool]:
+) -> List[str]:
     ref_ids = _extract_preuploaded_ids(preuploaded)
     attachments = await collect_message_attachments_async(
         messages, filename=filename, file_bytes=file_bytes,
     )
     if not attachments:
-        return ref_ids, thinking_enabled
+        return ref_ids
 
     token = str(candidate.meta.get("token") or "")
     username = str(candidate.meta.get("identifier") or "")
     if not token:
         logger.warning("DeepSeek: 无 token，跳过 %d 个附件上传", len(attachments))
-        return ref_ids, thinking_enabled
+        return ref_ids
 
     model_type = resolve_model_type(model)
-    # 上游规则：带文件时不可同时开启 thinking / search
-    effective_thinking = False
     uploaded = await upload_attachments(
         inner._session,  # noqa: SLF001
         token,
@@ -116,7 +113,7 @@ async def _upload_message_files(
         len(uploaded),
         len(ref_ids),
     )
-    return ref_ids, effective_thinking
+    return ref_ids
 
 
 async def _on_user_muted(
@@ -144,7 +141,6 @@ async def _iter_complete_events(
     messages: List[Dict[str, Any]],
     model: str,
     *,
-    thinking: bool,
     ref_file_ids: Optional[List[str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     async for chunk in inner.complete(
@@ -152,7 +148,7 @@ async def _iter_complete_events(
         messages,
         model,
         stream=True,
-        thinking=thinking,
+        thinking=False,
         search=False,
         ref_file_ids=ref_file_ids,
     ):
@@ -171,7 +167,6 @@ async def _stream_with_mute_retry(
     filename: Optional[str],
     file_bytes: Optional[bytes],
     preuploaded: Optional[List[Any]],
-    qwen_enabled: bool,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     for attempt in range(_MAX_MUTE_SWITCH):
         muted_exc: Optional[DeepSeekUserMutedError] = None
@@ -184,14 +179,14 @@ async def _stream_with_mute_retry(
             candidate = await client.pick_candidate(session)
             muted_user = str(candidate.meta.get("identifier") or "")
             try:
-                ref_file_ids, effective_thinking = await _upload_message_files(
+                ref_file_ids = await _upload_message_files(
                     inner, candidate, messages, model,
                     filename=filename, file_bytes=file_bytes,
-                    preuploaded=preuploaded, thinking_enabled=qwen_enabled,
+                    preuploaded=preuploaded,
                 )
                 async for event in _iter_complete_events(
                     inner, candidate, final_messages, model,
-                    thinking=effective_thinking, ref_file_ids=ref_file_ids or None,
+                    ref_file_ids=ref_file_ids or None,
                 ):
                     yield event
                 return
@@ -219,7 +214,7 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    final_messages, send_text, qwen_enabled, filename, file_bytes = _prepare_messages(
+    final_messages, send_text, filename, file_bytes = _prepare_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
     if final_messages:
@@ -229,6 +224,6 @@ async def stream_openai_chat(
     async for event in _stream_with_mute_retry(
         client, inner, final_messages, messages, model,
         filename=filename, file_bytes=file_bytes,
-        preuploaded=files, qwen_enabled=qwen_enabled,
+        preuploaded=files,
     ):
         yield event

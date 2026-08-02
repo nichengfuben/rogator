@@ -339,6 +339,12 @@ class TestModelThinking(unittest.TestCase):
         self.assertEqual(mode, "Fast")
         self.assertTrue(use_entml)
 
+    def test_resolve_deepseek_always_entml(self) -> None:
+        enabled, mode, use_entml = resolve_qwen_thinking("deepseek-v4-flash", "high")
+        self.assertFalse(enabled)
+        self.assertEqual(mode, "Fast")
+        self.assertTrue(use_entml)
+
     def test_resolve_native_model_on(self) -> None:
         enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "on")
         self.assertTrue(enabled)

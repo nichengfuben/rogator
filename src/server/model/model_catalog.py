@@ -37,7 +37,7 @@ def model_supports_thinking(registry_entry: ModelRegistryEntry) -> bool:
     internal_id = registry_entry.internal_id
     if internal_id in _ALWAYS_THINKING_INTERNAL:
         return True
-    return registry_entry.uses_entml
+    return registry_entry.uses_entml or registry_entry.uses_entml_tools
 
 
 def _resolve_model_meta(
@@ -79,7 +79,7 @@ def build_openai_model_entry(
     if model_supports_thinking(registry_entry):
         if always_qwen_thinking(internal_id):
             entry["always_thinking"] = True
-        elif registry_entry.uses_entml:
+        elif registry_entry.uses_entml or registry_entry.uses_entml_tools:
             entry["think_efforts"] = dict(THINK_EFFORTS)
     return entry
 
