@@ -1,24 +1,38 @@
-# Rogator runtime deps — pinned to versions on dev machine (Python 3.14.6, 2026-08-02)
-# Install: pip install -r requirements.txt
+# Rogator runtime deps
+# Python 3.8–3.14 · macOS / Linux / Windows
+# All pins use ==. python_version markers select stacks where upstream wheels differ.
 
-# Core
-aiohttp==3.14.3
-echotools==2.4.0
-typing-extensions==4.16.0
+# --- Core ---
+echotools==2.4.1
+typing-extensions==4.12.2; python_version < "3.9"
+typing-extensions==4.16.0; python_version >= "3.9"
 
-# aiohttp transitive (pinned for reproducible installs)
-aiohappyeyeballs==2.7.1
-aiosignal==1.4.0
-attrs==26.1.0
-frozenlist==1.8.0
+# --- aiohttp 3.14 stack (Python 3.10–3.14) ---
+aiohttp==3.14.3; python_version >= "3.10"
+aiohappyeyeballs==2.7.1; python_version >= "3.10"
+propcache==0.5.2; python_version >= "3.10"
+
+# --- aiohttp 3.9 stack (Python 3.8–3.9) ---
+aiohttp==3.9.5; python_version < "3.10"
+
+# --- aiohttp shared transitive ---
+aiosignal==1.4.0; python_version >= "3.10"
+aiosignal==1.3.2; python_version < "3.10"
+attrs==26.1.0; python_version >= "3.9"
+attrs==24.2.0; python_version < "3.9"
+frozenlist==1.8.0; python_version >= "3.9"
+frozenlist==1.5.0; python_version < "3.9"
 idna==3.18
-multidict==6.7.1
-propcache==0.5.2
-yarl==1.24.5
+multidict==6.7.1; python_version >= "3.10"
+multidict==6.0.5; python_version < "3.10"
+yarl==1.24.5; python_version >= "3.10"
+yarl==1.9.4; python_version < "3.10"
+async-timeout==4.0.3; python_version < "3.11"
 
-# SOCKS proxy (optional; used when ALL_PROXY/HTTPS_PROXY is socks://)
-aiohttp-socks==0.11.0
+# --- SOCKS proxy (optional; ALL_PROXY / HTTPS_PROXY = socks://) ---
+aiohttp-socks==0.11.0; python_version >= "3.10"
+aiohttp-socks==0.8.4; python_version < "3.10"
 python-socks==2.8.2
 
-# TOML config on Python < 3.11 (3.11+ uses stdlib tomllib)
+# --- TOML config (3.11+ uses stdlib tomllib) ---
 tomli==2.4.1; python_version < "3.11"
