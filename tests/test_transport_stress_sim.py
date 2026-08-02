@@ -264,6 +264,18 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(err.upstream, "deepseek")
         self.assertIn("Session is closed", err.message)
 
+    async def test_stale_session_attribute_error_mapped_as_connection_error(self) -> None:
+        from server.formats import as_upstream_connection_error
+
+        err = as_upstream_connection_error(
+            AttributeError("'NoneType' object has no attribute '_timeout_ceil_threshold'"),
+            upstream="qwen",
+        )
+        self.assertIsNotNone(err)
+        assert err is not None
+        self.assertEqual(err.upstream, "qwen")
+        self.assertIn("_timeout_ceil_threshold", err.message)
+
     async def test_closing_one_unowned_session_keeps_peer_alive(self) -> None:
         from server.retry.http_client import client_session
 

@@ -11,6 +11,14 @@ from core.transport.http import reset_upstream_transport
 from server.retry.http_client import client_session
 
 
+def session_is_usable(session: aiohttp.ClientSession | None) -> bool:
+    """判断 ClientSession 是否仍可安全发起请求。"""
+    if session is None or session.closed:
+        return False
+    connector = session.connector
+    return connector is not None and not connector.closed
+
+
 class HttpTransportMixin:
     """进程级共享 connector 上的 per-client ClientSession 生命周期。"""
 
@@ -29,7 +37,7 @@ class HttpTransportMixin:
         return False
 
     def _ensure_http_unlocked(self) -> aiohttp.ClientSession:
-        if self._http is None or self._http.closed:
+        if not session_is_usable(self._http):
             self._http = client_session()
             self._on_http_session_created(self._http)
         return self._http
@@ -42,10 +50,14 @@ class HttpTransportMixin:
         return await self._ensure_http_session()
 
     async def reset_http_transport(self) -> None:
+        """软重置 transport：仅丢弃当前 session 引用，不关闭旧 session。
+
+        并发请求可能仍持有旧 session；若在此 close，aiohttp 会将 connector 置空，
+        导致 ``'NoneType' object has no attribute '_timeout_ceil_threshold'``。
+        旧 session 由 GC 回收；共享 connector 仅在 shutdown 时关闭。
+        """
         async with self._transport_lock:
-            old = self._http
             self._http = None
-            await reset_upstream_transport(old)
             if self._should_recreate_http_on_reset():
                 self._http = client_session()
                 self._on_http_session_created(self._http)

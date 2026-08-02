@@ -135,6 +135,17 @@ def _connection_error_message(hint: str, *, upstream: str = "") -> str:
     return "上游连接失败: {0}".format(hint)
 
 
+def _is_stale_http_session_error(exc: BaseException) -> bool:
+    """识别 aiohttp ClientSession 被并发 reset/close 后的典型异常。"""
+    if isinstance(exc, RuntimeError):
+        text = str(exc).strip().lower()
+        return "session is closed" in text or "connector is closed" in text
+    if isinstance(exc, AttributeError):
+        text = str(exc).strip()
+        return "_timeout_ceil_threshold" in text
+    return False
+
+
 def as_upstream_connection_error(
     exc: BaseException,
     *,
@@ -143,13 +154,11 @@ def as_upstream_connection_error(
     # TimeoutError 走独立超时重试路径，不当作连接错误。
     if isinstance(exc, asyncio.TimeoutError):
         return None
-    if isinstance(exc, RuntimeError):
-        text = str(exc).strip().lower()
-        if "session is closed" in text or "connector is closed" in text:
-            return UpstreamConnectionError(
-                _connection_error_message(str(exc).strip() or exc.__class__.__name__, upstream=upstream),
-                upstream=upstream,
-            )
+    if _is_stale_http_session_error(exc):
+        return UpstreamConnectionError(
+            _connection_error_message(str(exc).strip() or exc.__class__.__name__, upstream=upstream),
+            upstream=upstream,
+        )
     if isinstance(exc, (ClientConnectorError, ServerConnectionError, ConnectionResetError)):
         hint = str(exc).strip() or exc.__class__.__name__
         return UpstreamConnectionError(

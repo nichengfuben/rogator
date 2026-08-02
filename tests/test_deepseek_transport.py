@@ -47,12 +47,14 @@ class TestDeepSeekTransport(unittest.IsolatedAsyncioTestCase):
         client._inner = inner
         client._startup_done = False
         mgr = inner._hif_managers["b@test.com"]  # noqa: SLF001
+        old_http = http
         await client.reset_http_transport()
         self.assertIsNotNone(client._http)
         self.assertFalse(client._http.closed)
+        self.assertIsNot(client._http, old_http)
         self.assertIs(inner._session, client._http)  # noqa: SLF001
         self.assertIs(mgr._session, client._http)  # noqa: SLF001
-        self.assertTrue(http.closed)
+        self.assertFalse(old_http.closed)
         await client.shutdown()
 
     async def test_login_retries_after_session_closed(self) -> None:
