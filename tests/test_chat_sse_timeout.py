@@ -24,6 +24,25 @@ class TestIterSseEventsTimeout(unittest.IsolatedAsyncioTestCase):
             async for _ in iter_sse_events(client, resp, session):
                 pass
 
+    async def test_single_chunk_multiple_sse_lines(self) -> None:
+        client = MagicMock()
+        session = MagicMock()
+        chunk = (
+            'data: {"response.created":{"response_id":"rid-1"}}\n\n'
+            'data: {"choices":[{"delta":{"content":"hi","phase":"answer","status":"typing"}}],'
+            '"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}\n\n'
+        )
+
+        async def _one_shot():
+            yield chunk.encode("utf-8")
+
+        resp = MagicMock()
+        resp.content = _one_shot()
+        events = [e async for e in iter_sse_events(client, resp, session)]
+        types = [e.get("type") for e in events]
+        self.assertEqual(types, ["response_created", "answer"])
+        self.assertIn("usage", events[1])
+
 
 if __name__ == "__main__":
     unittest.main()

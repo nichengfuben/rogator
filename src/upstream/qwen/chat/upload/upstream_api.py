@@ -15,7 +15,7 @@ from upstream.qwen.chat.routes import (
     SETTINGS_PATH,
     SSE_RECONNECT_MAX,
 )
-from upstream.qwen.chat.sse import parse_sse_event
+from upstream.qwen.chat.chat import iter_sse_events
 from upstream.qwen.auth.http import run_with_connection_retry
 from core.transport.http import request_json, upstream_timeout
 
@@ -35,6 +35,7 @@ async def fetch_app_config(client: "QwenClient", session: "QwenSession") -> Dict
             f"{BASE_URL}{CONFIGS_PATH}",
             headers=build_headers(
                 session.token,
+                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             timeout=upstream_timeout(30.0),
@@ -62,6 +63,7 @@ async def fetch_user_settings(client: "QwenClient", session: "QwenSession") -> D
             f"{BASE_URL}{SETTINGS_PATH}",
             headers=build_headers(
                 session.token,
+                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             timeout=upstream_timeout(30.0),
@@ -102,6 +104,7 @@ async def parse_urls(
             f"{BASE_URL}{PARSE_URL_PATH}",
             headers=build_headers(
                 session.token,
+                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             json={"url_list": url_list},
@@ -170,6 +173,7 @@ async def reconnect_sse_events(
         params={"chat_id": chat_id, "response_id": response_id},
         headers=build_headers(
             session.token,
+            username=session.username,
             chat_id=chat_id,
             include_sse=True,
             cookies=merge_session_cookies(session.token),
@@ -179,13 +183,5 @@ async def reconnect_sse_events(
         if resp.status != 200:
             body = await resp.text()
             raise RuntimeError(f"SSE reconnect HTTP {resp.status}: {body[:200]}")
-        async for raw in resp.content:
-            line = raw.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            data_str = line[5:].strip()
-            if not data_str or data_str == "[DONE]":
-                continue
-            event = parse_sse_event(data_str)
-            if event:
-                yield event
+        async for event in iter_sse_events(client, resp, session):
+            yield event

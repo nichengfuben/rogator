@@ -51,11 +51,13 @@ class AsrRealtimeSession:
         http: aiohttp.ClientSession,
         token: str,
         *,
+        username: str = "",
         language: str = "zh-CN",
         timeout: float = ASR_WS_TIMEOUT,
     ) -> None:
         self._http = http
         self._token = token
+        self._username = username
         self._language = normalize_asr_language(language)
         self._timeout = timeout
         self._task_id = _uuid_hex32()
@@ -151,7 +153,7 @@ class AsrRealtimeSession:
             ssl=False,
             heartbeat=30.0,
             proxy=None,
-            headers=build_asr_ws_headers(self._token),
+            headers=build_asr_ws_headers(self._token, username=self._username),
             timeout=aiohttp.ClientTimeout(total=self._timeout),
         )
         await self._ws.send_str(build_start_transcription(self._task_id, self._language))

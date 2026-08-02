@@ -127,7 +127,9 @@ class OaiRealtimeAsrConnection:
             self._turn = _OaiTranscriptionTurn(new_item_id())
             http = await self._http_session()
             self._turn.upstream = AsrRealtimeSession(
-                http, self._qwen_session.token, language=self._language,
+                http, self._qwen_session.token,
+                username=self._qwen_session.username,
+                language=self._language,
             )
             await self._turn.upstream.start()
             self._turn.pump_task = asyncio.create_task(self._pump_turn(self._turn))

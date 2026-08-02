@@ -60,7 +60,7 @@ async def _qwen_signin_once(
     async with http.post(
         f"{AUTH_BASE_URL}/api/v2/auths/signin",
         json=payload,
-        headers=build_login_headers(),
+        headers=build_login_headers(username=account.username),
         timeout=upstream_timeout(LOGIN_TIMEOUT),
     ) as resp:
         if resp.status != 200:
@@ -118,7 +118,7 @@ class QwenLoginMixin(SessionLoginMixin):
 
 class ModelsFetchMixin(ModelsCacheMixin):
     async def _fetch_models_remote(self, s, session, now: float, keep_cached) -> List[str]:
-        headers = build_headers(session.token)
+        headers = build_headers(session.token, username=session.username)
         headers["Accept"] = "application/json"
         async with s.get(
             f"{BASE_URL}{MODELS_PATH}",

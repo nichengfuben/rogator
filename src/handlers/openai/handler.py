@@ -40,6 +40,7 @@ from server.formats import (
     build_openai_chunk,
 )
 from server.records.response_record import record_raw_response
+from server.records.sse_record import record_sse_stream
 from state import QueueFullError, tracked_request
 
 logger = get_logger("rogator")
@@ -218,7 +219,7 @@ async def _run_openai_event_stream(st: OpenAIStreamState, state, messages, model
         ):
             yield event
 
-    with record_raw_response(st.req_id) as raw_recorder:
+    with record_sse_stream(st.req_id), record_raw_response(st.req_id) as raw_recorder:
         async def _on_event(event: Dict[str, Any]) -> bool:
             raw_recorder.ingest_event(event)
             return await _process_openai_stream_event(st, event)

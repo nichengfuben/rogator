@@ -57,6 +57,7 @@ class AppConfig:
     record_prompt: bool
     print_prompt: bool
     record_response: bool
+    record_sse: bool
     log_level: str
     log_to_file: bool
     log_name: str
@@ -155,6 +156,7 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         record_prompt=bool(_require_get(raw, "fncall", "record_prompt")),
         print_prompt=bool(_require_get(raw, "fncall", "print_prompt")),
         record_response=bool(_require_get(raw, "fncall", "record_response")),
+        record_sse=bool(_require_get(raw, "fncall", "record_sse")),
         log_level=str(_resolve_log_field(raw, "level")).upper(),
         log_to_file=bool(_resolve_log_field(raw, "log_to_file")),
         log_name=str(_resolve_log_field(raw, "log_name")),

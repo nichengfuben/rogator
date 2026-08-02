@@ -7,10 +7,12 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable, Opti
 
 from server.config import CONFIG
 from server.formats import (
+    BaxiaSmBlockedError,
     PayloadTooLargeError,
     TokenExpiredError,
     UpstreamConnectionError,
     UpstreamTimeoutError,
+    UpstreamWafBlockedError,
 )
 from upstream.qwen.chat.store import mask_username
 
@@ -31,7 +33,16 @@ async def _reset_client_transport(client: Optional[Any]) -> None:
 
 
 def is_retryable_error(exc: BaseException) -> bool:
-    return isinstance(exc, (TokenExpiredError, UpstreamTimeoutError, UpstreamConnectionError))
+    return isinstance(
+        exc,
+        (
+            TokenExpiredError,
+            BaxiaSmBlockedError,
+            UpstreamWafBlockedError,
+            UpstreamTimeoutError,
+            UpstreamConnectionError,
+        ),
+    )
 
 
 def _is_shutting_down(state: Any) -> bool:
@@ -50,6 +61,8 @@ def _log_retry_exhausted(req_id: str, retries: int, limit: int, exc: BaseExcepti
     args = (req_id, retries, limit, exc)
     if limit == 0:
         logger.warning(msg, *args)
+    elif isinstance(exc, BaxiaSmBlockedError):
+        logger.debug(msg, *args)
     else:
         logger.error(msg, *args)
 
@@ -100,10 +113,10 @@ def parse_rate_limit_block_seconds(message: str) -> float:
     return 86400.0
 
 
-async def _switch_session_after_token_error(
+async def _switch_session_after_account_error(
     req_id: str,
     state: Any,
-    exc: TokenExpiredError,
+    exc: TokenExpiredError | BaxiaSmBlockedError | UpstreamWafBlockedError,
     *,
     retries: int,
     limit: int,
@@ -119,7 +132,13 @@ async def _switch_session_after_token_error(
     old_name = getattr(retry_client, "current_session_username", None)
     block = getattr(retry_client, "block_account", None)
     block_seconds = parse_rate_limit_block_seconds(str(exc))
-    if old_name and block and callable(block) and "Rate limited" in str(exc):
+    if (
+        isinstance(exc, TokenExpiredError)
+        and old_name
+        and block
+        and callable(block)
+        and "Rate limited" in str(exc)
+    ):
         block(old_name, block_seconds)
     new_session = await switch(exclude_username=old_name)
     if new_session is None or retries > limit:
@@ -127,7 +146,8 @@ async def _switch_session_after_token_error(
             raise asyncio.CancelledError("Shutting down") from exc
         _log_retry_exhausted(req_id, retries, limit, exc)
         raise exc
-    logger.warning(
+    log_fn = logger.debug if isinstance(exc, BaxiaSmBlockedError) else logger.warning
+    log_fn(
         "Session error, switching account for %s (retry %d/%d): "
         "old=%s error_type=%s new=%s",
         req_id, retries, limit,
@@ -162,8 +182,8 @@ async def _dispatch_session_retry(
     """分派可重试异常；返回更新后的 retries。不可重试则 raise。"""
     _raise_if_shutting_down(state)
     retries += 1
-    if isinstance(exc, TokenExpiredError):
-        await _switch_session_after_token_error(
+    if isinstance(exc, (TokenExpiredError, BaxiaSmBlockedError, UpstreamWafBlockedError)):
+        await _switch_session_after_account_error(
             req_id, state, exc, retries=retries, limit=limit, client=client,
         )
         return retries
@@ -192,7 +212,14 @@ async def run_with_session_retry(
     """非流式换号重试。"""
     limit = CONFIG.max_retry_on_error if max_retry is None else max_retry
     retries = 0
-    retryable = (TokenExpiredError, PayloadTooLargeError, UpstreamTimeoutError, UpstreamConnectionError)
+    retryable = (
+        TokenExpiredError,
+        BaxiaSmBlockedError,
+        UpstreamWafBlockedError,
+        PayloadTooLargeError,
+        UpstreamTimeoutError,
+        UpstreamConnectionError,
+    )
 
     while True:
         try:
@@ -277,7 +304,14 @@ async def stream_with_session_retry(
                 await _reset_stream(inner)
                 inner = None
                 raise
-            except (TokenExpiredError, PayloadTooLargeError, UpstreamTimeoutError, UpstreamConnectionError) as exc:
+            except (
+                TokenExpiredError,
+                BaxiaSmBlockedError,
+                UpstreamWafBlockedError,
+                PayloadTooLargeError,
+                UpstreamTimeoutError,
+                UpstreamConnectionError,
+            ) as exc:
                 await _reset_stream(inner)
                 inner = None
                 retries = await _handle_stream_retry_error(

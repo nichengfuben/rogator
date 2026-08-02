@@ -48,6 +48,7 @@ warn_if_config_version_mismatch(user_config_path(), logger)
 from handlers import get_state, setup_routes
 from handlers.shared.fncall_inject import prompt_dump_dir
 from server.records.response_record import response_dump_dir
+from server.records.sse_record import sse_dump_dir
 from upstream.qwen.chat.store import CLEANUP_INTERVAL
 from core.registry import load_upstreams
 from state import AppState
@@ -66,6 +67,11 @@ logger.info(
     "response record=%s dir=%s pattern=logs/responses/{req_id}.txt (upstream think+answer, pre-entml)",
     CONFIG.record_response,
     response_dump_dir(),
+)
+logger.info(
+    "sse record=%s dir=%s pattern=logs/sse/{req_id}.sse (upstream raw stream, pre-parse)",
+    CONFIG.record_sse,
+    sse_dump_dir(),
 )
 
 # ============================================================

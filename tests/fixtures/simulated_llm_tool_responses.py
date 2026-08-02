@@ -422,7 +422,7 @@ SIMULATED_LLM_RESPONSES: List[SimulatedCase] = [
         expect_names=["run_shell"],
         expect_args=[
             {
-                "command": "python -m pytest src/tests -q",
+                "command": "\npython -m pytest src/tests -q\n",
                 "timeout_ms": 60000,
                 "env": {"PYTHONPATH": "src", "LANG": "C"},
             }

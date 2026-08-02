@@ -69,7 +69,7 @@ class UploadMixin:
                 return None
 
     async def _get_sts_credentials(self, session: QwenSession, filename: str, filesize: int, filetype: str) -> Dict[str, Any]:
-        headers = build_headers(session.token)
+        headers = build_headers(session.token, username=session.username)
         headers.update({"Content-Type": "application/json;charset=UTF-8", "Accept": "application/json"})
         payload = {"filename": filename, "filesize": filesize, "filetype": filetype}
         for path in ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]:

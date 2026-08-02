@@ -56,6 +56,10 @@ class TokenExpiredError(Exception):
     """Token ??????? session"""
 
 
+class BaxiaSmBlockedError(Exception):
+    """Baxia SM 人机验证拦截：账号仍有效，换号重试即可。"""
+
+
 class ClientDisconnectedError(Exception):
     """????????????????"""
 

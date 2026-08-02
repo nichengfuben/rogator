@@ -31,6 +31,7 @@ from server.formats.constants import (
     gen_tool_id,
 )
 from server.formats.errors import (
+    BaxiaSmBlockedError,
     ClientDisconnectedError,
     PayloadTooLargeError,
     TokenExpiredError,
@@ -102,6 +103,7 @@ __all__ = [
     "TOKEN_EXPIRE_HOURS",
     "TOKEN_EXPIRE_SECONDS",
     "TokenExpiredError",
+    "BaxiaSmBlockedError",
     "UpstreamConnectionError",
     "UpstreamTimeoutError",
     "UpstreamUnavailableError",

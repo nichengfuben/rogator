@@ -49,6 +49,125 @@ class TestSwitchAccount(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(picked)
 
 
+class TestPreloginLoadAware(unittest.IsolatedAsyncioTestCase):
+    async def test_idle_replenish_only_bootstrap(self) -> None:
+        empty_meta = SessionStoreMeta()
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
+        client._sessions = []
+        client._prelogin_target = 32
+        client._login_interval = 0.0
+        client._ensure_cleanup = AsyncMock()
+        client._pick_account_for_login = MagicMock(side_effect=[
+            Account(username="a@test.com", password="pw"),
+            Account(username="b@test.com", password="pw"),
+        ])
+
+        async def _fake_login(account: Account) -> QwenSession:
+            qs = _session(account.username.split("@")[0])
+            client._sessions.append(qs)
+            return qs
+
+        client.login_account = AsyncMock(side_effect=_fake_login)
+
+        with patch("core.session.pool.accounts_for_upstream", return_value=[
+            Account(username="a@test.com", password="pw"),
+            Account(username="b@test.com", password="pw"),
+        ]):
+            await client.replenish_sessions()
+        self.assertEqual(valid_session_count(client._sessions), 1)
+        self.assertEqual(client.login_account.await_count, 1)
+
+    async def test_replenish_scales_with_inflight(self) -> None:
+        empty_meta = SessionStoreMeta()
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
+        client._sessions = [_session("warm")]
+        client._prelogin_target = 32
+        client._login_interval = 0.0
+        client._ensure_cleanup = AsyncMock()
+        client._inflight = {"warm@test.com": 10}
+        accounts = [
+            Account(username=f"u{i}@test.com", password="pw")
+            for i in range(20)
+        ]
+        client._pick_account_for_login = MagicMock(side_effect=accounts)
+
+        async def _fake_login(account: Account) -> QwenSession:
+            qs = _session(account.username.split("@")[0])
+            client._sessions.append(qs)
+            return qs
+
+        client.login_account = AsyncMock(side_effect=_fake_login)
+
+        with patch("core.session.pool.accounts_for_upstream", return_value=accounts):
+            with patch.object(client, "_prelogin_cap", return_value=16):
+                with patch.object(client, "_prelogin_headroom", return_value=8):
+                    await client.replenish_sessions()
+        # demand=10, headroom=8 → target=18, cap=16, valid=1 → need 15
+        self.assertEqual(client.login_account.await_count, 15)
+
+    async def test_urgent_replenish_skips_interval(self) -> None:
+        empty_meta = SessionStoreMeta()
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
+        client._sessions = []
+        client._prelogin_target = 32
+        client._login_interval = 999.0
+        client._ensure_cleanup = AsyncMock()
+        client._inflight = {"busy@test.com": 3}
+        accounts = [
+            Account(username=f"u{i}@test.com", password="pw")
+            for i in range(8)
+        ]
+        client._pick_account_for_login = MagicMock(side_effect=accounts + [None])
+
+        async def _fake_login(account: Account) -> QwenSession:
+            qs = _session(account.username.split("@")[0])
+            client._sessions.append(qs)
+            return qs
+
+        client.login_account = AsyncMock(side_effect=_fake_login)
+
+        with patch("core.session.pool.accounts_for_upstream", return_value=accounts):
+            with patch("core.session.pool.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+                with patch.object(client, "_prelogin_cap", return_value=16):
+                    with patch.object(client, "_prelogin_headroom", return_value=2):
+                        await client.replenish_sessions()
+        self.assertGreaterEqual(client.login_account.await_count, 2)
+        sleep_mock.assert_not_called()
+
+    async def test_signal_replenish_urgent_with_existing_sessions(self) -> None:
+        empty_meta = SessionStoreMeta()
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
+        client._sessions = [_session("warm")]
+        client._prelogin_target = 32
+        client._login_interval = 999.0
+        client._ensure_cleanup = AsyncMock()
+        client.signal_replenish()
+        accounts = [
+            Account(username=f"u{i}@test.com", password="pw")
+            for i in range(5)
+        ]
+        client._pick_account_for_login = MagicMock(side_effect=accounts)
+
+        async def _fake_login(account: Account) -> QwenSession:
+            qs = _session(account.username.split("@")[0])
+            client._sessions.append(qs)
+            return qs
+
+        client.login_account = AsyncMock(side_effect=_fake_login)
+
+        with patch("core.session.pool.accounts_for_upstream", return_value=accounts):
+            with patch("core.session.pool.asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+                with patch.object(client, "_prelogin_cap", return_value=16):
+                    with patch.object(client, "_prelogin_headroom", return_value=4):
+                        await client.replenish_sessions()
+        self.assertGreaterEqual(client.login_account.await_count, 2)
+        sleep_mock.assert_not_called()
+
+
 class TestPrelogin(unittest.IsolatedAsyncioTestCase):
     async def test_prelogin_fills_to_target(self) -> None:
         empty_meta = SessionStoreMeta()

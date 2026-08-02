@@ -36,14 +36,30 @@ from core.transport.owned import HttpTransportMixin
 from server.formats import (
     DEFAULT_MODELS,
     REQUEST_TOTAL_TIMEOUT,
+    BaxiaSmBlockedError,
     UpstreamTimeoutError,
     build_chat_payload,
     build_qwen_message,
     extract_last_user_content,
 )
+from upstream.qwen.auth.baxia_store import ensure_pool_baxia_profiles
+
+
 from server.config import CONFIG
 
 logger = logging.getLogger("rogator")
+
+
+def _init_qwen_baxia_profiles() -> None:
+    kept, created = ensure_pool_baxia_profiles()
+    total = kept + created
+    if created:
+        logger.info(
+            "Baxia profiles ready: total=%d kept=%d created=%d path=persist/qwen/baxia_profiles.json",
+            total, kept, created,
+        )
+    elif total:
+        logger.debug("Baxia profiles ready: total=%d (all cached)", total)
 
 
 async def _iter_qwen_sse_or_reconnect(
@@ -94,6 +110,7 @@ async def _post_chat_sse(
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
+        _init_qwen_baxia_profiles()
         self._init_session_pool()
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))
@@ -183,7 +200,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
                 audio_bytes, filename=filename, content_type=content_type,
             )
             http = await self._ensure_http_session()
-            asr = AsrTranscriber(http, session.token)
+            asr = AsrTranscriber(http, session.token, username=session.username)
             return await asr.transcribe(pcm, language=language or "zh-CN")
 
         return await run_with_connection_retry(
@@ -226,14 +243,20 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
             thinking_mode=qwen_thinking_mode,
         )
         payload = build_chat_payload(chat_id, model, qwen_message)
-        headers = build_headers(session.token, chat_id=chat_id, include_sse=True)
+        headers = build_headers(
+            session.token, username=session.username, chat_id=chat_id, include_sse=True,
+        )
         response_id_box: List[str] = []
         cancelled = False
+        baxia_sm_retry = False
         try:
             async for event in _post_chat_sse(
                 self, session, chat_id, payload, headers, response_id_box,
             ):
                 yield event
+        except BaxiaSmBlockedError:
+            baxia_sm_retry = True
+            raise
         except (asyncio.CancelledError, GeneratorExit):
             cancelled = True
             response_id = response_id_box[0] if response_id_box else ""
@@ -245,7 +268,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
                 raise conn_err from exc
             raise
         finally:
-            if not cancelled:
+            if not cancelled and not baxia_sm_retry:
                 await self.cleanup_chat(session, chat_id)
 
     async def shutdown(self) -> None:

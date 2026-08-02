@@ -205,9 +205,16 @@ async def _consume_asr_ws(
 class AsrTranscriber:
     """Qwen wsgu_asr WebSocket 音频为空"""
 
-    def __init__(self, session: aiohttp.ClientSession, token: str) -> None:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        token: str,
+        *,
+        username: str = "",
+    ) -> None:
         self._session = session
         self._token = token
+        self._username = username
         self._results: List[str] = []
         self._last_text: str = ""
 
@@ -262,7 +269,7 @@ class AsrTranscriber:
         self._last_text = ""
         started = asyncio.Event()
 
-        ws_headers = build_asr_ws_headers(self._token)
+        ws_headers = build_asr_ws_headers(self._token, username=self._username)
         async with self._session.ws_connect(
             ws_url, ssl=False, heartbeat=30.0, proxy=None,
             headers=ws_headers,

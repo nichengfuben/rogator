@@ -86,11 +86,11 @@ def generate_device_id() -> str:
     return uuid.uuid4().hex
 
 
-def collect_fingerprint_data() -> str:
-    """Build the compact fingerprint string used for Baxia headers."""
-    device_id = generate_device_id()
+def build_fingerprint(*, device_id: str | None = None) -> str:
+    """构建账号级稳定指纹串（device_id 省略则随机）。"""
+    did = device_id or generate_device_id()
     fields = [
-        device_id,
+        did,
         "1.0.0",
         "web",
         "Chrome",
@@ -110,9 +110,14 @@ def collect_fingerprint_data() -> str:
     return "^".join(fields)
 
 
+def collect_fingerprint_data() -> str:
+    """Build the compact fingerprint string used for Baxia headers."""
+    return build_fingerprint()
+
+
 def generate_fingerprint() -> str:
     """Return a stable-format fingerprint string."""
-    return collect_fingerprint_data()
+    return build_fingerprint()
 
 
 def _encode_payload(text: str) -> str:
@@ -158,13 +163,28 @@ def custom_encode(data: str, url_safe: bool = True) -> str:
     return encoded
 
 
-def get_baxia_tokens() -> Dict[str, str]:
-    """Return the Baxia header triplet required by current web requests."""
-    fingerprint = generate_fingerprint()
+def get_baxia_tokens(
+    *,
+    username: str = "",
+    fingerprint_override: str = "",
+) -> Dict[str, str]:
+    """Return Baxia header triplet; 有 username 时用持久化 profile。"""
+    if username.strip():
+        from upstream.qwen.auth.baxia_store import get_profile
+
+        profile = get_profile(username)
+        fingerprint = profile.fingerprint
+        bx_umid = profile.bx_umidtoken
+    elif fingerprint_override:
+        fingerprint = fingerprint_override
+        bx_umid = get_bxumidtoken()
+    else:
+        fingerprint = generate_fingerprint()
+        bx_umid = get_bxumidtoken()
     return {
         "bxV": BAXIA_SDK_VERSION,
         "bxUa": generate_bxua(fingerprint),
-        "bxUmidToken": get_bxumidtoken(),
+        "bxUmidToken": bx_umid,
         "fingerprint": fingerprint,
     }
 
@@ -218,17 +238,23 @@ def _base_headers() -> Dict[str, str]:
     }
 
 
-def build_login_headers() -> Dict[str, str]:
+def build_login_headers(*, username: str = "") -> Dict[str, str]:
     """Build headers for the v2 sign-in endpoint."""
     headers = _base_headers()
     headers["Version"] = APP_VERSION
     headers["x-request-origin"] = BASE_URL
+    if username.strip():
+        baxia = get_baxia_tokens(username=username)
+        headers["bx-v"] = baxia["bxV"]
+        headers["bx-ua"] = baxia["bxUa"]
+        headers["bx-umidtoken"] = baxia["bxUmidToken"]
     return headers
 
 
 def build_headers(
     token: str,
     *,
+    username: str = "",
     chat_id: str = "",
     include_sse: bool = False,
     include_version: bool = True,
@@ -241,7 +267,10 @@ def build_headers(
     headers = _base_headers()
     if use_bearer and token:
         headers["Authorization"] = f"Bearer {token}"
-    baxia = get_baxia_tokens()
+    baxia = get_baxia_tokens(
+        username=username,
+        fingerprint_override=fingerprint,
+    )
     headers["bx-v"] = baxia["bxV"]
     headers["bx-ua"] = baxia["bxUa"]
     headers["bx-umidtoken"] = baxia["bxUmidToken"]
@@ -262,13 +291,13 @@ def build_headers(
     return headers
 
 
-def build_stop_headers(token: str) -> Dict[str, str]:
+def build_stop_headers(token: str, *, username: str = "") -> Dict[str, str]:
     """Build headers for the stop-generation endpoint."""
-    return build_headers(token, include_version=True)
+    return build_headers(token, username=username, include_version=True)
 
 
-def build_asr_ws_headers(token: str) -> Dict[str, str]:
+def build_asr_ws_headers(token: str, *, username: str = "") -> Dict[str, str]:
     """ASR WebSocket 握手头（需 Baxia + Cookie 绕过 WAF）。"""
-    headers = build_headers(token, include_version=True)
+    headers = build_headers(token, username=username, include_version=True)
     headers.pop("Content-Type", None)
     return headers

@@ -50,6 +50,10 @@ class RequestScheduler:
         return _max_queue_size(self._fixed_queue)
 
     @property
+    def active(self) -> int:
+        return self._active
+
+    @property
     def pending(self) -> int:
         return self._pending
 
@@ -197,7 +201,8 @@ async def session_maintenance_loop(
                 cleanup()
             replenish = getattr(client, "replenish_sessions", None)
             if callable(replenish):
-                await replenish()
+                scheduler = getattr(state, "scheduler", None)
+                await replenish(scheduler=scheduler)
             wait_replenish = getattr(client, "wait_for_replenish_or_timeout", None)
             if inspect.iscoroutinefunction(wait_replenish):
                 await wait_replenish(wait)

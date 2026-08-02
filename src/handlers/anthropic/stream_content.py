@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id, should_emit_anthropic_message_start
 
 from handlers.chat_request import iter_retried_chat_events
+from server.records.sse_record import record_sse_stream
 from handlers.shared.fncall_inject import advance_partial_buffer
 from handlers.openai import _chat_once
 
@@ -290,11 +291,12 @@ async def _stream_event_loop(
             resp, to_process, parser, stream_state, disconnected,
         )
 
-    await iter_retried_chat_events(
-        req_id, state_obj,
-        lambda: _make_anthropic_chat_stream(
-            state_obj, messages, model, tools, req_id, protocol_options,
-        ),
-        model=model, messages=messages, tools=tools,
-        disconnected=disconnected, on_event=_on_event,
-    )
+    with record_sse_stream(req_id):
+        await iter_retried_chat_events(
+            req_id, state_obj,
+            lambda: _make_anthropic_chat_stream(
+                state_obj, messages, model, tools, req_id, protocol_options,
+            ),
+            model=model, messages=messages, tools=tools,
+            disconnected=disconnected, on_event=_on_event,
+        )

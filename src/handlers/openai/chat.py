@@ -14,6 +14,7 @@ from server.formats import (
     log_qwen_upstream_usage,
 )
 from server.records.response_record import record_raw_response
+from server.records.sse_record import record_sse_stream
 from server.retry import run_with_session_retry
 
 logger = get_logger("rogator")
@@ -59,7 +60,7 @@ async def _collect_non_stream_response(
     think_parts: List[str] = []
     event_count = 0
     usage_tracker = UpstreamUsageTracker()
-    with record_raw_response(req_id) as raw_recorder:
+    with record_sse_stream(req_id), record_raw_response(req_id) as raw_recorder:
         async for event in _chat_once(
             state, messages, model, tools, req_id, protocol_options=protocol_options,
             prompt_api=prompt_api,

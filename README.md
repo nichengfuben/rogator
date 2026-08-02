@@ -72,7 +72,7 @@ pip install -r requirements-dev.txt
 version = "2.2.2"
 port = 8932
 host = "0.0.0.0"
-prelogin = 3          # 启动时预登录账号数；运行中不足时自动补登
+prelogin = 3          # session 池上限；空闲时仅保 1 个 warm session，有负载再扩池
 login_interval = 15.0 # 连续预登录之间的间隔（秒）
 
 [models]
@@ -97,6 +97,8 @@ enabled = ["qwen"]
 # record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt
 # record_response = true 时写入 logs/responses/{req_id}.txt
 record_response = false
+# record_sse = true 时实时写入 logs/sse/{req_id}.sse（上游 SSE 原始流）
+record_sse = false
 
 [timeout]
 request_total = 600.0
@@ -118,9 +120,9 @@ hard_exit_timeout = 25.0
 python main.py
 ```
 
-启动流程：加载/迁移会话 → 清理过期 session → **立即监听 HTTP**（预登录在后台补至 `prelogin` 数量）→ 模型列表在首批 session 就绪后刷新。
+启动流程：加载/迁移会话 → 清理过期 session → **立即监听 HTTP**（后台仅 bootstrap 1 个 session）→ 模型列表在首批 session 就绪后刷新。
 
-运行中后台每 60s 清理过期 session，有效数低于 `prelogin` 时自动补登（无需等待新请求）。
+运行中后台每 60s 维护 session 池：空闲保持最少 warm session；有在途请求或排队时按负载扩至 `prelogin` 上限（受 `max_concurrent` 折中）。
 
 ### 5. 验证
 

@@ -46,8 +46,8 @@ class TestIterSseEventsResponseId(unittest.IsolatedAsyncioTestCase):
         session = MagicMock()
 
         async def _lines():
-            yield b'data: {"response.created":{"response_id":"rid-42"}}\n'
-            yield b"data: [DONE]\n"
+            yield b'data: {"response.created":{"response_id":"rid-42"}}\n\n'
+            yield b"data: [DONE]\n\n"
 
         resp = MagicMock()
         resp.content = _lines()

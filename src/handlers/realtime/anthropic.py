@@ -129,7 +129,9 @@ class AnthropicRealtimeAsrConnection:
             turn = _AntTurn(_msg_id())
             http = await self._http_session()
             turn.upstream = AsrRealtimeSession(
-                http, self._qwen_session.token, language=self._language,
+                http, self._qwen_session.token,
+                username=self._qwen_session.username,
+                language=self._language,
             )
             await turn.upstream.start()
             turn.pump_task = asyncio.create_task(self._pump(turn))

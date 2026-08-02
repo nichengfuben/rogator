@@ -10,6 +10,7 @@ from aiohttp import web
 
 from echotools.base.logger import get_logger
 from server.formats import (
+    BaxiaSmBlockedError,
     TokenExpiredError,
     UpstreamConnectionError,
     UpstreamTimeoutError,
@@ -43,6 +44,8 @@ class StreamErrorInfo:
 def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
     if isinstance(exc, TokenExpiredError):
         return StreamErrorInfo("rate_limited", str(exc), 429)
+    if isinstance(exc, BaxiaSmBlockedError):
+        return StreamErrorInfo("server_error", f"Baxia SM blocked: {exc}", 503)
     if isinstance(exc, UpstreamTimeoutError):
         return StreamErrorInfo("timeout", str(exc), 504)
     if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError)):
@@ -55,7 +58,9 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
 def log_classified_stream_error(exc: BaseException, *, label: str) -> StreamErrorInfo:
     """分类流式异常并按 kind 打日志；协议层只负责写 SSE。"""
     info = classify_stream_error(exc)
-    if info.kind == "rate_limited":
+    if isinstance(exc, BaxiaSmBlockedError):
+        logger.debug("%s Baxia SM blocked: %s", label, exc)
+    elif info.kind == "rate_limited":
         logger.warning("%s token expired: %s", label, exc)
     elif info.kind == "timeout":
         logger.warning("%s upstream timeout: %s", label, exc)
@@ -167,6 +172,10 @@ def handler_error_response(
         logger.warning("%s token expired: %s", label, exc)
         kind = "rate_limit_error" if protocol == "anthropic" else "rate_limited"
         return err(429, str(exc), kind)
+    if isinstance(exc, BaxiaSmBlockedError):
+        logger.debug("%s Baxia SM blocked: %s", label, exc)
+        kind = "api_error" if protocol == "anthropic" else "server_error"
+        return err(503, f"Baxia SM blocked: {exc}", kind)
     if isinstance(exc, UpstreamTimeoutError):
         logger.warning("%s upstream timeout: %s", label, exc)
         kind = "timeout_error" if protocol == "anthropic" else "timeout"

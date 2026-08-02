@@ -52,6 +52,8 @@ record_prompt = false
 print_prompt = false
 # record_response = true 时写入 logs/responses/{req_id}.txt（上游 thinking+answer，不经 entml 解析）
 record_response = false
+# record_sse = true 时实时写入 logs/sse/{req_id}.sse（上游 SSE 原始字节流，parse 前）
+record_sse = false
 
 [debug]
 level = "INFO"

@@ -7,10 +7,13 @@ import logging
 import random
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from state_sched import RequestScheduler
 
 from core.session.accounts import Account, accounts_for_upstream
-from core.session.pool_switch import SessionSwitchMixin
+from core.session.pool_switch import SessionReplenishMixin, SessionSwitchMixin
 from core.session.store import (
     CLEANUP_INTERVAL,
     MUTE_LOGIN_BLOCK_SECONDS,
@@ -32,10 +35,9 @@ logger = logging.getLogger("rogator")
 
 # 单账号并发软顶；全池饱和时仍允许选用（退化为最少在途）
 MAX_INFLIGHT_PER_ACCOUNT: int = 2
-MIN_EFFECTIVE_PRELOGIN: int = 4
 
 
-class SessionLoginMixin(SessionSwitchMixin):
+class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
     """按 upstream 分桶的 session 池；子类实现 ``_perform_login``。"""
 
     UPSTREAM_NAME: str = ""
@@ -74,35 +76,6 @@ class SessionLoginMixin(SessionSwitchMixin):
             self._inflight.pop(username, None)
         else:
             self._inflight[username] = count
-
-    def _effective_prelogin_target(self, count: Optional[int] = None) -> int:
-        if count is not None:
-            return max(0, int(count))
-        base = max(0, int(self._prelogin_target))
-        try:
-            from server.config import CONFIG
-
-            mc = int(CONFIG.max_concurrent)
-        except Exception:
-            return base
-        if mc <= 0:
-            return base
-        return min(base, max(MIN_EFFECTIVE_PRELOGIN, mc // 2))
-
-    def signal_replenish(self) -> None:
-        """请求路径池压高时唤醒后台补登（debounce 由 maintenance 清 event）。"""
-        self._replenish_event.set()
-
-    async def wait_for_replenish_or_timeout(self, timeout: float) -> None:
-        if self._replenish_event.is_set():
-            self._replenish_event.clear()
-            return
-        try:
-            await asyncio.wait_for(self._replenish_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            pass
-        finally:
-            self._replenish_event.clear()
 
     @asynccontextmanager
     async def lease_valid_session(
@@ -273,57 +246,6 @@ class SessionLoginMixin(SessionSwitchMixin):
 
     def _pool_accounts(self) -> List[Account]:
         return accounts_for_upstream(self.UPSTREAM_NAME)
-
-    async def replenish_sessions(self, count: Optional[int] = None) -> None:
-        """有效 session 不足 pool target 时补登（由后台 maintenance 调用）。"""
-        target = self._effective_prelogin_target(count)
-        await self._ensure_cleanup()
-        pool = self._pool_accounts()
-        if not pool:
-            logger.warning("No accounts available for %s", self.UPSTREAM_NAME)
-            return
-        need = max(0, target - valid_session_count(self._sessions))
-        if need <= 0:
-            return
-        logged = 0
-        urgent = valid_session_count(self._sessions) == 0
-        interval = 0.0 if urgent else max(0.0, self._login_interval)
-        for attempt in range(need):
-            account = self._pick_account_for_login()
-            if account is None:
-                if valid_session_count(self._sessions) == 0:
-                    logger.debug(
-                        "No login-eligible accounts for %s (all blocked/muted/in-use)",
-                        self.UPSTREAM_NAME,
-                    )
-                break
-            ps = await self.login_account(account)
-            if ps:
-                logged += 1
-            if interval > 0 and attempt < need - 1:
-                await asyncio.sleep(interval)
-        if logged:
-            logger.info(
-                "Session pool [%s]: +%d new, %d ready (target=%d)",
-                self.UPSTREAM_NAME,
-                logged,
-                valid_session_count(self._sessions),
-                target,
-            )
-        elif valid_session_count(self._sessions) == 0:
-            logger.debug(
-                "Session pool replenish failed [%s] (target=%d)",
-                self.UPSTREAM_NAME,
-                target,
-            )
-
-    async def ensure_prelogin(self) -> None:
-        """兼容旧调用；等同 ``replenish_sessions``。"""
-        await self.replenish_sessions(self._prelogin_target)
-
-    async def prelogin_accounts(self, count: Optional[int] = None) -> None:
-        """兼容旧调用；等同 ``replenish_sessions``。"""
-        await self.replenish_sessions(count)
 
     def _active_usernames(self) -> set[str]:
         return {s.username for s in self._sessions if s.is_valid and not s.is_expired()}
