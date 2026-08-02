@@ -5,27 +5,53 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock, patch
 
-from echotools.exec.process.port import PortReleaseResult
-
+from server.config.port_release import (
+    PortReleaseOutcome,
+    _find_pids_ss,
+    _linux_port_hex,
+    _parse_int_tokens,
+)
 from server.config.startup_port import ensure_listen_port
+
+
+class TestPortReleaseHelpers(unittest.TestCase):
+    def test_linux_port_hex(self) -> None:
+        self.assertEqual(_linux_port_hex(8932), "E422")
+
+    def test_parse_int_tokens(self) -> None:
+        self.assertEqual(_parse_int_tokens("1234\n5678"), {1234, 5678})
+
+    def test_find_pids_ss_parses_pid(self) -> None:
+        sample = "LISTEN 0 128 *:8932 *:* users:(('python',pid=4242,fd=3))"
+        with patch(
+            "server.config.port_release._run_command",
+            return_value=MagicMock(stdout=sample, stderr=""),
+        ):
+            self.assertEqual(_find_pids_ss(8932), {4242})
 
 
 class TestStartupPort(unittest.TestCase):
     def test_free_port_no_kill(self) -> None:
         with patch("server.config.startup_port._can_bind", return_value=True):
-            with patch("server.config.startup_port.ensure_port_available") as mock_kill:
+            with patch(
+                "server.config.startup_port.force_release_listen_port",
+            ) as mock_kill:
                 ensure_listen_port("0.0.0.0", 8932, force_kill=False)
                 mock_kill.assert_not_called()
 
     def test_occupied_without_force_kill_exits(self) -> None:
         with patch("server.config.startup_port._can_bind", return_value=False):
-            with self.assertRaises(SystemExit) as ctx:
-                ensure_listen_port("0.0.0.0", 8932, force_kill=False)
-            self.assertEqual(ctx.exception.code, 1)
+            with patch(
+                "server.config.startup_port.find_listen_pids",
+                return_value=[99],
+            ):
+                with self.assertRaises(SystemExit) as ctx:
+                    ensure_listen_port("0.0.0.0", 8932, force_kill=False)
+                self.assertEqual(ctx.exception.code, 1)
 
     def test_occupied_with_force_kill_released(self) -> None:
         bind = MagicMock(side_effect=[False, True])
-        result = PortReleaseResult(
+        result = PortReleaseOutcome(
             port=8932,
             occupied=True,
             released=True,
@@ -34,11 +60,12 @@ class TestStartupPort(unittest.TestCase):
         )
         with patch("server.config.startup_port._can_bind", bind):
             with patch(
-                "server.config.startup_port.ensure_port_available",
+                "server.config.startup_port.force_release_listen_port",
                 return_value=result,
             ) as mock_kill:
-                ensure_listen_port("0.0.0.0", 8932, force_kill=True)
-                mock_kill.assert_called_once_with(8932, True)
+                with patch("server.config.startup_port._wait_until_bind", return_value=True):
+                    ensure_listen_port("0.0.0.0", 8932, force_kill=True)
+                mock_kill.assert_called_once_with(8932)
 
 
 if __name__ == "__main__":

@@ -116,6 +116,20 @@ def ensure_pool_baxia_profiles() -> Tuple[int, int]:
     return ensure_profiles(usernames)
 
 
+def regenerate_profile(username: str) -> BaxiaProfile:
+    """登录时重新生成账号 Baxia 凭证（覆盖已有）。"""
+    key = str(username or "").strip()
+    if not key:
+        raise ValueError("username required for Baxia profile regeneration")
+    with _lock:
+        data = _load_unlocked()
+        prof = _new_profile()
+        data[key] = prof.to_dict()
+        _save_unlocked(data)
+        logger.info("Baxia profile regenerated for %s", key[:6] + "***")
+        return prof
+
+
 def get_profile(username: str) -> BaxiaProfile:
     """取账号 profile；缺失时单条补齐（不覆盖已有）。"""
     key = str(username or "").strip()

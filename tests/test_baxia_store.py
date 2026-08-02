@@ -10,6 +10,7 @@ from upstream.qwen.auth.baxia_store import (
     ensure_pool_baxia_profiles,
     ensure_profiles,
     get_profile,
+    regenerate_profile,
 )
 
 
@@ -40,6 +41,18 @@ def test_get_profile_does_not_overwrite(tmp_path, monkeypatch) -> None:
     second = get_profile("u@test.com")
     assert first.fingerprint == second.fingerprint
     assert first.bx_umidtoken == second.bx_umidtoken
+
+
+def test_regenerate_profile_overwrites(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "baxia_profiles.json"
+    monkeypatch.setattr("upstream.qwen.auth.baxia_store.baxia_profiles_path", lambda: path)
+
+    first = get_profile("u@test.com")
+    regenerated = regenerate_profile("u@test.com")
+    second = get_profile("u@test.com")
+    assert regenerated.fingerprint == second.fingerprint
+    assert first.fingerprint != second.fingerprint
+    assert first.bx_umidtoken != second.bx_umidtoken
 
 
 def test_ensure_pool_reads_accounts_csv(tmp_path, monkeypatch) -> None:
