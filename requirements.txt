@@ -1,5 +1,24 @@
-# Rogator runtime deps (Python 3.8-3.14, macOS / Linux / Windows)
-aiohttp>=3.9.0
-echotools==2.4.1
-typing-extensions>=4.7.0
-tomli>=2.0.0; python_version < "3.11"
+# Rogator runtime deps — pinned to versions on dev machine (Python 3.14.6, 2026-08-02)
+# Install: pip install -r requirements.txt
+
+# Core
+aiohttp==3.14.3
+echotools==2.4.0
+typing-extensions==4.16.0
+
+# aiohttp transitive (pinned for reproducible installs)
+aiohappyeyeballs==2.7.1
+aiosignal==1.4.0
+attrs==26.1.0
+frozenlist==1.8.0
+idna==3.18
+multidict==6.7.1
+propcache==0.5.2
+yarl==1.24.5
+
+# SOCKS proxy (optional; used when ALL_PROXY/HTTPS_PROXY is socks://)
+aiohttp-socks==0.11.0
+python-socks==2.8.2
+
+# TOML config on Python < 3.11 (3.11+ uses stdlib tomllib)
+tomli==2.4.1; python_version < "3.11"

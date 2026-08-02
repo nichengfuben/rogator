@@ -1,2 +1,11 @@
+# Dev / test deps — pinned to versions on dev machine (Python 3.14.6, 2026-08-02)
 -r requirements.txt
-pytest>=7.0.0
+
+pytest==9.1.1
+
+# pytest transitive
+colorama==0.4.6
+iniconfig==2.3.0
+packaging==26.2
+pluggy==1.6.0
+Pygments==2.20.0
