@@ -24,10 +24,9 @@ from server.config.files import (
 )
 from server.model.model_registry import get_model_registry, load_model_registry, reload_model_registry
 from server.model.model_thinking import resolve_thinking_route, uses_entml_thinking
-from server.formats import UpstreamTimeoutError
+from server.formats import BaxiaSmBlockedError, TokenExpiredError, UpstreamTimeoutError
 from server.retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
 from upstream.qwen.chat.store import QwenSession, save_sessions, load_session_store
-from server.formats import TokenExpiredError
 
 _PROJECT_TEMPLATE = PROJECT_ROOT / "template" / "config.toml"
 
@@ -625,6 +624,29 @@ class TestSessionRetry(unittest.TestCase):
             with self.assertRaises(TokenExpiredError):
                 asyncio.run(run_with_session_retry("req-2", state, _run))
         self.assertEqual(calls["n"], 1)
+
+    def test_run_with_session_retry_baxia_regenerates_profile(self) -> None:
+        import asyncio
+
+        state = MagicMock()
+        state.client.current_session_username = "old@test.com"
+        state.client.switch_to_next = AsyncMock(return_value=MagicMock(username="new@test.com"))
+        calls = {"n": 0}
+
+        async def _run():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise BaxiaSmBlockedError(
+                    "FAIL_SYS_USER_VALIDATE RGV587_ERROR::SM::哎哟喂,被挤爆啦,请稍后重试"
+                )
+            return "ok"
+
+        with patch("server.retry.session_retry.CONFIG", replace(get_config(), max_retry_on_error=2)):
+            with patch("server.retry.session_retry.regenerate_profile") as regen:
+                result = asyncio.run(run_with_session_retry("req-baxia", state, _run))
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls["n"], 2)
+        regen.assert_called_once_with("old@test.com")
 
     def test_run_with_session_retry_upstream_timeout(self) -> None:
         state = MagicMock()

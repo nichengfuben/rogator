@@ -14,6 +14,7 @@ from server.formats import (
     UpstreamTimeoutError,
     UpstreamWafBlockedError,
 )
+from upstream.qwen.auth.baxia_store import regenerate_profile
 from upstream.qwen.chat.store import mask_username
 
 if TYPE_CHECKING:
@@ -130,6 +131,15 @@ async def _switch_session_after_account_error(
         _log_retry_exhausted(req_id, retries, limit, exc)
         raise exc
     old_name = getattr(retry_client, "current_session_username", None)
+    if isinstance(exc, BaxiaSmBlockedError) and old_name:
+        try:
+            regenerate_profile(old_name)
+        except Exception as reg_exc:
+            logger.warning(
+                "Baxia profile regenerate failed for %s before retry: %s",
+                mask_username(old_name),
+                reg_exc,
+            )
     block = getattr(retry_client, "block_account", None)
     block_seconds = parse_rate_limit_block_seconds(str(exc))
     if (
