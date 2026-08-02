@@ -2,7 +2,7 @@
 # Python 3.8–3.14 · macOS / Linux / Windows
 # 版本下限用 >=；pip 会按当前 Python 选择兼容 wheel。
 
-echotools>=2.4.0
+echotools>=2.4.0,!=2.4.2
 aiohttp>=3.9.0
 aiohttp-socks>=0.8.0
 typing-extensions>=4.7.0; python_version < "3.9"
