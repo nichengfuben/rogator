@@ -17,7 +17,6 @@ import path_setup  # noqa: F401
 import asyncio
 import contextlib
 import os
-import socket
 import time
 from typing import Optional
 
@@ -27,6 +26,7 @@ from server.config import CONFIG, load_config
 from server.config.files import user_config_path, warn_if_config_version_mismatch
 from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
 from server.config.reload import apply_session_pool_targets, start_config_watcher
+from server.config.startup_port import ensure_listen_port
 from server.config.shutdown import (
     cancel_leftover_tasks,
     install_asyncio_exception_handler,
@@ -43,10 +43,10 @@ logger = get_logger("rogator")
 warn_if_config_version_mismatch(user_config_path(), logger)
 
 # ============================================================
-# 从模块导入
+# ä»æ¨¡åå¯¼å¥
 # ============================================================
 from handlers import get_state, setup_routes
-from handlers.fncall_inject import prompt_dump_dir
+from handlers.shared.fncall_inject import prompt_dump_dir
 from server.records.response_record import response_dump_dir
 from upstream.qwen.chat.store import CLEANUP_INTERVAL
 from core.registry import load_upstreams
@@ -84,17 +84,6 @@ BANNER_WIDTH: int = 70
 # ============================================================
 # 启动辅助函数
 # ============================================================
-
-def _check_port_in_use(host: str, port: int) -> bool:
-    """检查端口是否被占用。"""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.bind((host, port))
-        s.close()
-        return False
-    except OSError:
-        return True
-
 
 def _validate_config(port: int, prelogin_count: int) -> None:
     """验证配置参数。"""
@@ -249,9 +238,7 @@ async def main_async() -> None:
     prelogin_count = cfg.prelogin
     _validate_config(port, prelogin_count)
 
-    if _check_port_in_use(host, port):
-        logger.error("Port %s:%d already in use!", host, port)
-        sys.exit(1)
+    ensure_listen_port(host, port, force_kill=cfg.startup_force_kill_port)
 
     app = web.Application(client_max_size=cfg.client_max_body_bytes)
     setup_routes(app)

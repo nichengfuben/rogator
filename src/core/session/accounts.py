@@ -31,6 +31,7 @@ class Account:
     context_length: Optional[int] = None
     is_login: bool = False
     last_login: float = 0.0
+    area_code: str = ""
 
 
 def accounts_csv_path(upstream: str) -> Path:
@@ -47,9 +48,12 @@ def _read_csv(path: Path) -> List[Account]:
     with path.open("r", encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             email = (row.get("email") or "").strip()
+            phone = (row.get("phone") or row.get("mobile") or "").strip()
+            username = email or phone
             password = (row.get("password") or "").strip()
-            if email and password:
-                out.append(Account(username=email, password=password))
+            area_code = (row.get("area_code") or "").strip()
+            if username and password:
+                out.append(Account(username=username, password=password, area_code=area_code))
     return out
 
 

@@ -9,8 +9,8 @@ from echotools import FncallStreamParser
 from echotools.base.logger import get_logger
 
 from handlers import get_state
-from handlers.api_errors import apply_tool_choice, handler_error_response, log_classified_stream_error
-from handlers.fncall_inject import (
+from handlers.shared.api_errors import apply_tool_choice, handler_error_response, log_classified_stream_error
+from handlers.shared.fncall_inject import (
     advance_partial_buffer,
     finalize_parser_tool_calls,
     reconcile_pending_tool_index,

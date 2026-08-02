@@ -54,23 +54,19 @@ async def create_session(
 async def get_session_list(
     session: aiohttp.ClientSession,
     token: str,
-    count: int = 20,
+    *,
+    pinned: bool = False,
+    count: int = 0,
 ) -> List[Dict[str, Any]]:
-    """获取历史会话列表。
-
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        count: 每页数量。
-
-    Returns:
-        会话字典列表。
-    """
+    """获取历史会话列表（对齐 HAR：lte_cursor.pinned=false）。"""
     headers = build_headers(token)
+    params: Dict[str, Any] = {"lte_cursor.pinned": str(pinned).lower()}
+    if count > 0:
+        params["count"] = count
     async with session.get(
         "https://{}/api/v0/chat_session/fetch_page".format(DEFAULT_HOST),
         headers=headers,
-        params={"count": count, "mode": "lte"},
+        params=params,
         timeout=aiohttp.ClientTimeout(total=30),
         ssl=False,
     ) as resp:

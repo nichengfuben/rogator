@@ -7,6 +7,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
+from core.transport.compat import removeprefix
 from echotools import FncallStreamParser, get_protocol
 
 from handlers.openai.stream_tools import (
@@ -174,7 +175,7 @@ class TestOpenAIStreamFormat(unittest.TestCase):
         asyncio.run(run())
         payload = b"".join(c.args[0] for c in resp.write.call_args_list).decode("utf-8")
         chunks = [
-            json.loads(line.removeprefix("data: "))
+            json.loads(removeprefix(line, "data: "))
             for line in payload.split("\n")
             if line.startswith("data: ") and line != "data: [DONE]"
         ]

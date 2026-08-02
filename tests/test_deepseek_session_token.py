@@ -77,7 +77,7 @@ class TestDeepSeekLoginIntegration(unittest.IsolatedAsyncioTestCase):
             self.skipTest("no deepseek accounts configured")
         account = pool[0]
         async with aiohttp.ClientSession() as session:
-            token, user_id = await login(session, account.username, account.password)
+            token, user_id, _did = await login(session, account.username, account.password)
         self.assertTrue(token)
         self.assertTrue(user_id)
         self.assertIsNone(_jwt_exp(token))

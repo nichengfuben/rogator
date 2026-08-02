@@ -10,7 +10,7 @@ from aiohttp import web
 
 from echotools.base.logger import get_logger
 from handlers import get_state
-from handlers.api_errors import (
+from handlers.shared.api_errors import (
     anthropic_error_response,
     model_resolve_error_response,
     resolve_handler_model,
@@ -39,6 +39,11 @@ async def health_handler(request: web.Request) -> web.Response:
         "platform": "rogator",
         "timestamp": int(__import__("time").time()),
     })
+
+
+async def api_hello_handler(request: web.Request) -> web.Response:
+    """轻量存活探针（HEAD/GET /api/hello）。"""
+    return web.Response(text="hello", content_type="text/plain")
 
 
 async def list_models_handler(request: web.Request) -> web.Response:

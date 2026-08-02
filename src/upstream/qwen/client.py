@@ -6,11 +6,22 @@ import asyncio
 import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
+import aiohttp
+
 from upstream.qwen.auth.crypto import build_headers
 from upstream.qwen.chat.session import ChatSession
 from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH
 from upstream.qwen.account import ModelsFetchMixin, QwenLoginMixin
-from upstream.qwen.chat.chat import create_chat_for_session, handle_chat_error, iter_sse_events
+from upstream.qwen.chat.chat import (
+    abort_upstream_on_cancel,
+    create_chat_for_session,
+    delete_upstream_chat,
+    handle_chat_error,
+    iter_sse_events,
+    stop_upstream_generation,
+)
+from upstream.qwen.chat.upload.upstream_api import reconnect_sse_events_with_retry, warmup_session
+from upstream.qwen.media.asr import AsrTranscriber, aprepare_pcm16_16k_mono
 from upstream.qwen.media.tts import TtsService
 from upstream.qwen.media.video import VideoService
 from upstream.qwen.chat.store import (
@@ -25,6 +36,7 @@ from core.transport.owned import HttpTransportMixin
 from server.formats import (
     DEFAULT_MODELS,
     REQUEST_TOTAL_TIMEOUT,
+    UpstreamTimeoutError,
     build_chat_payload,
     build_qwen_message,
     extract_last_user_content,
@@ -32,6 +44,51 @@ from server.formats import (
 from server.config import CONFIG
 
 logger = logging.getLogger("rogator")
+
+
+async def _iter_qwen_sse_or_reconnect(
+    client: "QwenClient",
+    session: QwenSession,
+    chat_id: str,
+    resp: aiohttp.ClientResponse,
+    response_id_box: List[str],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    try:
+        async for event in iter_sse_events(
+            client, resp, session, response_id_out=response_id_box,
+        ):
+            yield event
+    except UpstreamTimeoutError:
+        rid = response_id_box[0] if response_id_box else ""
+        if not rid:
+            raise
+        async for event in reconnect_sse_events_with_retry(
+            client, session, chat_id, rid,
+        ):
+            yield event
+
+
+async def _post_chat_sse(
+    client: "QwenClient",
+    session: QwenSession,
+    chat_id: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    response_id_box: List[str],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    http = await client._ensure_http_session()
+    async with http.post(
+        f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}",
+        json=payload,
+        headers=headers,
+        timeout=upstream_timeout(REQUEST_TOTAL_TIMEOUT),
+    ) as resp:
+        if resp.status != 200:
+            await handle_chat_error(client, resp, session)
+        async for event in _iter_qwen_sse_or_reconnect(
+            client, session, chat_id, resp, response_id_box,
+        ):
+            yield event
 
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
@@ -112,8 +169,40 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
             "synthesize_tts", _run, transport_owner=self,
         )
 
+    async def transcribe_audio(
+        self,
+        audio_bytes: bytes,
+        session: QwenSession,
+        *,
+        filename: str = "",
+        content_type: str = "",
+        language: str = "",
+    ) -> str:
+        async def _run() -> str:
+            pcm = await aprepare_pcm16_16k_mono(
+                audio_bytes, filename=filename, content_type=content_type,
+            )
+            http = await self._ensure_http_session()
+            asr = AsrTranscriber(http, session.token)
+            return await asr.transcribe(pcm, language=language or "zh-CN")
+
+        return await run_with_connection_retry(
+            "transcribe_audio", _run, transport_owner=self,
+        )
+
     async def create_chat(self, session: QwenSession, model: str) -> str:
         return await create_chat_for_session(self, session, model)
+
+    async def stop_generation(
+        self,
+        session: QwenSession,
+        chat_id: str,
+        response_id: str = "",
+    ) -> bool:
+        return await stop_upstream_generation(self, session, chat_id, response_id)
+
+    async def cleanup_chat(self, session: QwenSession, chat_id: str) -> bool:
+        return await delete_upstream_chat(self, session, chat_id)
 
     async def chat_completion(
         self,
@@ -138,22 +227,26 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         )
         payload = build_chat_payload(chat_id, model, qwen_message)
         headers = build_headers(session.token, chat_id=chat_id, include_sse=True)
+        response_id_box: List[str] = []
+        cancelled = False
         try:
-            s = await self._ensure_http_session()
-            async with s.post(
-                f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}", json=payload,
-                headers=headers,
-                timeout=upstream_timeout(REQUEST_TOTAL_TIMEOUT),
-            ) as resp:
-                if resp.status != 200:
-                    await handle_chat_error(self, resp, session)
-                async for event in iter_sse_events(self, resp, session):
-                    yield event
+            async for event in _post_chat_sse(
+                self, session, chat_id, payload, headers, response_id_box,
+            ):
+                yield event
+        except (asyncio.CancelledError, GeneratorExit):
+            cancelled = True
+            response_id = response_id_box[0] if response_id_box else ""
+            await abort_upstream_on_cancel(self, session, chat_id, response_id)
+            raise
         except Exception as exc:
             conn_err = map_connection_error(exc)
             if conn_err is not None:
                 raise conn_err from exc
             raise
+        finally:
+            if not cancelled:
+                await self.cleanup_chat(session, chat_id)
 
     async def shutdown(self) -> None:
         await self.close_http_transport()

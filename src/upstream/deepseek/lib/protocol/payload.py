@@ -43,8 +43,8 @@ def build_payload(
         "ref_file_ids": [],
         "thinking_enabled": False,
         "search_enabled": False,
+        "action": None,
         "preempt": False,
-        "client_stream_id": stream_id if stream_id is not None else make_stream_id(),
     }
 
 __all__ = [

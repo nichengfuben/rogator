@@ -5,12 +5,12 @@ from typing import Any, Dict, List, Optional
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id, should_emit_anthropic_message_start
 
 from handlers.chat_request import iter_retried_chat_events
-from handlers.fncall_inject import advance_partial_buffer
+from handlers.shared.fncall_inject import advance_partial_buffer
 from handlers.openai import _chat_once
 
-from handlers.anthro.events import _close_block, _emit_anthropic_event
-from handlers.anthro.events import AnthropicStreamState, expected_arguments_for_stream_tool
-from handlers.anthro.stream_tools import (
+from handlers.anthropic.events import _close_block, _emit_anthropic_event
+from handlers.anthropic.events import AnthropicStreamState, expected_arguments_for_stream_tool
+from handlers.anthropic.stream_tools import (
     _emit_ready_tool_calls,
     _emit_streaming_tool_delta,
     _flush_open_stream_tool,
@@ -239,8 +239,8 @@ async def _ingest_stream_event(
     raw_recorder,
     disconnected: list,
 ) -> Optional[bool]:
-    """处理单条上游事件：True=继续下一条，None=进入内容解析。"""
-    from handlers.anthro.stream_core import _ensure_anthropic_message_start
+    """澶勭悊鍗曟潯涓婃父浜嬩欢锛歍rue=缁х画涓嬩竴鏉★紝None=杩涘叆鍐呭�硅В鏋愩��"""
+    from handlers.anthropic.stream_core import _ensure_anthropic_message_start
 
     etype = usage_tracker.ingest_upstream_event(event)
     if etype == "prompt_meta":

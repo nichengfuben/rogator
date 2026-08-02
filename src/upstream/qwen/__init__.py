@@ -13,6 +13,7 @@ _DEFAULT_CAPABILITIES: Dict[str, bool] = {
     "count_tokens": True,
     "image_gen": True,
     "tts": True,
+    "asr": True,
 }
 
 CAPABILITIES: Dict[str, bool] = load_capabilities(NAME, _DEFAULT_CAPABILITIES)

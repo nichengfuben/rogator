@@ -74,13 +74,13 @@ class ChatSession:
                 raise RuntimeError(f"Qwen create-chat returned an invalid payload: {data}")
             return chat_id
 
-    async def stop(self, chat_id: str, token: str) -> bool:
+    async def stop(self, chat_id: str, token: str, response_id: str = "") -> bool:
         """Stop generation for an active chat."""
         if not chat_id or not token:
             return False
         async with self._session.post(
             f"{BASE_URL}{STOP_CHAT_PATH}",
-            json=build_stop_payload(chat_id),
+            json=build_stop_payload(chat_id, response_id),
             headers=build_stop_headers(token),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=15),

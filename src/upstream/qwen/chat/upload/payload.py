@@ -183,9 +183,12 @@ def build_new_chat_payload(model: str, chat_type: str = "t2t") -> Dict[str, Any]
     }
 
 
-def build_stop_payload(chat_id: str) -> Dict[str, Any]:
+def build_stop_payload(chat_id: str, response_id: str = "") -> Dict[str, Any]:
     """Build the stop-generation payload."""
-    return {"chat_id": chat_id}
+    payload: Dict[str, Any] = {"chat_id": chat_id}
+    if response_id:
+        payload["response_id"] = response_id
+    return payload
 
 
 def build_i2v_payload(

@@ -47,46 +47,59 @@ def merge_model_lists(*parts: List[str]) -> List[str]:
     return merged
 
 
+async def _qwen_signin_once(
+    client: Any,
+    http: aiohttp.ClientSession,
+    account: Account,
+) -> Optional[PlatformSession]:
+    payload = {
+        "email": account.username,
+        "password": hash_password(account.password),
+        "remember_me": True,
+    }
+    async with http.post(
+        f"{AUTH_BASE_URL}/api/v2/auths/signin",
+        json=payload,
+        headers=build_login_headers(),
+        timeout=upstream_timeout(LOGIN_TIMEOUT),
+    ) as resp:
+        if resp.status != 200:
+            logger.warning("Login %s HTTP %d", account.username[:6], resp.status)
+            return None
+        data = await resp.json()
+        if not data.get("success"):
+            logger.warning(
+                "Login %s failed: %s",
+                account.username[:6],
+                data.get("message", ""),
+            )
+            return None
+        token = str((data.get("data") or {}).get("access_token", ""))
+        if not token:
+            logger.warning("Login %s no token", account.username[:6])
+            return None
+        user_id = await fetch_user_id(http, token, AUTH_BASE_URL)
+        plat = PlatformSession(
+            account=account,
+            token=token,
+            user_id=user_id or account.username[:12],
+            upstream="qwen",
+        )
+        try:
+            from upstream.qwen.chat.upload.upstream_api import warmup_session
+            await warmup_session(client, plat)
+        except Exception as exc:
+            logger.debug("Login warmup skipped for %s: %s", account.username[:6], exc)
+        return plat
+
+
 class QwenLoginMixin(SessionLoginMixin):
     UPSTREAM_NAME = "qwen"
 
     async def _perform_login(self, account: Account) -> Optional[PlatformSession]:
         async def _run() -> Optional[PlatformSession]:
-            # 每次尝试取新 session，避免 reset 后仍持有已关闭引用
             session = await self._ensure_http_session()
-            payload = {
-                "email": account.username,
-                "password": hash_password(account.password),
-                "remember_me": True,
-            }
-            async with session.post(
-                f"{AUTH_BASE_URL}/api/v2/auths/signin",
-                json=payload,
-                headers=build_login_headers(),
-                timeout=upstream_timeout(LOGIN_TIMEOUT),
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning("Login %s HTTP %d", account.username[:6], resp.status)
-                    return None
-                data = await resp.json()
-                if not data.get("success"):
-                    logger.warning(
-                        "Login %s failed: %s",
-                        account.username[:6],
-                        data.get("message", ""),
-                    )
-                    return None
-                token = str((data.get("data") or {}).get("access_token", ""))
-                if not token:
-                    logger.warning("Login %s no token", account.username[:6])
-                    return None
-                user_id = await fetch_user_id(session, token, AUTH_BASE_URL)
-                return PlatformSession(
-                    account=account,
-                    token=token,
-                    user_id=user_id or account.username[:12],
-                    upstream="qwen",
-                )
+            return await _qwen_signin_once(self, session, account)
         try:
             return await run_with_connection_retry("login", _run, transport_owner=self)
         except asyncio.TimeoutError:

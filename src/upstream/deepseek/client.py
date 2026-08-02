@@ -134,7 +134,11 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
         inner = await self._ensure_ready(skip_background=True)
         http = await self._ensure_http_session()
         try:
-            token, user_id = await login(http, account.username, account.password)
+            token, user_id, did = await login(
+                http, account.username, account.password,
+                device_id=getattr(account, "device_id", "") or "",
+                area_code=getattr(account, "area_code", "") or "",
+            )
         except (DeepSeekUserMutedError, DeepSeekWafChallengeError):
             self.handle_account_muted(account.username, mute_at=time.time())
             return None
@@ -147,6 +151,14 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
                 mgr._expire_at = expire
             except Exception as exc:
                 logger.warning("首次 HIF 令牌获取失败 %s: %s", account.username, exc)
+        try:
+            from upstream.deepseek.lib.user.settingsapi import warmup_account_client
+            from upstream.deepseek.lib.session.sessapi import get_session_list
+
+            await warmup_account_client(http, token, device_id=did, user_id=user_id)
+            await get_session_list(http, token)
+        except Exception as exc:
+            logger.debug("deepseek pool login warmup 跳过: %s", exc)
         ps = PlatformSession(
             account=account,
             token=token,

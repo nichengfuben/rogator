@@ -9,12 +9,12 @@ from __future__ import annotations
     ``client.py``，不改变任何现有行为。
 """
 
-from typing import Any, AsyncGenerator, Dict, List, Tuple, Union
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 import aiohttp
 
+from upstream.deepseek.lib.adapter.helpers.file_upload import resolve_model_type
 from upstream.deepseek.lib.protocol.headers import build_headers
-from upstream.deepseek.lib.protocol.payload import make_stream_id
 from upstream.deepseek.lib.adapter.helpers.pmtutil import build_prompt, translate_chunk
 from upstream.deepseek.lib.guard.pow import get_pow_response
 from upstream.deepseek.lib.session.sessapi import create_session
@@ -42,7 +42,7 @@ def build_request_context(
         "token": token,
         "username": username,
         "prompt": prompt,
-        "model_type": "default",
+        "model_type": resolve_model_type(model),
     }
 
 
@@ -52,6 +52,8 @@ async def acquire_hif_and_pow(
     session: aiohttp.ClientSession,
     username: str,
     token: str,
+    *,
+    target_path: str = "/api/v0/chat/completion",
 ) -> Tuple[str, str, str]:
     """获取本次请求所需的 HIF 令牌与 PoW 响应。
 
@@ -73,9 +75,7 @@ async def acquire_hif_and_pow(
 
     pow_resp = ""
     if pow_client.available:
-        pow_resp = await get_pow_response(
-            session, token, pow_client, "/api/v0/chat/completion"
-        )
+        pow_resp = await get_pow_response(session, token, pow_client, target_path)
     return hif_leim, hif_dliq, pow_resp
 
 
@@ -109,7 +109,14 @@ async def prepare_session(
     return session_id, req_headers
 
 
-def build_chat_payload(ctx: Dict[str, Any], session_id: Any) -> Dict[str, Any]:
+def build_chat_payload(
+    ctx: Dict[str, Any],
+    session_id: Any,
+    *,
+    ref_file_ids: Optional[List[str]] = None,
+    thinking_enabled: bool = False,
+    search_enabled: bool = False,
+) -> Dict[str, Any]:
     """根据请求上下文与会话 id 构建请求体。
 
     Args:
@@ -124,11 +131,11 @@ def build_chat_payload(ctx: Dict[str, Any], session_id: Any) -> Dict[str, Any]:
         "parent_message_id": None,
         "model_type": ctx["model_type"],
         "prompt": ctx["prompt"],
-        "ref_file_ids": [],
-        "thinking_enabled": False,
-        "search_enabled": False,
+        "ref_file_ids": list(ref_file_ids or []),
+        "thinking_enabled": bool(thinking_enabled),
+        "search_enabled": bool(search_enabled),
+        "action": None,
         "preempt": False,
-        "client_stream_id": make_stream_id(),
     }
 
 
@@ -204,6 +211,11 @@ async def prepare_full_request(
     proxy_override: Any,
     get_proxy_kwarg: Any,
     parser_cls: Any,
+    *,
+    ref_file_ids: Optional[List[str]] = None,
+    thinking_enabled: bool = False,
+    search_enabled: bool = False,
+    include_thinking: bool = False,
 ) -> Tuple[Dict[str, Any], str, str, Any, Dict[str, Any], Any]:
     """整合上下文提取、HIF/PoW 获取、会话准备与 post 参数构造。
 
@@ -221,9 +233,15 @@ async def prepare_full_request(
     session_id, req_headers = await prepare_session(
         session, token, hif_leim, hif_dliq, pow_resp
     )
-    payload = build_chat_payload(ctx, session_id)
+    payload = build_chat_payload(
+        ctx,
+        session_id,
+        ref_file_ids=ref_file_ids,
+        thinking_enabled=thinking_enabled,
+        search_enabled=search_enabled,
+    )
     post_kw = build_post_kwargs(req_headers, payload, proxy_override, get_proxy_kwarg)
-    parser = parser_cls(include_thinking=False)
+    parser = parser_cls(include_thinking=include_thinking)
     return ctx, session_id, hif_leim, hif_dliq, post_kw, parser
 
 

@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 import pytest
 
 from echotools import get_protocol
-from handlers.fncall_inject import inject_fncall_for_request, prompt_dump_dir
+from handlers.shared.fncall_inject import inject_fncall_for_request, prompt_dump_dir
 from server.config import get_config
 
 
@@ -45,9 +45,9 @@ def test_prompt_dump_disabled_no_file(
 ) -> None:
     caplog.set_level(logging.INFO, logger="rogator")
     dump = tmp_path / "prompts"
-    monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: dump)
+    monkeypatch.setattr("handlers.shared.fncall_inject.prompt_dump_dir", lambda: dump)
     monkeypatch.setattr(
-        "handlers.fncall_inject.CONFIG",
+        "handlers.shared.fncall_inject.CONFIG",
         replace(get_config(), record_prompt=False, print_prompt=False),
     )
     injected = inject_fncall_for_request(
@@ -73,9 +73,9 @@ def test_record_prompt_writes_req_id_file(
 ) -> None:
     caplog.set_level(logging.INFO, logger="rogator")
     dump = tmp_path / "prompts"
-    monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: dump)
+    monkeypatch.setattr("handlers.shared.fncall_inject.prompt_dump_dir", lambda: dump)
     monkeypatch.setattr(
-        "handlers.fncall_inject.CONFIG",
+        "handlers.shared.fncall_inject.CONFIG",
         replace(get_config(), record_prompt=True, print_prompt=False),
     )
     injected = inject_fncall_for_request(
@@ -100,9 +100,9 @@ def test_print_prompt_also_dumps_file(
     monkeypatch,
 ) -> None:
     dump = tmp_path / "prompts"
-    monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: dump)
+    monkeypatch.setattr("handlers.shared.fncall_inject.prompt_dump_dir", lambda: dump)
     monkeypatch.setattr(
-        "handlers.fncall_inject.CONFIG",
+        "handlers.shared.fncall_inject.CONFIG",
         replace(get_config(), record_prompt=False, print_prompt=True),
     )
     inject_fncall_for_request(

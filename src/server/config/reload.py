@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple
 from echotools.base.logger import get_logger
 
 from server.config.app_config import CONFIG, AppConfig, get_config, load_config
-from server.config.files import USER_CONFIGS_DIR, user_config_path
+from server.config.files import USER_CONFIG_DIR, USER_UPSTREAM_DIR, user_config_path
 
 if TYPE_CHECKING:
     from state import AppState
@@ -37,8 +37,10 @@ _DEBOUNCE_S: float = 0.5
 def watched_config_paths() -> List[Path]:
     """参与合并的用户侧配置路径（存在与否均可，mtime 采集时跳过缺失）。"""
     paths: List[Path] = [user_config_path()]
-    if USER_CONFIGS_DIR.is_dir():
-        paths.extend(sorted(USER_CONFIGS_DIR.glob("*.toml")))
+    if USER_CONFIG_DIR.is_dir():
+        paths.extend(sorted(USER_CONFIG_DIR.glob("*.toml")))
+    if USER_UPSTREAM_DIR.is_dir():
+        paths.extend(sorted(USER_UPSTREAM_DIR.glob("*.toml")))
     return paths
 
 

@@ -1,5 +1,5 @@
 # Rogator 配置模板（提交仓库）
-# 本地配置：项目根目录 config.toml（gitignore，首次启动从本模板复制）
+# 本地配置：config/config.toml（gitignore，首次启动从 template 复制）
 # 运行时加载策略：以本模板为底，用户 config.toml 只覆盖已写出的键（不写回磁盘）。
 # 升级后请对照本模板自行更新 config.toml；版本不一致时启动日志会提醒，不会自动改文件。
 
@@ -10,6 +10,8 @@ host = "0.0.0.0"
 prelogin = 32
 # 预登录/换号连续登录之间的间隔（秒），避免短时间内大量 signin
 login_interval = 15.0
+# 启动时若端口被占用，尝试终止占用进程（Windows 需足够权限）
+startup_force_kill_port = true
 
 [retry]
 # 换号 / 上游超时重试次数（不含首次尝试）

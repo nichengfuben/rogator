@@ -11,12 +11,12 @@ from aiohttp import web
 
 from core.dispatch import resolve_upstream
 from handlers import extract_system_for_inject
-from handlers.api_errors import (
+from handlers.shared.api_errors import (
     anthropic_error_response,
     model_resolve_error_response,
     resolve_handler_model,
 )
-from handlers.fncall_inject import inject_fncall_for_request
+from handlers.shared.fncall_inject import inject_fncall_for_request
 from handlers.openai.protocol import _inject_protocol_options
 from handlers.openai.thinking import protocol_thinking_level, thinking_level_is_active
 from handlers.openai.tools import convert_tools_to_openai

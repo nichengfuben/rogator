@@ -13,6 +13,11 @@ from upstream.deepseek.lib.adapter.helpers.biz_error import (
     DeepSeekAccountsExhaustedError,
     DeepSeekUserMutedError,
 )
+from upstream.deepseek.lib.adapter.helpers.file_collect import collect_message_attachments_async
+from upstream.deepseek.lib.adapter.helpers.file_upload import (
+    resolve_model_type,
+    upload_attachments,
+)
 
 logger = get_logger("rogator")
 
@@ -40,14 +45,78 @@ def _prepare_messages(
     model: str,
     protocol_options: Optional[Dict[str, Any]],
     prompt_api: str,
-) -> Tuple[List[Dict[str, Any]], str, bool]:
+) -> Tuple[List[Dict[str, Any]], str, bool, Optional[str], Optional[bytes]]:
     injected, full_content, qwen_enabled, _mode, _entml = prepare_injected_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
-    final_messages, send_text, _filename, _file_bytes = apply_prompt_budget(
-        state, injected, full_content,
+    final_messages, send_text, filename, file_bytes = apply_prompt_budget(
+        state, injected, full_content, use_file_split=True,
     )
-    return final_messages, send_text, qwen_enabled
+    return final_messages, send_text, qwen_enabled, filename, file_bytes
+
+
+def _extract_preuploaded_ids(files: Optional[List[Any]]) -> List[str]:
+    if not files:
+        return []
+    ids: List[str] = []
+    for item in files:
+        if isinstance(item, str) and item:
+            ids.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in ("id", "file_id", "fileId"):
+            raw = item.get(key)
+            if raw:
+                ids.append(str(raw))
+                break
+    return ids
+
+
+async def _upload_message_files(
+    inner: Any,
+    candidate: Any,
+    messages: List[Dict[str, Any]],
+    model: str,
+    *,
+    filename: Optional[str],
+    file_bytes: Optional[bytes],
+    preuploaded: Optional[List[Any]],
+    thinking_enabled: bool,
+) -> Tuple[List[str], bool]:
+    ref_ids = _extract_preuploaded_ids(preuploaded)
+    attachments = await collect_message_attachments_async(
+        messages, filename=filename, file_bytes=file_bytes,
+    )
+    if not attachments:
+        return ref_ids, thinking_enabled
+
+    token = str(candidate.meta.get("token") or "")
+    username = str(candidate.meta.get("identifier") or "")
+    if not token:
+        logger.warning("DeepSeek: 无 token，跳过 %d 个附件上传", len(attachments))
+        return ref_ids, thinking_enabled
+
+    model_type = resolve_model_type(model)
+    # 上游规则：带文件时不可同时开启 thinking / search
+    effective_thinking = False
+    uploaded = await upload_attachments(
+        inner._session,  # noqa: SLF001
+        token,
+        username,
+        attachments,
+        hif_managers=inner._hif_managers,  # noqa: SLF001
+        pow_solver=inner._pow,  # noqa: SLF001
+        model_type=model_type,
+        thinking_enabled=False,
+    )
+    ref_ids.extend(uploaded)
+    logger.info(
+        "DeepSeek: uploaded %d file(s), ref_file_ids=%d",
+        len(uploaded),
+        len(ref_ids),
+    )
+    return ref_ids, effective_thinking
 
 
 async def _on_user_muted(
@@ -76,13 +145,66 @@ async def _iter_complete_events(
     model: str,
     *,
     thinking: bool,
+    ref_file_ids: Optional[List[str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     async for chunk in inner.complete(
-        candidate, messages, model, stream=True, thinking=thinking, search=False,
+        candidate,
+        messages,
+        model,
+        stream=True,
+        thinking=thinking,
+        search=False,
+        ref_file_ids=ref_file_ids,
     ):
         event = _normalize_chunk(chunk)
         if event is not None:
             yield event
+
+
+async def _stream_with_mute_retry(
+    client: Any,
+    inner: Any,
+    final_messages: List[Dict[str, Any]],
+    messages: List[Dict[str, Any]],
+    model: str,
+    *,
+    filename: Optional[str],
+    file_bytes: Optional[bytes],
+    preuploaded: Optional[List[Any]],
+    qwen_enabled: bool,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    for attempt in range(_MAX_MUTE_SWITCH):
+        muted_exc: Optional[DeepSeekUserMutedError] = None
+        muted_user = ""
+        async with client.lease_valid_session() as session:
+            if session is None:
+                raise DeepSeekAccountsExhaustedError(
+                    "DeepSeek 无可用会话，请检查账号配置与登录状态"
+                )
+            candidate = await client.pick_candidate(session)
+            muted_user = str(candidate.meta.get("identifier") or "")
+            try:
+                ref_file_ids, effective_thinking = await _upload_message_files(
+                    inner, candidate, messages, model,
+                    filename=filename, file_bytes=file_bytes,
+                    preuploaded=preuploaded, thinking_enabled=qwen_enabled,
+                )
+                async for event in _iter_complete_events(
+                    inner, candidate, final_messages, model,
+                    thinking=effective_thinking, ref_file_ids=ref_file_ids or None,
+                ):
+                    yield event
+                return
+            except DeepSeekUserMutedError as exc:
+                muted_exc = exc
+            except Exception as exc:
+                reraise_transport_error(
+                    exc, upstream="deepseek",
+                    timeout_message="DeepSeek upstream timeout",
+                )
+        if muted_exc is not None:
+            await _on_user_muted(client, muted_user, muted_exc, attempt)
+    raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")
 
 
 async def stream_openai_chat(
@@ -97,39 +219,16 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    final_messages, send_text, qwen_enabled = _prepare_messages(
+    final_messages, send_text, qwen_enabled, filename, file_bytes = _prepare_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
-    if files:
-        logger.debug(
-            "DeepSeek: ignoring %d uploaded file(s) for req %s", len(files), req_id
-        )
+    if final_messages:
+        final_messages[0]["content"] = send_text
     yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
     inner = await client._ensure_ready()  # noqa: SLF001
-    for attempt in range(_MAX_MUTE_SWITCH):
-        muted_exc: Optional[DeepSeekUserMutedError] = None
-        muted_user = ""
-        async with client.lease_valid_session() as session:
-            if session is None:
-                raise DeepSeekAccountsExhaustedError(
-                    "DeepSeek 无可用会话，请检查账号配置与登录状态"
-                )
-            candidate = await client.pick_candidate(session)
-            muted_user = str(candidate.meta.get("identifier") or "")
-            try:
-                async for event in _iter_complete_events(
-                    inner, candidate, final_messages, model, thinking=qwen_enabled,
-                ):
-                    yield event
-                return
-            except DeepSeekUserMutedError as exc:
-                muted_exc = exc
-            except Exception as exc:
-                reraise_transport_error(
-                    exc,
-                    upstream="deepseek",
-                    timeout_message="DeepSeek upstream timeout",
-                )
-        if muted_exc is not None:
-            await _on_user_muted(client, muted_user, muted_exc, attempt)
-    raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")
+    async for event in _stream_with_mute_retry(
+        client, inner, final_messages, messages, model,
+        filename=filename, file_bytes=file_bytes,
+        preuploaded=files, qwen_enabled=qwen_enabled,
+    ):
+        yield event

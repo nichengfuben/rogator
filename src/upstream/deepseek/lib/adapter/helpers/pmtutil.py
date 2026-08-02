@@ -76,6 +76,7 @@ class Account:
     password: str
     token: str = ""
     user_id: str = ""
+    device_id: str = ""
     context_length: Optional[int] = None
     session_cookie: str = ""
     hif_leim: str = ""

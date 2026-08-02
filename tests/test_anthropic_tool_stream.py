@@ -7,7 +7,7 @@ import unittest
 
 from echotools import FncallStreamParser, get_protocol
 
-from handlers.anthro import (
+from handlers.anthropic import (
     _anthropic_event_bytes,
     _build_anthropic_protocol_options,
     _message_delta_event,
@@ -307,7 +307,7 @@ class TestAnthropicStreamFormat(unittest.TestCase):
         import asyncio
         from unittest.mock import AsyncMock, MagicMock
 
-        from handlers.anthro import _send_anthropic_finish
+        from handlers.anthropic import _send_anthropic_finish
 
         resp = MagicMock()
         resp.write = AsyncMock()

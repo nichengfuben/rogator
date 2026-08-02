@@ -4,7 +4,12 @@ import logging
 import unittest
 from unittest.mock import patch
 
-from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.logging_setup import (
+    setup_logging,
+    shutdown_logging,
+    resolve_access_log,
+    _DowngradePortKillSuccessFilter,
+)
 
 
 class TestLoggingShutdown(unittest.TestCase):
@@ -46,8 +51,20 @@ class TestLoggingShutdown(unittest.TestCase):
             shutdown_logging()
         self.assertEqual(root.handlers, [])
 
-
-class TestAccessLog(unittest.TestCase):
+    def test_port_kill_success_log_downgraded(self) -> None:
+        setup_logging("INFO")
+        record = logging.LogRecord(
+            name="echotools.exec.process.port",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="已终止占用端口的进程: %s",
+            args=(1234,),
+            exc_info=None,
+        )
+        _DowngradePortKillSuccessFilter().filter(record)
+        self.assertEqual(record.levelno, logging.DEBUG)
+        self.assertEqual(record.levelname, "DEBUG")
     def test_resolve_access_log_enabled(self) -> None:
         setup_logging("INFO")
         access = resolve_access_log(True)

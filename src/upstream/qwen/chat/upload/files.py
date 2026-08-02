@@ -22,6 +22,7 @@ from upstream.qwen.chat.upload.storage import (
     save_video_file,
 )
 from upstream.qwen.chat.upload.oss import upload_to_oss
+from upstream.qwen.chat.upload.parse import wait_file_parsed
 from upstream.qwen.chat.store import QwenSession
 
 logger = logging.getLogger("rogator")
@@ -35,7 +36,22 @@ _MAX_FILE_SIZES: Dict[str, int] = {
 
 
 class UploadMixin:
-    """为 QwenClient 提供 OSS 文件上传、base64 与远程 URL 媒体上传能力。"""
+    """OSS upload, base64 and remote URL media for QwenClient."""
+
+    async def _maybe_parse_document(
+        self, session: QwenSession, file_obj: Dict[str, Any],
+    ) -> None:
+        if file_obj.get("file_class") != "document":
+            return
+        file_id = str(file_obj.get("id") or "")
+        if not file_id:
+            return
+        ok = await wait_file_parsed(self, session, file_id)
+        if not ok:
+            logger.warning(
+                "Document parse failed or timed out: %s",
+                file_obj.get("name", file_id[:8]),
+            )
 
     async def _request_sts_token(self, path: str, payload: Dict[str, Any],
                                   headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -82,6 +98,7 @@ class UploadMixin:
             content_type=content_type,
             user_id=session.user_id,
         )
+        await self._maybe_parse_document(session, file_obj)
         return file_url, file_obj
 
     async def upload_file_from_base64(self, session: QwenSession, data_uri: str) -> Tuple[str, Dict[str, Any]]:

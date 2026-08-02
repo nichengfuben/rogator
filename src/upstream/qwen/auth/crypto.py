@@ -18,21 +18,21 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Final, List, Optional
 
 # ---------------------------------------------------------------------------
-# Constants (from endpoints.py, used locally)
+# Constants — 与 routes.py 对齐
 # ---------------------------------------------------------------------------
+
+from upstream.qwen.chat.routes import (
+    APP_VERSION,
+    BAXIA_SDK_VERSION,
+    BASE_URL,
+    CHAT_ORIGIN,
+    USER_AGENT,
+    SEC_CH_UA,
+    SEC_CH_UA_PLATFORM,
+)
 
 BAXIA_VERSION: Final[str] = "0.0.3"
 CUSTOM_BASE64_CHARS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
-APP_VERSION: Final[str] = "0.2.64"
-WEB_VERSION: Final[str] = "0.2.9"
-BASE_URL: Final[str] = "https://chat.qwen.ai"
-CHAT_ORIGIN: Final[str] = "https://chat.qwen.ai"
-USER_AGENT: Final[str] = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-)
-SEC_CH_UA: Final[str] = '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"'
-SEC_CH_UA_PLATFORM: Final[str] = '"macOS"'
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def get_baxia_tokens() -> Dict[str, str]:
     """Return the Baxia header triplet required by current web requests."""
     fingerprint = generate_fingerprint()
     return {
-        "bxV": BAXIA_VERSION,
+        "bxV": BAXIA_SDK_VERSION,
         "bxUa": generate_bxua(fingerprint),
         "bxUmidToken": get_bxumidtoken(),
         "fingerprint": fingerprint,
@@ -180,19 +180,17 @@ def make_request_id() -> str:
 
 
 def make_timezone() -> str:
-    """Return the browser-like timezone header value."""
-    now = datetime.now().astimezone()
-    offset = now.utcoffset()
-    if offset is None:
-        suffix = "+0000"
-    else:
-        total_seconds = int(offset.total_seconds())
-        sign = "+" if total_seconds >= 0 else "-"
-        total_seconds = abs(total_seconds)
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        suffix = f"{sign}{hours:02d}{minutes:02d}"
-    return now.strftime(f"%a %b %d %Y %H:%M:%S GMT{suffix}")
+    """对齐 FE：Date.toString() 去掉括号时区名。"""
+    return datetime.now().astimezone().strftime("%a %b %d %Y %H:%M:%S GMT%z")
+
+
+def merge_session_cookies(token: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    cookies: Dict[str, str] = {"token": token}
+    if extra:
+        for key, value in extra.items():
+            if value not in (None, ""):
+                cookies[str(key)] = str(value)
+    return cookies
 
 
 def build_cookie_string(cookies: Optional[Dict[str, Any]]) -> str:
@@ -211,7 +209,7 @@ def _base_headers() -> Dict[str, str]:
         "User-Agent": USER_AGENT,
         "Origin": CHAT_ORIGIN,
         "Referer": f"{CHAT_ORIGIN}/",
-        "Source": "web",
+        "source": "web",
         "X-Request-Id": make_request_id(),
         "Timezone": make_timezone(),
         "Sec-Ch-Ua": SEC_CH_UA,
@@ -237,21 +235,26 @@ def build_headers(
     fingerprint: str = "",
     cookies: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
+    use_bearer: bool = True,
 ) -> Dict[str, str]:
     """Build authenticated headers for Qwen chat APIs."""
     headers = _base_headers()
-    headers["Authorization"] = f"Bearer {token}"
+    if use_bearer and token:
+        headers["Authorization"] = f"Bearer {token}"
     baxia = get_baxia_tokens()
     headers["bx-v"] = baxia["bxV"]
     headers["bx-ua"] = baxia["bxUa"]
     headers["bx-umidtoken"] = baxia["bxUmidToken"]
     if include_version:
-        headers["version"] = WEB_VERSION
+        headers["Version"] = APP_VERSION
     if chat_id:
         headers["Referer"] = f"{CHAT_ORIGIN}/c/{chat_id}"
     if include_sse:
         headers["X-Accel-Buffering"] = "no"
-    cookie_string = build_cookie_string(cookies)
+    merged = merge_session_cookies(token) if token else {}
+    if cookies:
+        merged.update({str(k): str(v) for k, v in cookies.items() if v not in (None, "")})
+    cookie_string = build_cookie_string(merged)
     if cookie_string:
         headers["Cookie"] = cookie_string
     if extra_headers:
@@ -261,4 +264,11 @@ def build_headers(
 
 def build_stop_headers(token: str) -> Dict[str, str]:
     """Build headers for the stop-generation endpoint."""
-    return build_headers(token, include_version=False)
+    return build_headers(token, include_version=True)
+
+
+def build_asr_ws_headers(token: str) -> Dict[str, str]:
+    """ASR WebSocket 握手头（需 Baxia + Cookie 绕过 WAF）。"""
+    headers = build_headers(token, include_version=True)
+    headers.pop("Content-Type", None)
+    return headers

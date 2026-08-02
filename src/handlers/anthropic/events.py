@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from handlers.api_errors import safe_write as _safe_write
-from handlers.fncall_inject import STREAM_CHUNK_SIZE, iter_text_chunks
+from handlers.shared.api_errors import safe_write as _safe_write
+from handlers.shared.fncall_inject import STREAM_CHUNK_SIZE, iter_text_chunks
 from server.formats import UpstreamUsageTracker, _fix_tool_call_id
 
 
@@ -62,7 +62,7 @@ def _message_stop_event() -> Dict[str, Any]:
 def _tool_use_block_events(
     block_idx: int, tool_id: str, name: str, input_dict: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """单个 tool_use 块的 SSE 事件序列（与 mock.py _build_tool_events 一致）。"""
+    """鍗曚釜 tool_use 鍧楃殑 SSE 浜嬩欢搴忓垪锛堜笌 mock.py _build_tool_events 涓�鑷达級銆�"""
     events: List[Dict[str, Any]] = [{
         "type": "content_block_start",
         "index": block_idx,
@@ -90,7 +90,7 @@ def _anthropic_event_bytes(event: Dict[str, Any]) -> bytes:
 
 
 async def _write_stream_error(resp, error_msg: dict, disconnected: list) -> None:
-    """向 Anthropic SSE 流写入 error 事件。"""
+    """鍚� Anthropic SSE 娴佸啓鍏� error 浜嬩欢銆�"""
     payload = json.dumps(error_msg)
     await _safe_write(resp, f"event: error\ndata: {payload}\n\n".encode("utf-8"), disconnected)
 
@@ -107,7 +107,7 @@ async def _emit_anthropic_events(resp, events: List[Dict[str, Any]], disconnecte
 
 
 async def _close_block(resp, idx: int, disconnected: list) -> int:
-    """关闭 content block。返回已关闭的 index（不自增，避免与下一块 start 的 +=1 双跳）。"""
+    """鍏抽棴 content block銆傝繑鍥炲凡鍏抽棴鐨� index锛堜笉鑷�澧烇紝閬垮厤涓庝笅涓�鍧� start 鐨� +=1 鍙岃烦锛夈��"""
     if idx >= 0:
         await _emit_anthropic_event(resp, _content_block_stop_event(idx), disconnected)
     return idx
@@ -117,7 +117,7 @@ async def _send_anthropic_finish(
     resp, tool_calls, disconnected, *, streamed_tool_count: int = 0,
     usage: Optional[Dict[str, int]] = None,
 ):
-    """message_delta + message_stop（对齐 mock.py _build_message_delta）。"""
+    """message_delta + message_stop锛堝�归綈 mock.py _build_message_delta锛夈��"""
     stop_reason = "tool_use" if (tool_calls or streamed_tool_count > 0) else "end_turn"
     await _emit_anthropic_event(resp, _message_delta_event(stop_reason, usage=usage), disconnected)
     await _emit_anthropic_event(resp, _message_stop_event(), disconnected)

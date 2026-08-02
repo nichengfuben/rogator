@@ -7,11 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
-from server.config.files import PROJECT_ROOT
+from server.config.files import PROJECT_ROOT, USER_CONFIG_DIR, USER_UPSTREAM_DIR
 
 logger = logging.getLogger("rogator")
 
-MODEL_REGISTRY_FILE = PROJECT_ROOT / "persist" / "model_registry.jsonl"
+MODEL_REGISTRY_FILE = USER_CONFIG_DIR / "model_registry.jsonl"
+LEGACY_MODEL_REGISTRY_FILE = PROJECT_ROOT / "persist" / "model_registry.jsonl"
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,14 @@ def _parse_line(line: str) -> Optional[ModelRegistryEntry]:
 
 
 def load_model_registry(path: Path | None = None) -> ModelRegistry:
-    p = path or MODEL_REGISTRY_FILE
+    if path is not None:
+        p = path
+    elif MODEL_REGISTRY_FILE.is_file():
+        p = MODEL_REGISTRY_FILE
+    elif LEGACY_MODEL_REGISTRY_FILE.is_file():
+        p = LEGACY_MODEL_REGISTRY_FILE
+    else:
+        p = MODEL_REGISTRY_FILE
     entries: List[ModelRegistryEntry] = []
     by_external: Dict[str, ModelRegistryEntry] = {}
     by_internal: Dict[str, ModelRegistryEntry] = {}
@@ -118,7 +126,7 @@ def _entry_for_internal(internal_model: str) -> ModelRegistryEntry:
     entry = _MODEL_REGISTRY.by_internal.get(internal_model)
     if entry is None:
         raise ModelNotConfiguredError(
-            f"模型 ID {internal_model} 存在于上游列表但未配置，请检查 persist/model_registry.jsonl"
+            f"模型 ID {internal_model} 存在于上游列表但未配置，请检查 config/model_registry.jsonl"
         )
     return entry
 
@@ -158,7 +166,7 @@ def resolve_request_model(requested: str, available_internal: Iterable[str]) -> 
 
     if model in available:
         raise ModelNotConfiguredError(
-            f"模型 ID {model} 存在于上游列表但未配置，请检查 persist/model_registry.jsonl"
+            f"模型 ID {model} 存在于上游列表但未配置，请检查 config/model_registry.jsonl"
         )
 
     raise ModelNotFoundError(f"模型 {model} 不存在")

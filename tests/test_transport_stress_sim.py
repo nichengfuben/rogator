@@ -182,6 +182,9 @@ class TestLoginTransportSim(unittest.IsolatedAsyncioTestCase):
             "upstream.qwen.account.fetch_user_id",
             new_callable=AsyncMock,
             return_value="uid-1",
+        ), patch(
+            "upstream.qwen.chat.upload.upstream_api.warmup_session",
+            new_callable=AsyncMock,
         ):
             ps = await probe._perform_login(account)
         self.assertIsNotNone(ps)

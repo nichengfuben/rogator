@@ -121,7 +121,7 @@ def _normalize_message_blocks(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """把 Anthropic messages（含 content 数组 / tool_use / tool_result）转成 OpenAI 风格。"""
+    """鎶� Anthropic messages锛堝惈 content 鏁扮粍 / tool_use / tool_result锛夎浆鎴� OpenAI 椋庢牸銆�"""
     out: List[Dict[str, Any]] = []
     for msg in messages or []:
         out.extend(_normalize_message_blocks(msg))
@@ -129,7 +129,7 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
 
 
 def _normalize_anthropic_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Anthropic tools（name/input_schema）→ OpenAI function tools。"""
+    """Anthropic tools锛坣ame/input_schema锛夆啋 OpenAI function tools銆�"""
     return convert_tools_to_openai(tools or [])
 
 
@@ -142,7 +142,7 @@ _ANTHROPIC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 def _parse_anthropic_effort(body: Dict[str, Any]) -> str:
-    """读取 output_config.effort；省略时官方默认为 high。"""
+    """璇诲彇 output_config.effort锛涚渷鐣ユ椂瀹樻柟榛樿�や负 high銆�"""
     output_config = body.get("output_config")
     if not isinstance(output_config, dict) or "effort" not in output_config:
         return "high"
@@ -153,7 +153,7 @@ def _parse_anthropic_effort(body: Dict[str, Any]) -> str:
 
 
 def _build_anthropic_protocol_options(body: Dict[str, Any]) -> Dict[str, Any]:
-    """按 Anthropic Messages API 解析 thinking 与 output_config.effort。"""
+    """鎸� Anthropic Messages API 瑙ｆ瀽 thinking 涓� output_config.effort銆�"""
     effort = _parse_anthropic_effort(body)
     opts: Dict[str, Any] = {"include_thinking_in_history": True}
 

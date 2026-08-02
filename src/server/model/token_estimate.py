@@ -92,7 +92,7 @@ def _inject_prompt_char_count(
     user_system_prompt: str = "",
     protocol_options: Optional[Dict[str, Any]] = None,
 ) -> int:
-    from handlers.fncall_inject import inject_fncall_for_request
+    from handlers.shared.fncall_inject import inject_fncall_for_request
 
     injected = inject_fncall_for_request(
         messages,

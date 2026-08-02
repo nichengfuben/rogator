@@ -32,7 +32,30 @@ def setup_logging(level: Optional[str] = None) -> Optional[Path]:
         color=CONFIG.log_color,
         log_file=str(log_path) if log_path is not None else None,
     )
+    _configure_third_party_loggers()
     return log_path
+
+
+class _DowngradePortKillSuccessFilter(logging.Filter):
+    """echotools 端口强杀成功日志降为 DEBUG，失败告警仍为 WARNING。"""
+
+    _MARKER = "已终止占用端口的进程"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.levelno == logging.WARNING
+            and record.name == "echotools.exec.process.port"
+            and self._MARKER in record.getMessage()
+        ):
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
+
+
+def _configure_third_party_loggers() -> None:
+    port_logger = logging.getLogger("echotools.exec.process.port")
+    if not any(isinstance(f, _DowngradePortKillSuccessFilter) for f in port_logger.filters):
+        port_logger.addFilter(_DowngradePortKillSuccessFilter())
 
 
 def _wire_access_logger() -> logging.Logger:

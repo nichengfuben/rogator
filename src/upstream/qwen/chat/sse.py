@@ -89,6 +89,27 @@ def _build_other(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _build_web_search(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    content = delta.get("content")
+    if content and delta.get("status") != "finished":
+        return {"type": "thinking", "content": str(content)}
+    extra = delta.get("extra") or {}
+    info = extra.get("web_search_info") or []
+    if isinstance(info, list) and info:
+        parts = []
+        for item in info:
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("url") or "")
+                snippet = str(item.get("snippet") or item.get("content") or "")
+                parts.append(f"{title}: {snippet}".strip(": "))
+            else:
+                parts.append(str(item))
+        text = "\n".join(p for p in parts if p)
+        if text:
+            return {"type": "thinking", "content": text}
+    return None
+
+
 def _dispatch_phase(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     phase = delta.get("phase")
     if phase == "answer":
@@ -98,6 +119,8 @@ def _dispatch_phase(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return {"type": "thinking", "content": content} if content else None
     if phase == "thinking_summary":
         return _build_thinking(delta)
+    if phase == "web_search":
+        return _build_web_search(delta)
     if phase == "image_gen_tool":
         return _build_image_tool(delta)
     if phase == "image_gen":

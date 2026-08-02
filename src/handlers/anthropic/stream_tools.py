@@ -7,13 +7,13 @@ from echotools.base.logger import get_logger
 
 from server.formats import _fix_tool_call_id, _gen_tool_id
 
-from handlers.fncall_inject import (
+from handlers.shared.fncall_inject import (
     STREAM_CHUNK_SIZE,
     emit_parser_stream_deltas,
     iter_text_chunks,
     take_parser_final_delta,
 )
-from handlers.anthro.events import (
+from handlers.anthropic.events import (
     _close_block,
     _content_block_stop_event,
     _emit_anthropic_event,
@@ -152,7 +152,7 @@ async def _flush_open_stream_tool(
     *,
     expected_arguments: Optional[str] = None,
 ) -> bool:
-    """补全并关闭流式 tool_use；Anthropic 要求先 stop 再开下一块。"""
+    """琛ュ叏骞跺叧闂�娴佸紡 tool_use锛汚nthropic 瑕佹眰鍏� stop 鍐嶅紑涓嬩竴鍧椼��"""
     if stream_tool is None:
         return True
     if not await _drain_parser_stream_deltas(resp, parser, stream_tool, disconnected):
@@ -211,7 +211,7 @@ async def _emit_ready_tool_calls(
     pending_tc_count: int,
     ready: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[int, Optional[str], int, bool]:
-    """增量发送 parser 中已完整闭合的 tool_use 块（对齐 mock.py input_json_delta）。"""
+    """澧為噺鍙戦�� parser 涓�宸插畬鏁撮棴鍚堢殑 tool_use 鍧楋紙瀵归綈 mock.py input_json_delta锛夈��"""
     if ready is None:
         ready = parser.get_ready_tool_calls()
     if not ready:
@@ -234,7 +234,7 @@ async def _emit_streaming_tool_delta(
     stream_tool: Optional[Dict[str, Any]],
     disconnected: list,
 ) -> Tuple[int, Optional[str], Optional[Dict[str, Any]], bool]:
-    """invoke 开标签就绪后，增量发送 input_json_delta（无需等 </entml:invoke>）。"""
+    """invoke 寮�鏍囩�惧氨缁�鍚庯紝澧為噺鍙戦�� input_json_delta锛堟棤闇�绛� </entml:invoke>锛夈��"""
 
     async def _on_delta(name: str, partial_json: str) -> bool:
         nonlocal block_idx, block_type, stream_tool
@@ -280,7 +280,7 @@ async def _close_streaming_tool_block(
     parser=None,
     expected_arguments: Optional[str] = None,
 ) -> Tuple[int, Optional[str]]:
-    """关闭流式 tool_use 块（兼容旧调用；优先走 _flush_open_stream_tool）。"""
+    """鍏抽棴娴佸紡 tool_use 鍧楋紙鍏煎�规棫璋冪敤锛涗紭鍏堣蛋 _flush_open_stream_tool锛夈��"""
     if stream_tool is None:
         return block_idx, None
     if parser is not None:

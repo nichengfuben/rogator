@@ -16,12 +16,12 @@ AUTH_BASE_URL: Final[str] = "https://auth.qwen.ai"
 CHAT_ORIGIN: Final[str] = "https://chat.qwen.ai"
 AUTH_API_PREFIX: Final[str] = "/api/v2"
 CHAT_API_PREFIX: Final[str] = "/api/v2"
-APP_VERSION: Final[str] = "0.2.64"
-WEB_VERSION: Final[str] = "0.2.9"
+APP_VERSION: Final[str] = "0.2.71"
+WEB_VERSION: Final[str] = APP_VERSION
 API_VERSION: Final[str] = "2.1"
 BAXIA_VERSION: Final[str] = "0.0.3"
 BXUA_VERSION: Final[str] = BAXIA_VERSION
-BAXIA_SDK_VERSION: Final[str] = BAXIA_VERSION
+BAXIA_SDK_VERSION: Final[str] = "2.5.36"
 USE_LOCAL_MODE: Final[bool] = True
 USER_AGENT: Final[str] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -40,16 +40,32 @@ SIGNIN_PATH: Final[str] = f"{AUTH_API_PREFIX}/auths/signin"
 AUTH_CHECK_PATH: Final[str] = f"{AUTH_API_PREFIX}/user"
 NEW_CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chats/new"
 CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chat/completions"
-STOP_CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chat/stop"
+STOP_CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chat/completions/stop"
 DELETE_CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chats/{{chat_id}}"
-SETTINGS_PATH: Final[str] = f"{CHAT_API_PREFIX}/user/settings"
+SETTINGS_PATH: Final[str] = f"{CHAT_API_PREFIX}/users/user/settings"
+SETTINGS_UPDATE_PATH: Final[str] = f"{CHAT_API_PREFIX}/users/user/settings/update"
+CONFIGS_PATH: Final[str] = f"{CHAT_API_PREFIX}/configs/"
+AUTHS_V1_PATH: Final[str] = "/api/v1/auths/"
 MODELS_PATH: Final[str] = f"{CHAT_API_PREFIX}/models"
 TTS_PATH: Final[str] = f"{CHAT_API_PREFIX}/tts/completions"
 TASK_STATUS_PATH: Final[str] = "/api/v1/tasks/status/{task_id}"
+SUGGESTIONS_PATH: Final[str] = f"{CHAT_API_PREFIX}/task/suggestions/completions"
+PARSE_FILE_PATH: Final[str] = f"{CHAT_API_PREFIX}/files/parse"
+PARSE_STATUS_PATH: Final[str] = f"{CHAT_API_PREFIX}/files/parse/status"
+PARSE_URL_PATH: Final[str] = "/api/parse_url"
+STS_TOKEN_PATH: Final[str] = f"{CHAT_API_PREFIX}/files/getstsToken"
 STS_TOKEN_PATHS: Final[List[str]] = [
     "/api/v1/files/getstsToken",
-    "/api/v2/files/getstsToken",
+    STS_TOKEN_PATH,
 ]
+FILE_PARSE_POLL_INTERVAL: Final[float] = 2.0
+FILE_PARSE_TIMEOUT: Final[float] = 120.0
+SSE_RECONNECT_MAX: Final[int] = 10
+ASR_WS_PATH: Final[str] = "/api/v1/asr/wsgu_asr"
+ASR_SAMPLE_RATE: Final[int] = 16000
+ASR_MAX_DURATION_SEC: Final[int] = 60
+ASR_AUDIO_CHUNK_BYTES: Final[int] = 3200
+ASR_WS_TIMEOUT: Final[float] = 90.0
 VIDEO_CDN_BASE: Final[str] = "https://cdn.qwenlm.ai/output"
 
 PERSIST_PATH: Final[str] = "persist/qwen/state.json"

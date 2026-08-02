@@ -38,7 +38,7 @@ env/
 htmlcov/
 .tox/
 # Project specific
-config.toml
+config/config.toml
 persist/qwen/
 persist/deepseek/
 persist/bandit/

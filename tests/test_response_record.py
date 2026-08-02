@@ -70,15 +70,15 @@ def test_prompt_and_response_share_req_id(
     monkeypatch,
 ) -> None:
     """prompts/{req_id}.txt 与 responses/{req_id}.txt 使用同一 req_id。"""
-    from handlers.fncall_inject import inject_fncall_for_request, prompt_dump_dir
+    from handlers.shared.fncall_inject import inject_fncall_for_request, prompt_dump_dir
     from echotools import get_protocol
 
     prompts = tmp_path / "prompts"
     responses = tmp_path / "responses"
-    monkeypatch.setattr("handlers.fncall_inject.prompt_dump_dir", lambda: prompts)
+    monkeypatch.setattr("handlers.shared.fncall_inject.prompt_dump_dir", lambda: prompts)
     monkeypatch.setattr("server.records.response_record.response_dump_dir", lambda: responses)
     monkeypatch.setattr(
-        "handlers.fncall_inject.CONFIG",
+        "handlers.shared.fncall_inject.CONFIG",
         replace(get_config(), record_prompt=True, print_prompt=False, record_response=True),
     )
     monkeypatch.setattr(

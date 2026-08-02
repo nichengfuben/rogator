@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from handlers.api_errors import safe_write as _safe_write
-from handlers.fncall_inject import STREAM_CHUNK_SIZE, emit_parser_stream_deltas, iter_text_chunks
+from handlers.shared.api_errors import safe_write as _safe_write
+from handlers.shared.fncall_inject import STREAM_CHUNK_SIZE, emit_parser_stream_deltas, iter_text_chunks
 from server.formats import build_openai_chunk, build_openai_stream_usage_chunk, _fix_tool_call_id, _gen_tool_id
 
 

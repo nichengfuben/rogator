@@ -3,6 +3,7 @@ from __future__ import annotations
 """config / model_thinking / session_retry 单元测试。"""
 
 import json
+import shutil
 import tempfile
 import time
 import unittest
@@ -210,21 +211,26 @@ class TestConfig(unittest.TestCase):
                 warn_if_config_version_mismatch(user_cfg, mock_logger)
             mock_logger.warning.assert_not_called()
 
-    def test_ensure_user_config_from_legacy_dir(self) -> None:
+    def test_ensure_user_config_from_legacy_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            legacy_dir = root / "config"
-            legacy_dir.mkdir()
-            legacy_cfg = legacy_dir / "config.toml"
-            legacy_cfg.write_text('[server]\nport = 9001\n', encoding="utf-8")
-            with patch("server.config.files.PROJECT_ROOT", root), \
-                 patch("server.config.files.USER_CONFIG_PATH", root / "config.toml"), \
-                 patch("server.config.files.LEGACY_DIR_CONFIG", legacy_cfg):
+            config_dir = root / "config"
+            config_dir.mkdir()
+            target = config_dir / "config.toml"
+            legacy_root = root / "config.toml"
+            legacy_root.write_text('[server]\nport = 9001\n', encoding="utf-8")
+            tpl = root / "template" / "config.toml"
+            tpl.parent.mkdir()
+            shutil.copy2(_PROJECT_TEMPLATE, tpl)
+            with patch("server.config.files.migrate_config_layout"), \
+                 patch("server.config.files.PROJECT_ROOT", root), \
+                 patch("server.config.files.USER_CONFIG_DIR", config_dir), \
+                 patch("server.config.files.USER_CONFIG_PATH", target), \
+                 patch("server.config.files.LEGACY_ROOT_CONFIG", legacy_root):
                 path = ensure_user_config_file()
-            self.assertEqual(path, root / "config.toml")
+            self.assertEqual(path, target)
             self.assertTrue(path.is_file())
-            self.assertEqual(read_server_version(path), None)
-            cfg = load_config(path, template_path=_PROJECT_TEMPLATE)
+            cfg = load_config(path, template_path=tpl)
             self.assertEqual(cfg.port, 9001)
 
 
@@ -574,7 +580,7 @@ class TestSessionStoreMeta(unittest.TestCase):
 
 class TestStreamToolJsonSync(unittest.TestCase):
     def test_arguments_json_equal_ignores_whitespace(self) -> None:
-        from handlers.anthro.stream_tools import _arguments_json_equal
+        from handlers.anthropic.stream_tools import _arguments_json_equal
 
         compact = '{"command":"hello"}'
         spaced = '{"command": "hello"}'

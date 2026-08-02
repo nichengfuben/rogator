@@ -12,15 +12,15 @@ from server.records.response_record import record_raw_response
 from echotools import FncallStreamParser
 from echotools.base.logger import get_logger
 
-from handlers.api_errors import anthropic_error_event, log_classified_stream_error
-from handlers.fncall_inject import (
+from handlers.shared.api_errors import anthropic_error_event, log_classified_stream_error
+from handlers.shared.fncall_inject import (
     advance_partial_buffer,
     finalize_parser_tool_calls,
     reconcile_pending_tool_index,
     resolve_streamed_tool_calls,
 )
-from handlers.anthro.stream_content import _process_anthropic_content_events, _stream_event_loop
-from handlers.anthro.events import (
+from handlers.anthropic.stream_content import _process_anthropic_content_events, _stream_event_loop
+from handlers.anthropic.events import (
     AnthropicStreamState,
     _close_block,
     _emit_anthropic_event,
@@ -29,7 +29,7 @@ from handlers.anthro.events import (
     expected_arguments_for_stream_tool,
     stream_result_tuple,
 )
-from handlers.anthro.stream_tools import (
+from handlers.anthropic.stream_tools import (
     _emit_ready_tool_calls,
     _flush_open_stream_tool,
     _send_thinking_delta,

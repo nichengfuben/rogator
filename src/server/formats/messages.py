@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional
 
 
 def extract_text_from_content(content: Any) -> str:
-    """从 content 中提取文本（支持 list 和 str 格式）。"""
     if isinstance(content, list):
         for part in content:
             if part.get("type") == "text":
@@ -16,7 +15,6 @@ def extract_text_from_content(content: Any) -> str:
 
 
 def extract_last_user_content(messages: List[Dict[str, Any]]) -> str:
-    """提取最后一条 user 消息的 content。"""
     for msg in reversed(messages):
         if msg.get("role") == "user":
             return extract_text_from_content(msg.get("content", ""))
@@ -51,9 +49,14 @@ def build_chat_payload(
     chat_id: str,
     model: str,
     qwen_message: Dict[str, Any],
+    *,
+    include_usage: bool = True,
 ) -> Dict[str, Any]:
-    return {
+    payload: Dict[str, Any] = {
         "stream": True, "version": "2.1", "incremental_output": True,
         "chat_id": chat_id, "chat_mode": "local", "model": model, "parent_id": None,
-        "messages": [qwen_message], "timestamp": int(time.time() * 1000),
+        "messages": [qwen_message], "timestamp": int(time.time()),
     }
+    if include_usage:
+        payload["stream_options"] = {"include_usage": True}
+    return payload

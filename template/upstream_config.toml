@@ -1,3 +1,3 @@
-# 上游配置共享默认（各 upstream/<name>.toml 与 configs/<name>.toml 可覆盖）
+# 上游配置共享默认（各 upstream/<name>.toml 与 config/upstream/<name>.toml 可覆盖）
 [capabilities]
 # thinking 禁止在此配置；由 core 硬编码

@@ -63,7 +63,7 @@ COMMON_HEADERS: Dict[str, str] = {
     "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
     "content-type": "application/json",
     "sec-ch-ua": (
-        '"Chromium";v="146","Not-A.Brand";v="24","Google Chrome";v="146"'
+        '"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"'
     ),
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
@@ -73,13 +73,13 @@ COMMON_HEADERS: Dict[str, str] = {
     "user-agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/146.0.0.0 Safari/537.36"
+        "Chrome/153.0.0.0 Safari/537.36"
     ),
-    "x-app-version": "20241129.1",
+    "x-client-bundle-id": "com.deepseek.chat",
     "x-client-locale": "zh_CN",
     "x-client-platform": "web",
     "x-client-timezone-offset": "28800",
-    "x-client-version": "2.0.0",
+    "x-client-version": "2.3.0",
 }
 
 __all__ = [

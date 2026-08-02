@@ -11,7 +11,8 @@ from server.config.files import (
     PROJECT_ROOT,
     LEGACY_UPSTREAM_DEFAULTS_NAME,
     UPSTREAM_CONFIG_TEMPLATE_NAME,
-    USER_CONFIGS_DIR,
+    USER_CONFIG_DIR,
+    USER_UPSTREAM_DIR,
     ensure_user_config_file,
     overlay_user_config,
     template_config_path,
@@ -40,6 +41,7 @@ class AppConfig:
     host: str
     prelogin: int
     login_interval: float
+    startup_force_kill_port: bool
     max_retry_on_error: int
     max_concurrent: int
     max_queue_size: int
@@ -135,6 +137,7 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         host=str(_require_get(raw, "server", "host")),
         prelogin=int(_require_get(raw, "server", "prelogin")),
         login_interval=float(_require_get(raw, "server", "login_interval")),
+        startup_force_kill_port=bool(_require_get(raw, "server", "startup_force_kill_port")),
         max_retry_on_error=int(_require_get(raw, "retry", "max_retry_on_error")),
         max_concurrent=int(_require_get(raw, "limits", "max_concurrent")),
         max_queue_size=int(_require_get(raw, "limits", "max_queue_size")),
@@ -196,15 +199,19 @@ def _overlay_if_exists(
 
 
 def _load_upstream_toml(name: str) -> Dict[str, Any]:
-    """``template/upstream_config.toml`` → ``configs/upstream_config.toml`` → ``template/upstream/<name>.toml`` → ``configs/<name>.toml``。"""
+    """``template/upstream_config.toml`` → ``config/upstream_config.toml`` → ``template/upstream/<name>.toml`` → ``config/upstream/<name>.toml``。"""
     raw: Dict[str, Any] = {}
     raw = _overlay_if_exists(raw, upstream_config_template_path())
-    raw = _overlay_if_exists(raw, USER_CONFIGS_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME)
-    legacy_defaults = USER_CONFIGS_DIR / LEGACY_UPSTREAM_DEFAULTS_NAME
+    raw = _overlay_if_exists(raw, USER_CONFIG_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME)
+    legacy_defaults = USER_CONFIG_DIR / LEGACY_UPSTREAM_DEFAULTS_NAME
     if legacy_defaults.is_file():
         raw = _overlay_if_exists(raw, legacy_defaults)
     raw = _overlay_if_exists(raw, upstream_template_dir() / f"{name}.toml")
-    raw = _overlay_if_exists(raw, USER_CONFIGS_DIR / f"{name}.toml")
+    raw = _overlay_if_exists(raw, USER_UPSTREAM_DIR / f"{name}.toml")
+    # 兼容旧路径 config/<name>.toml、configs/<name>.toml
+    raw = _overlay_if_exists(raw, USER_CONFIG_DIR / f"{name}.toml")
+    legacy_configs = PROJECT_ROOT / "configs" / f"{name}.toml"
+    raw = _overlay_if_exists(raw, legacy_configs)
     return raw
 
 

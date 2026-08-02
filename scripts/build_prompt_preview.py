@@ -33,7 +33,7 @@ import path_setup  # noqa: F401
 from echotools import get_protocol, inject_fncall
 
 from handlers import extract_system_for_inject, prepend_anthropic_system
-from handlers.anthro import (
+from handlers.anthropic import (
     _build_anthropic_protocol_options,
     _normalize_anthropic_messages,
     _normalize_anthropic_tools,

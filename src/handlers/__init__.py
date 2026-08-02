@@ -147,44 +147,7 @@ def get_state() -> AppState:
 # ============================================================
 
 def setup_routes(app: web.Application) -> None:
-    from handlers.anthro import anthropic_messages_handler
-    from handlers.openai import openai_chat_handler
-    from handlers.platform_handlers import (
-        admin_refresh_models_handler,
-        admin_sessions_handler,
-        admin_switch_session_handler,
-        anthropic_list_models_handler,
-        anthropic_root_handler,
-        audio_speech_handler,
-        capabilities_handler,
-        count_tokens_handler,
-        health_handler,
-        images_generations_handler,
-        list_models_handler,
-        status_handler,
-    )
+    from handlers.shared.route_table import build_route_specs
 
-    routes = [
-        ("GET", "/", health_handler),
-        ("GET", "/health", health_handler),
-        ("GET", "/v1/health", health_handler),
-        ("GET", "/v1/models", list_models_handler),
-        ("POST", "/v1/chat/completions", openai_chat_handler),
-        ("POST", "/v1/messages/count_tokens", count_tokens_handler),
-        ("GET", "/anthropic", anthropic_root_handler),
-        ("POST", "/anthropic", anthropic_root_handler),
-        ("POST", "/v1/messages", anthropic_messages_handler),
-        ("POST", "/anthropic/v1/messages", anthropic_messages_handler),
-        ("POST", "/anthropic/messages", anthropic_messages_handler),
-        ("GET", "/anthropic/v1/models", anthropic_list_models_handler),
-        ("POST", "/anthropic/v1/messages/count_tokens", count_tokens_handler),
-        ("POST", "/v1/images/generations", images_generations_handler),
-        ("POST", "/v1/audio/speech", audio_speech_handler),
-        ("POST", "/v1/admin/refresh_models", admin_refresh_models_handler),
-        ("POST", "/v1/admin/switch_session", admin_switch_session_handler),
-        ("GET", "/v1/admin/sessions", admin_sessions_handler),
-        ("GET", "/v1/capabilities", capabilities_handler),
-        ("GET", "/v1/status", status_handler),
-    ]
-    for method, path, handler in routes:
+    for method, path, handler in build_route_specs():
         getattr(app.router, f"add_{method.lower()}")(path, handler)

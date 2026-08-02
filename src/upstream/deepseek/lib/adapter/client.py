@@ -6,13 +6,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
-import hashlib
 import logging
-from dataclasses import dataclass, field
-from typing import Any as _Any
 
 import aiohttp
 
+from upstream.deepseek.lib.adapter.util import Candidate, make_candidate_id as make_id
 from upstream.deepseek.lib.protocol.consts import (
     CAPS,
     DEFAULT_HOST,
@@ -32,47 +30,7 @@ from upstream.deepseek.lib.stream.strmpars import StreamParser
 
 logger = logging.getLogger(__name__)
 
-
-# ── 本地替代：Candidate / make_id（原 src.core.dispatch.cand）──────────────────
-
-@dataclass
-class Candidate:
-    """轻量候选项，替代 src.core.dispatch.cand.Candidate。"""
-    id: str
-    platform: str
-    resource_id: str
-    models: list
-    context_length: int | None = None
-    meta: dict = field(default_factory=dict)
-    chat: bool = False
-    completions: bool = False
-    responses: bool = False
-    thinking: bool = False
-    search: bool = False
-    tools: bool = False
-    continuation: bool = False
-    vision: bool = False
-
-    def __init__(self, *, id: str, platform: str, resource_id: str, models: list,
-                 context_length: int | None = None, meta: dict | None = None,
-                 **caps: bool) -> None:
-        self.id = id
-        self.platform = platform
-        self.resource_id = resource_id
-        self.models = list(models)
-        self.context_length = context_length
-        self.meta = dict(meta) if meta else {}
-        for k, v in caps.items():
-            setattr(self, k, v)
-
-
-def make_id(platform: str, suffix: str) -> str:
-    """生成候选项 ID（替代 src.core.dispatch.cand.make_id）。"""
-    raw = "{}:{}".format(platform, suffix)
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-# 重新导出 Account，保持 `from .client import Account` 等旧引用路径可用
-__all__ = ["Account", "DeepseekClient"]
+__all__ = ["Account", "Candidate", "DeepseekClient", "make_id"]
 
 
 # ── 客户端主类 ─────────────────────────────────────────────────────────────────
@@ -238,7 +196,13 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
             str（文本增量）或 dict（thinking/usage）。
         """
         async for chunk in self._complete_with_retry(
-            candidate, messages, model, stream, False, False,
+            candidate,
+            messages,
+            model,
+            stream,
+            thinking,
+            search,
+            ref_file_ids=kw.get("ref_file_ids"),
         ):
             yield chunk
 
@@ -250,6 +214,8 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         stream: bool,
         effective_thinking: bool,
         effective_search: bool,
+        *,
+        ref_file_ids: Optional[List[str]] = None,
     ) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
         """按 MAX_RETRIES 重试执行 ``_do_complete``。"""
         last_exc: Optional[Exception] = None
@@ -264,6 +230,7 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
                     stream,
                     thinking=effective_thinking,
                     search=effective_search,
+                    ref_file_ids=ref_file_ids,
                 ):
                     yield chunk
                 return
@@ -284,6 +251,7 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         *,
         thinking: bool = False,
         search: bool = False,
+        ref_file_ids: Optional[List[str]] = None,
     ) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
         """执行单次完整会话请求。
 
@@ -308,11 +276,62 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
             self._proxy_override,
             self._get_proxy_kwarg,
             StreamParser,
+            ref_file_ids=ref_file_ids,
+            thinking_enabled=thinking,
+            search_enabled=search,
+            include_thinking=thinking,
         )
-        async for chunk in self._stream_and_continue(
-            ctx, session_id, hif_leim, hif_dliq, post_kw, parser
-        ):
-            yield chunk
+        try:
+            async for chunk in self._stream_and_continue(
+                ctx, session_id, hif_leim, hif_dliq, post_kw, parser
+            ):
+                yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
+            await self._abort_upstream_on_cancel(ctx["token"], session_id, parser)
+            raise
+
+    async def stop_upstream_generation(
+        self,
+        token: str,
+        chat_session_id: str,
+        message_id: Any,
+    ) -> bool:
+        """POST /api/v0/chat/stop_stream，终止上游仍在进行的生成。"""
+        if not token or not chat_session_id or message_id is None:
+            return False
+        if self._session is None:
+            return False
+        from upstream.deepseek.lib.session.sessapi import stop_stream
+
+        try:
+            return await stop_stream(
+                self._session,
+                token,
+                str(chat_session_id),
+                str(message_id),
+            )
+        except Exception as exc:
+            logger.debug("stop_upstream_generation failed: %s", exc)
+            return False
+
+    async def _abort_upstream_on_cancel(
+        self,
+        token: str,
+        chat_session_id: Any,
+        parser: Any,
+    ) -> None:
+        message_id = getattr(parser, "message_id", None)
+        if message_id is None:
+            return
+        stopped = await self.stop_upstream_generation(
+            token, str(chat_session_id), message_id,
+        )
+        if stopped:
+            logger.info(
+                "Stopped DeepSeek upstream generation session=%s msg=%s",
+                str(chat_session_id)[:8],
+                message_id,
+            )
 
     async def _stream_and_continue(
         self,

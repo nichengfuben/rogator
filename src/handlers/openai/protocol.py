@@ -7,7 +7,7 @@ from echotools.exec.fncall.protocols.entml_think.core import (
     parse_max_thinking_length,
 )
 
-from handlers.fncall_inject import inject_fncall_for_request
+from handlers.shared.fncall_inject import inject_fncall_for_request
 from handlers.openai.thinking import _map_to_thinking_level
 
 

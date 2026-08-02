@@ -13,7 +13,7 @@ from server.formats import (
     convert_to_anthropic,
 )
 from handlers import get_state, prepend_anthropic_system
-from handlers.api_errors import (
+from handlers.shared.api_errors import (
     anthropic_error_event,
     anthropic_error_response,
     apply_tool_choice,
@@ -28,18 +28,18 @@ from handlers.chat_request import (
     resolve_chat_model,
 )
 from handlers.openai import _process_openai_non_stream
-from handlers.anthro.events import (
+from handlers.anthropic.events import (
     _close_block,
     _send_anthropic_finish,
     _send_tool_use_blocks,
     _write_stream_error,
 )
-from handlers.anthro.normalize import (
+from handlers.anthropic.normalize import (
     _build_anthropic_protocol_options,
     _normalize_anthropic_messages,
     _normalize_anthropic_tools,
 )
-from handlers.anthro.stream_core import _stream_anthropic
+from handlers.anthropic.stream_core import _stream_anthropic
 from state import QueueFullError, tracked_request
 
 logger = get_logger("rogator")

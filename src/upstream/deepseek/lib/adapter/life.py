@@ -110,11 +110,15 @@ class _ClientLifecycleMixin:
                     logger.warning("HIF 刷新失败 %s: %s", account.username, exc)
 
     async def _login_account(self, account: Account) -> None:
-        token, user_id = await login(
-            self._session, account.username, account.password
+        token, user_id, did = await login(
+            self._session,
+            account.username,
+            account.password,
+            device_id=account.device_id,
         )
         account.token = token
         account.user_id = user_id
+        account.device_id = did
         logger.info("deepseek 登录成功: %s (id=%s)", account.username, user_id)
 
         mgr = self._hif_managers.get(account.username)
@@ -126,5 +130,19 @@ class _ClientLifecycleMixin:
                 mgr._expire_at = expire
             except Exception as exc:
                 logger.warning("首次 HIF 令牌获取失败 %s: %s", account.username, exc)
+
+        try:
+            from upstream.deepseek.lib.client.settingsapi import warmup_account_client
+            from upstream.deepseek.lib.session.sessapi import get_session_list
+
+            await warmup_account_client(
+                self._session,
+                token,
+                device_id=did,
+                user_id=user_id,
+            )
+            await get_session_list(self._session, token)
+        except Exception as exc:
+            logger.debug("deepseek 登录 warmup 跳过: %s", exc)
 
         self._rebuild_candidates()

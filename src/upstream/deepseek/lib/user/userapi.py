@@ -4,6 +4,7 @@ from __future__ import annotations
 """DeepSeek 用户相关 API 封装（登录/注册/验证码/设置等）"""
 
 import logging
+import re
 import uuid
 from typing import Any, Dict, Tuple
 
@@ -15,11 +16,17 @@ from upstream.deepseek.lib.protocol.headers import build_basic_headers
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "build_login_payload",
     "login",
     "login_by_sms",
     "send_email_code",
     "send_sms_code",
+    "get_current_user",
+    "ensure_device_id",
+    "logout",
 ]
+
+_NON_DIGIT_RE = re.compile(r"\D+")
 
 
 def _make_device_id() -> str:
@@ -31,44 +38,121 @@ def _make_device_id() -> str:
     return str(uuid.uuid4())
 
 
-def _build_login_payload(username: str, password: str) -> Dict[str, Any]:
-    """根据用户名（邮箱或手机号）构造登录请求体，从 login() 抽出。"""
-    is_email = "@" in username
+def _normalize_area_code(area_code: str) -> str:
+    code = (area_code or "+86").strip()
+    if not code:
+        return "+86"
+    return code if code.startswith("+") else "+{}".format(code)
+
+
+def _normalize_mobile(raw: str, area_code: str = "") -> Tuple[str, str]:
+    """解析手机号与区号（支持 +86、86 前缀及常见分隔符）。"""
+    text = raw.strip()
+    code = _normalize_area_code(area_code)
+    if text.startswith("+"):
+        digits = _NON_DIGIT_RE.sub("", text)
+        if digits.startswith("86") and len(digits) > 11:
+            return "+86", digits[2:]
+        return code, digits
+    digits = _NON_DIGIT_RE.sub("", text)
+    if digits.startswith("86") and len(digits) > 11:
+        digits = digits[2:]
+    return code, digits
+
+
+def build_login_payload(
+    username: str,
+    password: str,
+    device_id: str,
+    *,
+    area_code: str = "",
+) -> Dict[str, Any]:
+    """根据用户名（邮箱或手机号）构造 /api/v0/users/login 请求体。"""
+    identity = username.strip()
     payload: Dict[str, Any] = {
         "password": password,
-        "device_id": _make_device_id(),
+        "device_id": device_id,
         "os": "web",
     }
-    if is_email:
-        payload["email"] = username
+    if "@" in identity:
+        payload["email"] = identity
         payload["mobile"] = ""
         payload["area_code"] = ""
-    else:
-        payload["email"] = ""
-        payload["mobile"] = username
-        payload["area_code"] = "+86"
+        return payload
+    mobile_code, mobile = _normalize_mobile(identity, area_code)
+    payload["email"] = ""
+    payload["mobile"] = mobile
+    payload["area_code"] = mobile_code
     return payload
+
+
+def _build_login_payload(username: str, password: str, device_id: str, *, area_code: str = "") -> Dict[str, Any]:
+    return build_login_payload(username, password, device_id, area_code=area_code)
+
+
+def ensure_device_id(device_id: str = "") -> str:
+    """返回稳定 device_id（did），用于 settings 与登录。"""
+    return device_id.strip() or _make_device_id()
+
+
+async def get_current_user(
+    session: aiohttp.ClientSession,
+    token: str,
+) -> Dict[str, Any]:
+    """GET /api/v0/users/current。"""
+    headers = build_basic_headers(token)
+    async with session.get(
+        "https://{}/api/v0/users/current".format(DEFAULT_HOST),
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=30),
+        ssl=False,
+    ) as resp:
+        if resp.status != 200:
+            raise Exception("users/current HTTP {}".format(resp.status))
+        data = await resp.json()
+        inner = data.get("data") or {}
+        if inner.get("biz_code", -1) != 0:
+            raise Exception("users/current biz error: {}".format(data))
+        biz = inner.get("biz_data") or {}
+        return biz if isinstance(biz, dict) else {}
+
+
+async def logout(session: aiohttp.ClientSession, token: str) -> bool:
+    """POST /api/v0/users/logout。"""
+    headers = build_basic_headers(token)
+    try:
+        async with session.post(
+            "https://{}/api/v0/users/logout".format(DEFAULT_HOST),
+            headers=headers,
+            json={},
+            timeout=aiohttp.ClientTimeout(total=15),
+            ssl=False,
+        ) as resp:
+            return resp.status == 200
+    except Exception as exc:
+        logger.warning("logout 失败: %s", exc)
+        return False
 
 
 async def login(
     session: aiohttp.ClientSession,
     username: str,
     password: str,
-) -> Tuple[str, str]:
+    *,
+    device_id: str = "",
+    area_code: str = "",
+) -> Tuple[str, str, str]:
     """邮箱或手机号密码登录。
 
     Args:
-        session: aiohttp ClientSession。
-        username: 邮箱或手机号。
-        password: 密码。
+        username: 邮箱地址，或手机号（可含 +86 / 空格 / 连字符）。
+        area_code: 手机号区号（仅手机登录时使用，默认 +86）。
 
     Returns:
-        (token, user_id) 二元组。
-
-    Raises:
-        Exception: 登录失败时抛出，含详细错误信息。
+        (token, user_id, device_id) 三元组。
     """
-    payload = _build_login_payload(username, password)
+    did = ensure_device_id(device_id)
+    payload = build_login_payload(username, password, did, area_code=area_code)
     headers = build_basic_headers()
     async with session.post(
         "https://{}/api/v0/users/login".format(DEFAULT_HOST),
@@ -90,7 +174,7 @@ async def login(
         user = biz_data.get("user") or {}
         token = user.get("token", "")
         user_id = user.get("id", "")
-        return str(token), str(user_id)
+        return str(token), str(user_id), did
 
 
 async def login_by_sms(
