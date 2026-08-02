@@ -113,30 +113,7 @@ def error_response(
     )
 
 
-def fix_tool_call_id(tc: Dict[str, Any]) -> Dict[str, Any]:
-    """?? echotools ???? call_0000 ??? UUID?"""
-    from server.formats.constants import gen_tool_id
-
-    raw_id = tc.get("id", "")
-    if (
-        not raw_id
-        or raw_id == "call_0000"
-        or raw_id == "toolu_call_0001"
-        or raw_id.startswith("toolu_call_")
-        or raw_id.startswith("call_")
-    ):
-        call_id = gen_tool_id()
-    else:
-        call_id = raw_id
-    func = tc.get("function", {})
-    return {
-        "id": call_id,
-        "type": "function",
-        "function": {
-            "name": func.get("name", ""),
-            "arguments": func.get("arguments", "{}"),
-        },
-    }
+from echotools.exec.fncall.tool_id import fix_tool_call_id
 
 
 def _connection_error_message(hint: str, *, upstream: str = "") -> str:

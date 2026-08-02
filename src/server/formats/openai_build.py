@@ -4,7 +4,9 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
-from server.formats.constants import gen_chatcmpl_id, gen_msg_id, gen_tool_id
+from server.formats.constants import gen_chatcmpl_id, gen_msg_id
+from echotools.base.ids import gen_tool_id
+from echotools.exec.fncall.tool_id import ensure_toolu_tool_call_id
 from server.formats.usage import build_usage_dict
 
 
@@ -162,9 +164,7 @@ def convert_to_anthropic(response: Dict[str, Any]) -> Dict[str, Any]:
             args_json = json.loads(args) if isinstance(args, str) else args
         except json.JSONDecodeError:
             args_json = {}
-        tool_id = tc.get("id") or gen_tool_id()
-        if not tool_id.startswith("toolu_"):
-            tool_id = "toolu_" + tool_id
+        tool_id = ensure_toolu_tool_call_id(str(tc.get("id") or ""))
         anth_content.append({
             "type": "tool_use",
             "id": tool_id,

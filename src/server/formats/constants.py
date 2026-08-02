@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from echotools.base.ids import gen_tool_id
+
 PORT: int = 8932
 MAX_CONCURRENT: int = 8
 MAX_QUEUE_SIZE: int = 1000
@@ -80,9 +82,3 @@ def gen_request_id() -> str:
 
 def gen_msg_id() -> str:
     return gen_id("msg")
-
-
-def gen_tool_id() -> str:
-    import uuid
-
-    return f"toolu_{uuid.uuid4().hex[:24]}"

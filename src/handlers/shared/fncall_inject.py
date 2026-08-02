@@ -16,11 +16,11 @@ from typing import (
 )
 
 from echotools.exec.fncall.prompt.inject import inject_fncall as _echotools_inject
+from echotools.exec.fncall.tool_id import fix_tool_call_id
 from echotools.exec.protocol.base import ToolProtocol
 from echotools.base.logger import get_logger
 
 from server.config import CONFIG, LOG_DIR
-from server.formats import fix_tool_call_id
 
 __all__ = [
     "STREAM_CHUNK_SIZE",
