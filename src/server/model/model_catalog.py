@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from server.model.model_registry import ModelRegistryEntry
-from server.model.model_thinking import always_qwen_thinking
+from server.model.model_thinking import always_qwen_native_thinking
 
 # echotools 挡位；Kimi 选 Off 时通过 off_effort 发 reasoning_effort: none
 THINK_EFFORTS: Dict[str, Any] = {
@@ -77,7 +77,7 @@ def build_openai_model_entry(
         "modality": list(meta.modality),
     }
     if model_supports_thinking(registry_entry):
-        if always_qwen_thinking(internal_id):
+        if always_qwen_native_thinking(internal_id):
             entry["always_thinking"] = True
         elif registry_entry.uses_entml or registry_entry.uses_entml_tools:
             entry["think_efforts"] = dict(THINK_EFFORTS)

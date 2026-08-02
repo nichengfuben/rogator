@@ -46,7 +46,7 @@ def _prepare_messages(
     protocol_options: Optional[Dict[str, Any]],
     prompt_api: str,
 ) -> Tuple[List[Dict[str, Any]], str, Optional[str], Optional[bytes]]:
-    injected, full_content, _qwen_enabled, _mode, _entml = prepare_injected_messages(
+    injected, full_content, _route = prepare_injected_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
     final_messages, send_text, filename, file_bytes = apply_prompt_budget(

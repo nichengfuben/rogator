@@ -23,7 +23,7 @@ from server.config.files import (
     warn_if_config_version_mismatch,
 )
 from server.model.model_registry import get_model_registry, load_model_registry, reload_model_registry
-from server.model.model_thinking import resolve_qwen_thinking, uses_entml_thinking
+from server.model.model_thinking import resolve_thinking_route, uses_entml_thinking
 from server.formats import UpstreamTimeoutError
 from server.retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
 from upstream.qwen.chat.store import QwenSession, save_sessions, load_session_store
@@ -334,39 +334,37 @@ class TestModelThinking(unittest.TestCase):
             self.assertFalse(reg.by_internal["qwen3.8-max-preview"].uses_entml)
 
     def test_resolve_entml_model(self) -> None:
-        enabled, mode, use_entml = resolve_qwen_thinking("qwen3.7-max", "on")
-        self.assertFalse(enabled)
-        self.assertEqual(mode, "Fast")
-        self.assertTrue(use_entml)
+        route = resolve_thinking_route("qwen3.7-max", "on")
+        self.assertTrue(route.use_entml)
+        self.assertFalse(route.qwen_native_enabled)
 
-    def test_resolve_deepseek_always_entml(self) -> None:
-        enabled, mode, use_entml = resolve_qwen_thinking("deepseek-v4-flash", "high")
-        self.assertFalse(enabled)
-        self.assertEqual(mode, "Fast")
-        self.assertTrue(use_entml)
+    def test_resolve_deepseek_entml(self) -> None:
+        route = resolve_thinking_route("deepseek-v4-flash", "high")
+        self.assertTrue(route.use_entml)
+        self.assertFalse(route.qwen_native_enabled)
 
     def test_resolve_native_model_on(self) -> None:
-        enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "on")
-        self.assertTrue(enabled)
-        self.assertEqual(mode, "Thinking")
-        self.assertFalse(use_entml)
+        route = resolve_thinking_route("qwen3.8-max-preview", "on")
+        self.assertFalse(route.use_entml)
+        self.assertTrue(route.qwen_native_enabled)
+        self.assertEqual(route.qwen_native_mode, "Thinking")
 
     def test_resolve_native_model_off(self) -> None:
-        enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "off")
-        self.assertTrue(enabled)
-        self.assertEqual(mode, "Thinking")
-        self.assertFalse(use_entml)
+        route = resolve_thinking_route("qwen3.8-max-preview", "off")
+        self.assertFalse(route.use_entml)
+        self.assertTrue(route.qwen_native_enabled)
+        self.assertEqual(route.qwen_native_mode, "Thinking")
 
     def test_resolve_native_auto(self) -> None:
-        enabled, mode, _ = resolve_qwen_thinking("qwen3.8-max-preview", "auto")
-        self.assertTrue(enabled)
-        self.assertEqual(mode, "Thinking")
+        route = resolve_thinking_route("qwen3.8-max-preview", "auto")
+        self.assertTrue(route.qwen_native_enabled)
+        self.assertEqual(route.qwen_native_mode, "Thinking")
 
     def test_resolve_native_none(self) -> None:
-        enabled, mode, use_entml = resolve_qwen_thinking("qwen3.8-max-preview", "none")
-        self.assertTrue(enabled)
-        self.assertEqual(mode, "Thinking")
-        self.assertFalse(use_entml)
+        route = resolve_thinking_route("qwen3.8-max-preview", "none")
+        self.assertFalse(route.use_entml)
+        self.assertTrue(route.qwen_native_enabled)
+        self.assertEqual(route.qwen_native_mode, "Thinking")
 
 
 class TestThinkingLevels(unittest.TestCase):

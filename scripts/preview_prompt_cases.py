@@ -37,7 +37,7 @@ from handlers.openai import (
     convert_tools_to_openai,
     protocol_thinking_level,
 )
-from server.model.model_thinking import resolve_qwen_thinking
+from server.model.model_thinking import resolve_thinking_route
 from state import LongTextSplitter
 
 Branch = Literal[
@@ -153,8 +153,8 @@ def build_full_content(
     user_system_prompt, prepared = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
     protocol_options = _build_protocol_options({"thinking_level": "medium"})
-    _, _, use_entml = resolve_qwen_thinking(model, protocol_thinking_level(protocol_options))
-    inject_options = _inject_protocol_options(protocol_options, use_entml)
+    route = resolve_thinking_route(model, protocol_thinking_level(protocol_options))
+    inject_options = _inject_protocol_options(protocol_options, route.use_entml)
     injected = inject_fncall(
         prepared, openai_tools, get_protocol("entml"), lang="zh",
         user_system_prompt=user_system_prompt,

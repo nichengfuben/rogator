@@ -18,7 +18,7 @@ from handlers.shared.api_errors import (
 )
 from handlers.shared.fncall_inject import inject_fncall_for_request
 from handlers.openai.protocol import _inject_protocol_options
-from handlers.openai.thinking import protocol_thinking_level, thinking_level_is_active
+from handlers.openai.thinking import protocol_thinking_level
 from handlers.openai.tools import convert_tools_to_openai
 from server.formats import (
     ClientDisconnectedError,
@@ -28,14 +28,14 @@ from server.formats import (
     read_request_json,
 )
 from server.model.model_registry import ModelResolveError
-from server.model.model_thinking import always_qwen_thinking, resolve_qwen_thinking
+from server.model.model_thinking import ThinkingRoute, resolve_thinking_route
 from server.retry import stream_with_session_retry
 
 logger = logging.getLogger("rogator")
 
 ChatJsonResult = Union[dict, web.Response]
 ChatModelResult = Union[str, web.Response]
-PrepareResult = Tuple[List[Dict[str, Any]], str, bool, str, bool]
+PrepareResult = Tuple[List[Dict[str, Any]], str, ThinkingRoute]
 StreamEventHandler = Callable[[Dict[str, Any]], Awaitable[bool]]
 
 
@@ -74,19 +74,18 @@ def log_chat_request(
     protocol_options: Optional[dict],
 ) -> None:
     req_level = protocol_thinking_level(protocol_options)
-    _, _, use_entml = resolve_qwen_thinking(model, req_level)
-    qwen_thinking = not use_entml and (
-        always_qwen_thinking(model) or thinking_level_is_active(req_level)
-    )
+    route = resolve_thinking_route(model, req_level)
     logger.info(
-        "%s: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, qwen_thinking=%s",
+        "%s: %d messages, model=%s, stream=%s, tools=%d, thinking_level=%s, "
+        "entml=%s qwen_native=%s",
         protocol.capitalize(),
         len(messages),
         model,
         stream,
         len(tools),
         req_level,
-        qwen_thinking,
+        route.use_entml,
+        route.qwen_native_enabled,
     )
 
 
@@ -132,11 +131,11 @@ def prepare_injected_messages(
     protocol_options: Optional[Dict[str, Any]],
     prompt_api: str,
 ) -> PrepareResult:
-    """返回 (injected_messages, full_content, qwen_enabled, qwen_mode, use_entml)。"""
-    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(
+    """返回 (injected_messages, full_content, thinking_route)。"""
+    route = resolve_thinking_route(
         model, protocol_thinking_level(protocol_options),
     )
-    inject_options = _inject_protocol_options(protocol_options, use_entml)
+    inject_options = _inject_protocol_options(protocol_options, route.use_entml)
     user_system_prompt, messages = extract_system_for_inject(messages)
     injected = inject_fncall_for_request(
         messages,
@@ -150,7 +149,7 @@ def prepare_injected_messages(
         protocol_options=inject_options,
     )
     full_content = injected[0].get("content") or ""
-    return injected, full_content, qwen_enabled, qwen_mode, use_entml
+    return injected, full_content, route
 
 
 def apply_prompt_budget(

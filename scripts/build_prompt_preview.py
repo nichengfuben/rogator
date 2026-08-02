@@ -45,7 +45,7 @@ from handlers.openai import (
     protocol_thinking_level,
 )
 from server.formats import build_qwen_message
-from server.model.model_thinking import resolve_qwen_thinking
+from server.model.model_thinking import resolve_thinking_route
 
 
 def demo_openai_messages() -> List[Dict[str, Any]]:
@@ -193,8 +193,8 @@ def build_prompt(
         )
         protocol_options = _build_protocol_options(body) or {}
     req_level = protocol_thinking_level(protocol_options)
-    qwen_enabled, qwen_mode, use_entml = resolve_qwen_thinking(model, req_level)
-    inject_options = _inject_protocol_options(protocol_options, use_entml)
+    route = resolve_thinking_route(model, req_level)
+    inject_options = _inject_protocol_options(protocol_options, route.use_entml)
 
     user_system_prompt, prepared = extract_system_for_inject(messages)
     openai_tools = convert_tools_to_openai(tools)
@@ -207,15 +207,15 @@ def build_prompt(
     prompt = injected[0]["content"]
     qwen_msg = build_qwen_message(
         prompt, model,
-        thinking_enabled=qwen_enabled,
-        thinking_mode=qwen_mode,
+        thinking_enabled=route.qwen_native_enabled,
+        thinking_mode=route.qwen_native_mode,
     )
     return {
         "model": model,
         "thinking_level_request": req_level,
-        "use_entml_thinking": use_entml,
-        "qwen_thinking_enabled": qwen_enabled,
-        "qwen_thinking_mode": qwen_mode,
+        "use_entml": route.use_entml,
+        "qwen_native_enabled": route.qwen_native_enabled,
+        "qwen_native_mode": route.qwen_native_mode,
         "user_system_prompt": user_system_prompt,
         "tool_count": len(openai_tools),
         "prompt": prompt,
@@ -295,9 +295,9 @@ def main() -> None:
     print(sep)
     print(f"model                 : {result['model']}")
     print(f"request thinking_level: {result['thinking_level_request']}")
-    print(f"use_entml_thinking    : {result['use_entml_thinking']}")
-    print(f"qwen_thinking_enabled : {result['qwen_thinking_enabled']}")
-    print(f"qwen_thinking_mode    : {result['qwen_thinking_mode']}")
+    print(f"use_entml             : {result['use_entml']}")
+    print(f"qwen_native_enabled   : {result['qwen_native_enabled']}")
+    print(f"qwen_native_mode      : {result['qwen_native_mode']}")
     print(f"tools                 : {result['tool_count']}")
     print(f"prompt length         : {len(result['prompt'])} chars")
     print(sep)

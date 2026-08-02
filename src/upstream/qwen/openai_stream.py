@@ -10,6 +10,7 @@ from echotools.base.logger import get_logger
 
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from server.formats import TokenExpiredError
+from server.model.model_thinking import ThinkingRoute
 
 logger = get_logger("rogator")
 
@@ -93,8 +94,8 @@ async def _prepare_stream(
     protocol_options=None,
     *,
     prompt_api: str = "openai",
-) -> Tuple[List, List, bool, str]:
-    injected, full_content, qwen_enabled, qwen_mode, _use_entml = prepare_injected_messages(
+) -> Tuple[List, List, ThinkingRoute]:
+    injected, full_content, route = prepare_injected_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
 
@@ -107,7 +108,7 @@ async def _prepare_stream(
         client, session, messages, image_uris, media_urls, filename, file_bytes, send_text,
     )
     final_messages[0]["content"] = send_text
-    return final_messages, files, qwen_enabled, qwen_mode
+    return final_messages, files, route
 
 
 async def stream_openai_chat(
@@ -125,7 +126,7 @@ async def stream_openai_chat(
     async with client.lease_valid_session() as session:
         if not session:
             raise TokenExpiredError("No valid session available")
-        final_messages, uploaded_files, qwen_enabled, qwen_mode = await _prepare_stream(
+        final_messages, uploaded_files, route = await _prepare_stream(
             state, client, session, messages, model, tools, req_id, protocol_options,
             prompt_api=prompt_api,
         )
@@ -138,8 +139,8 @@ async def stream_openai_chat(
             chat_id = await client.create_chat(session, model)
             async for event in client.chat_completion(
                 session, chat_id, final_messages, model, uploaded_files,
-                qwen_thinking_enabled=qwen_enabled,
-                qwen_thinking_mode=qwen_mode,
+                qwen_thinking_enabled=route.qwen_native_enabled,
+                qwen_thinking_mode=route.qwen_native_mode,
             ):
                 yield event
         except (asyncio.CancelledError, GeneratorExit):
