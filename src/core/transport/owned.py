@@ -50,14 +50,16 @@ class HttpTransportMixin:
         return await self._ensure_http_session()
 
     async def reset_http_transport(self) -> None:
-        """软重置 transport：仅丢弃当前 session 引用，不关闭旧 session。
+        """软重置 transport：关闭当前 ClientSession 并丢弃引用。
 
-        并发请求可能仍持有旧 session；若在此 close，aiohttp 会将 connector 置空，
-        导致 ``'NoneType' object has no attribute '_timeout_ceil_threshold'``。
-        旧 session 由 GC 回收；共享 connector 仅在 shutdown 时关闭。
+        使用 ``connector_owner=False`` 的共享 connector 不会被关闭；
+        其它 client 持有的 session 实例不受影响。
         """
         async with self._transport_lock:
+            old = self._http
             self._http = None
+            if old is not None and not old.closed:
+                await reset_upstream_transport(old)
             if self._should_recreate_http_on_reset():
                 self._http = client_session()
                 self._on_http_session_created(self._http)

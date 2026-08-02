@@ -107,20 +107,29 @@ async def stream_openai_chat(
     yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
     inner = await client._ensure_ready()  # noqa: SLF001
     for attempt in range(_MAX_MUTE_SWITCH):
-        candidate = await client.pick_candidate()
-        username = str(candidate.meta.get("identifier") or "")
-        try:
-            async for event in _iter_complete_events(
-                inner, candidate, final_messages, model, thinking=qwen_enabled,
-            ):
-                yield event
-            return
-        except DeepSeekUserMutedError as exc:
-            await _on_user_muted(client, username, exc, attempt)
-        except Exception as exc:
-            reraise_transport_error(
-                exc,
-                upstream="deepseek",
-                timeout_message="DeepSeek upstream timeout",
-            )
+        muted_exc: Optional[DeepSeekUserMutedError] = None
+        muted_user = ""
+        async with client.lease_valid_session() as session:
+            if session is None:
+                raise DeepSeekAccountsExhaustedError(
+                    "DeepSeek 无可用会话，请检查账号配置与登录状态"
+                )
+            candidate = await client.pick_candidate(session)
+            muted_user = str(candidate.meta.get("identifier") or "")
+            try:
+                async for event in _iter_complete_events(
+                    inner, candidate, final_messages, model, thinking=qwen_enabled,
+                ):
+                    yield event
+                return
+            except DeepSeekUserMutedError as exc:
+                muted_exc = exc
+            except Exception as exc:
+                reraise_transport_error(
+                    exc,
+                    upstream="deepseek",
+                    timeout_message="DeepSeek upstream timeout",
+                )
+        if muted_exc is not None:
+            await _on_user_muted(client, muted_user, muted_exc, attempt)
     raise DeepSeekAccountsExhaustedError("DeepSeek mute switch limit exceeded")

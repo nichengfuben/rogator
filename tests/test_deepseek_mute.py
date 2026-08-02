@@ -76,6 +76,11 @@ class TestMutedAccountsPersist(unittest.TestCase):
 
 
 class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self) -> None:
+        from core.transport.http import close_shared_connector
+
+        await close_shared_connector()
+
     async def test_handle_account_muted_removes_session_and_blocks_login(self) -> None:
         with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())):
             client = DeepSeekClient(MagicMock())
@@ -104,8 +109,10 @@ class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
         with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())):
             client = DeepSeekClient(MagicMock())
         client._save_meta = MagicMock(return_value=[])
-        client._http = MagicMock(closed=False)
-        client._ensure_ready = AsyncMock(return_value=MagicMock(_session=MagicMock(), _hif_managers={}))
+        mock_http = MagicMock(closed=False)
+        mock_http.connector = MagicMock(closed=False)
+        client._http = mock_http
+        client._ensure_ready = AsyncMock(return_value=MagicMock(_session=mock_http, _hif_managers={}))
 
         with patch(
             "upstream.deepseek.client.login",

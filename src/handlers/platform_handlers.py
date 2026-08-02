@@ -176,15 +176,15 @@ async def audio_speech_handler(request: web.Request) -> web.Response:
     except ModelResolveError as exc:
         return model_resolve_error_response(exc)
     qwen = state.client_for(model, ("tts",), upstream_name="qwen")
-    session = await qwen.get_valid_session()
-    if not session:
-        return _error_response(503, "No valid Qwen session available")
-    local_path = await qwen.synthesize_tts(text, session.token, model=model)
-    if not local_path:
-        return _error_response(502, "TTS synthesis failed")
-    from pathlib import Path
-    audio_bytes = Path(local_path).read_bytes()
-    return web.Response(body=audio_bytes, content_type="audio/wav")
+    async with qwen.lease_valid_session() as session:
+        if not session:
+            return _error_response(503, "No valid Qwen session available")
+        local_path = await qwen.synthesize_tts(text, session.token, model=model)
+        if not local_path:
+            return _error_response(502, "TTS synthesis failed")
+        from pathlib import Path
+        audio_bytes = Path(local_path).read_bytes()
+        return web.Response(body=audio_bytes, content_type="audio/wav")
 
 
 async def images_generations_handler(request: web.Request) -> web.Response:
@@ -211,23 +211,23 @@ async def images_generations_handler(request: web.Request) -> web.Response:
         return model_resolve_error_response(exc)
     size = body.get("size", "16:9")
     qwen = state.client_for(model, ("image_gen",), upstream_name="qwen")
-    session = await qwen.get_valid_session()
-    if not session:
-        return _error_response(503, "No valid Qwen session available")
-    result = await qwen.generate_video(
-        prompt, image_url, session.token, session.user_id, model=model, size=size,
-    )
-    if not result.get("success"):
-        return _error_response(502, result.get("error", "Generation failed"))
-    video_url = result.get("video_url", "")
-    return _json_response({
-        "created": int(__import__("time").time()),
-        "data": [{
-            "url": video_url,
-            "revised_prompt": prompt,
-            "local_path": result.get("local_path", ""),
-        }],
-    })
+    async with qwen.lease_valid_session() as session:
+        if not session:
+            return _error_response(503, "No valid Qwen session available")
+        result = await qwen.generate_video(
+            prompt, image_url, session.token, session.user_id, model=model, size=size,
+        )
+        if not result.get("success"):
+            return _error_response(502, result.get("error", "Generation failed"))
+        video_url = result.get("video_url", "")
+        return _json_response({
+            "created": int(__import__("time").time()),
+            "data": [{
+                "url": video_url,
+                "revised_prompt": prompt,
+                "local_path": result.get("local_path", ""),
+            }],
+        })
 
 
 async def capabilities_handler(request: web.Request) -> web.Response:

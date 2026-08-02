@@ -9,7 +9,15 @@ from typing import Any, Dict, List, Optional, Union
 from aiohttp import web
 
 from echotools.base.logger import get_logger
-from server.formats import TokenExpiredError, UpstreamTimeoutError, _error_response, _json_response
+from server.formats import (
+    TokenExpiredError,
+    UpstreamConnectionError,
+    UpstreamTimeoutError,
+    UpstreamUnavailableError,
+    UpstreamWafBlockedError,
+    _error_response,
+    _json_response,
+)
 from server.model.model_registry import ModelResolveError, resolve_request_model
 from state import AppState, QueueFullError
 
@@ -37,6 +45,10 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
         return StreamErrorInfo("rate_limited", str(exc), 429)
     if isinstance(exc, UpstreamTimeoutError):
         return StreamErrorInfo("timeout", str(exc), 504)
+    if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError)):
+        return StreamErrorInfo("server_error", exc.message, exc.status)
+    if isinstance(exc, UpstreamConnectionError):
+        return StreamErrorInfo("server_error", exc.message, exc.status)
     return StreamErrorInfo("server_error", str(exc), 500)
 
 
@@ -159,5 +171,13 @@ def handler_error_response(
         logger.warning("%s upstream timeout: %s", label, exc)
         kind = "timeout_error" if protocol == "anthropic" else "timeout"
         return err(504, str(exc), kind)
+    if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError)):
+        logger.warning("%s upstream unavailable: %s", label, exc.message)
+        kind = "api_error" if protocol == "anthropic" else "server_error"
+        return err(exc.status, exc.message, kind)
+    if isinstance(exc, UpstreamConnectionError):
+        logger.warning("%s upstream connection: %s", label, exc.message)
+        kind = "api_error" if protocol == "anthropic" else "server_error"
+        return err(exc.status, exc.message, kind)
     logger.error("%s error: %s", label, exc, exc_info=True)
     return err(500, str(exc), "api_error" if protocol == "anthropic" else "server_error")

@@ -14,9 +14,14 @@ from upstream.qwen.auth.crypto import build_headers
 from upstream.qwen.chat.routes import BASE_URL, NEW_CHAT_PATH
 from upstream.qwen.chat.sse import parse_sse_event
 from upstream.qwen.auth.http import run_with_connection_retry
-from core.transport.http import upstream_timeout
+from core.transport.http import request_json, upstream_timeout
 from server.config import CONFIG
-from server.formats import PayloadTooLargeError, TokenExpiredError, UpstreamTimeoutError
+from server.formats import (
+    PayloadTooLargeError,
+    TokenExpiredError,
+    UpstreamTimeoutError,
+    UpstreamWafBlockedError,
+)
 from upstream.qwen.chat.store import QwenSession, is_session_fatal_error
 
 if TYPE_CHECKING:
@@ -45,6 +50,22 @@ def raise_qwen_session_error(
     raise TokenExpiredError(f"Token expired: {text[:200]}")
 
 
+def _raise_for_non_json_create_chat(
+    client: QwenClient,
+    session: QwenSession,
+    text: str,
+) -> None:
+    """非 JSON 响应：先尝试会话失效判定，否则视为 WAF 拦截。"""
+    raise_qwen_session_error(client, session, text)
+    snippet = text.strip()[:200]
+    raise UpstreamWafBlockedError(
+        "Qwen create_chat 返回非 JSON（疑似 Baxia/WAF 拦截）。"
+        "请配置有效 QWEN_BX_UMIDTOKEN 或重新登录账号。"
+        f" 响应片段: {snippet}",
+        upstream="qwen",
+    )
+
+
 def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict[str, Any]) -> None:
     data_obj = data.get("data") or {}
     if not isinstance(data_obj, dict):
@@ -69,15 +90,20 @@ async def _post_create_chat(client: QwenClient, session: QwenSession, model: str
 
     async def _run() -> Dict[str, Any]:
         http = await client._ensure_http_session()
-        async with http.post(
+        status, body = await request_json(
+            http,
+            "POST",
             f"{BASE_URL}{NEW_CHAT_PATH}",
-            json=payload,
             headers=headers,
+            json=payload,
             timeout=upstream_timeout(timeout_s),
-        ) as resp:
-            if resp.status != 200:
-                return {"_http_status": resp.status}
-            return await resp.json()
+        )
+        if status != 200:
+            return {"_http_status": status}
+        if isinstance(body, dict):
+            return body
+        _raise_for_non_json_create_chat(client, session, str(body))
+        return {}
     return await run_with_connection_retry("create_chat", _run, transport_owner=client)
 
 

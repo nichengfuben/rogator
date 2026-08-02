@@ -33,8 +33,7 @@ class TestSwitchAccount(unittest.IsolatedAsyncioTestCase):
         client._current_index = 0
         client._save_meta = MagicMock(return_value=[])
 
-        with patch("core.session.pool.random.choice", return_value=client._sessions[1]):
-            new = await client.switch_to_next(exclude_username="a@test.com")
+        new = await client.switch_to_next(exclude_username="a@test.com")
         self.assertIsNotNone(new)
         self.assertEqual(new.username, "b@test.com")
         self.assertEqual(client._current_index, 1)

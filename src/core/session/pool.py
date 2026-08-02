@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-"""平台共享 session 池：预登、随机选号、换号、封禁与落盘。"""
+"""平台共享 session 池：预登、最少在途选号、换号、封禁与落盘。"""
 
 import asyncio
 import logging
 import random
 import time
-from typing import Dict, List, Optional
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Dict, List, Optional
 
 from core.session.accounts import Account, accounts_for_upstream
 from core.session.store import (
@@ -28,6 +29,10 @@ from server.records.login_history import LoginHistoryStore
 
 logger = logging.getLogger("rogator")
 
+# 单账号并发软顶；全池饱和时仍允许选用（退化为最少在途）
+MAX_INFLIGHT_PER_ACCOUNT: int = 2
+MIN_EFFECTIVE_PRELOGIN: int = 4
+
 
 class SessionLoginMixin:
     """按 upstream 分桶的 session 池；子类实现 ``_perform_login``。"""
@@ -43,6 +48,8 @@ class SessionLoginMixin:
     _login_interval: float
     _login_history: LoginHistoryStore
     _last_cleanup: float
+    _inflight: Dict[str, int]
+    _replenish_event: asyncio.Event
 
     def _init_session_pool(self) -> None:
         sessions, meta = load_upstream_sessions(self.UPSTREAM_NAME)
@@ -52,6 +59,66 @@ class SessionLoginMixin:
         self._muted_accounts = prune_expired_muted_accounts(dict(meta.muted_accounts))
         self._login_history = LoginHistoryStore(self.UPSTREAM_NAME)
         self._last_cleanup = 0.0
+        self._inflight = {}
+        self._replenish_event = asyncio.Event()
+
+    def _inflight_count(self, username: str) -> int:
+        return max(0, self._inflight.get(username, 0))
+
+    def _bump_inflight(self, username: str, delta: int) -> None:
+        if not username:
+            return
+        count = self._inflight_count(username) + delta
+        if count <= 0:
+            self._inflight.pop(username, None)
+        else:
+            self._inflight[username] = count
+
+    def _effective_prelogin_target(self, count: Optional[int] = None) -> int:
+        if count is not None:
+            return max(0, int(count))
+        base = max(0, int(self._prelogin_target))
+        try:
+            from server.config import CONFIG
+
+            mc = int(CONFIG.max_concurrent)
+        except Exception:
+            return base
+        if mc <= 0:
+            return base
+        return min(base, max(MIN_EFFECTIVE_PRELOGIN, mc // 2))
+
+    def signal_replenish(self) -> None:
+        """请求路径池压高时唤醒后台补登（debounce 由 maintenance 清 event）。"""
+        self._replenish_event.set()
+
+    async def wait_for_replenish_or_timeout(self, timeout: float) -> None:
+        if self._replenish_event.is_set():
+            self._replenish_event.clear()
+            return
+        try:
+            await asyncio.wait_for(self._replenish_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._replenish_event.clear()
+
+    @asynccontextmanager
+    async def lease_valid_session(
+        self,
+        *,
+        exclude_username: Optional[str] = None,
+    ) -> AsyncIterator[Optional[PlatformSession]]:
+        """租用 session：在途 +1，退出时 −1（含 cancel / 流式 aclose）。"""
+        session = await self.get_valid_session(exclude_username=exclude_username)
+        if session is None:
+            yield None
+            return
+        self._bump_inflight(session.username, 1)
+        try:
+            yield session
+        finally:
+            self._bump_inflight(session.username, -1)
 
     def _save_meta(self) -> List[str]:
         return save_upstream_sessions(
@@ -208,7 +275,7 @@ class SessionLoginMixin:
 
     async def replenish_sessions(self, count: Optional[int] = None) -> None:
         """有效 session 不足 pool target 时补登（由后台 maintenance 调用）。"""
-        target = self._prelogin_target if count is None else count
+        target = self._effective_prelogin_target(count)
         await self._ensure_cleanup()
         pool = self._pool_accounts()
         if not pool:
@@ -218,7 +285,8 @@ class SessionLoginMixin:
         if need <= 0:
             return
         logged = 0
-        interval = max(0.0, self._login_interval)
+        urgent = valid_session_count(self._sessions) == 0
+        interval = 0.0 if urgent else max(0.0, self._login_interval)
         for attempt in range(need):
             account = self._pick_account_for_login()
             if account is None:
@@ -296,7 +364,15 @@ class SessionLoginMixin:
         valid = self._valid_sessions(exclude_username=exclude_username)
         if not valid:
             return None
-        selected = random.choice(valid)
+        under_cap = [
+            s for s in valid
+            if self._inflight_count(s.username) < MAX_INFLIGHT_PER_ACCOUNT
+        ]
+        pool = under_cap or valid
+        selected = min(
+            pool,
+            key=lambda s: (self._inflight_count(s.username), random.random()),
+        )
         idx = self._index_of_username(selected.username)
         if idx is not None:
             self._current_index = idx
@@ -340,6 +416,7 @@ class SessionLoginMixin:
                     idx = self._index_of_username(ps.username)
                     self._current_index = idx if idx is not None else 0
                 await self._on_session_selected(ps)
+                self.signal_replenish()
                 return ps
             async with self._lock:
                 account = self._pick_account_for_login(skip=skip)

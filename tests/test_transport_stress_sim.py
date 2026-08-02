@@ -55,8 +55,8 @@ class PostScript:
     calls: int = 0
     timeouts_used: List[aiohttp.ClientTimeout] = field(default_factory=list)
 
-    def build_post(self):
-        def _post(*_args, **kwargs):
+    def build_request(self):
+        def _request(*_args, **kwargs):
             self.calls += 1
             timeout = kwargs.get("timeout")
             if timeout is not None:
@@ -68,11 +68,11 @@ class PostScript:
                 raise outcome
             return outcome
 
-        return _post
+        return _request
 
 
 class TransportProbe(HttpTransportMixin):
-    """最小 Qwen 客户端探针：复用 HttpTransportMixin，post 走脚本。"""
+    """最小 Qwen 客户端探针：复用 HttpTransportMixin，request 走脚本。"""
 
     def __init__(self, script: PostScript) -> None:
         self._script = script
@@ -84,7 +84,9 @@ class TransportProbe(HttpTransportMixin):
             session = MagicMock(spec=aiohttp.ClientSession)
             session.closed = False
             session.close = AsyncMock()
-            session.post = self._script.build_post()
+            handler = self._script.build_request()
+            session.request = handler
+            session.post = handler
             self._http = session
         return self._http
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 """请求调度、活跃任务跟踪与弹性重试。"""
 
 import asyncio
+import inspect
 import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
@@ -197,7 +198,11 @@ async def session_maintenance_loop(
             replenish = getattr(client, "replenish_sessions", None)
             if callable(replenish):
                 await replenish()
-            await asyncio.wait_for(state.shutdown_event.wait(), timeout=wait)
+            wait_replenish = getattr(client, "wait_for_replenish_or_timeout", None)
+            if inspect.iscoroutinefunction(wait_replenish):
+                await wait_replenish(wait)
+            else:
+                await asyncio.wait_for(state.shutdown_event.wait(), timeout=wait)
         except asyncio.TimeoutError:
             continue
         except asyncio.CancelledError:

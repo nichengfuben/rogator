@@ -34,6 +34,12 @@ class UpstreamUnavailableError(RuntimeError):
         self.upstream = upstream
 
 
+class UpstreamWafBlockedError(UpstreamUnavailableError):
+    """上游 WAF/Baxia 拦截，返回 HTML 等非 JSON 响应。"""
+
+    error_type: str = "upstream_waf_blocked"
+
+
 class UpstreamConnectionError(RuntimeError):
     """?????????/??/DNS??"""
 

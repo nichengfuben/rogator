@@ -193,8 +193,9 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
             self._ensure_http_unlocked()
         return self._inner
 
-    async def pick_candidate(self) -> Any:
-        session = await self.get_valid_session()
+    async def pick_candidate(self, session: Optional[PlatformSession] = None) -> Any:
+        if session is None:
+            session = await self.get_valid_session()
         if session is None:
             raise UpstreamUnavailableError(
                 "DeepSeek 无可用会话，请检查账号配置与登录状态",

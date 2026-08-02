@@ -89,11 +89,23 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
         client._current_index = 0
         client._save_meta = MagicMock(return_value=[])
 
-        with patch("core.session.pool.random.choice", return_value=client._sessions[1]):
-            new = await client.switch_to_next(exclude_username="a@test.com")
+        new = await client.switch_to_next(exclude_username="a@test.com")
         self.assertIsNotNone(new)
         self.assertEqual(new.username, "b@test.com")
         self.assertEqual(client._current_index, 1)
+
+    async def test_select_prefers_least_inflight(self) -> None:
+        client = QwenClient(MagicMock())
+        client._sessions = [
+            _session("a"),
+            _session("b"),
+        ]
+        client._inflight = {"a@test.com": 2, "b@test.com": 0}
+        client._save_meta = MagicMock(return_value=[])
+
+        picked = client._select_valid_session()
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked.username, "b@test.com")
 
     async def test_concurrent_login_not_blocked_by_lock(self) -> None:
         client = QwenClient(MagicMock())
@@ -143,6 +155,18 @@ class TestSessionConcurrency(unittest.IsolatedAsyncioTestCase):
         session = await client.get_valid_session()
         self.assertIsNotNone(session)
         client.replenish_sessions.assert_not_called()
+
+    async def test_lease_tracks_inflight(self) -> None:
+        empty_meta = SessionStoreMeta()
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
+        client._sessions = [_session("ok")]
+        client._ensure_cleanup = AsyncMock()
+
+        async with client.lease_valid_session() as session:
+            self.assertIsNotNone(session)
+            self.assertEqual(client._inflight_count("ok@test.com"), 1)
+        self.assertEqual(client._inflight_count("ok@test.com"), 0)
 
 
 if __name__ == "__main__":

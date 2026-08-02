@@ -54,7 +54,7 @@ class TestDeepSeekTransport(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(client._http, old_http)
         self.assertIs(inner._session, client._http)  # noqa: SLF001
         self.assertIs(mgr._session, client._http)  # noqa: SLF001
-        self.assertFalse(old_http.closed)
+        self.assertTrue(old_http.closed)
         await client.shutdown()
 
     async def test_login_retries_after_session_closed(self) -> None:

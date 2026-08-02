@@ -73,9 +73,18 @@ class TestUpstreamTransport(unittest.IsolatedAsyncioTestCase):
         sb = await b.ensure_http_session()
         self.assertIs(sa.connector, sb.connector)
         await a.reset_http_transport()
+        self.assertTrue(sa.closed)
         self.assertFalse(sb.closed)
         self.assertFalse(make_connector().closed)
         await b.close_http_transport()
+
+    async def test_mixin_reset_closes_orphan_session(self) -> None:
+        client = _OwnedClient()
+        session = await client.ensure_http_session()
+        self.assertFalse(session.closed)
+        await client.reset_http_transport()
+        self.assertTrue(session.closed)
+        self.assertIsNone(client._http)
 
 
 if __name__ == "__main__":

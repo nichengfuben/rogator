@@ -99,6 +99,8 @@ class QwenLoginMixin(SessionLoginMixin):
                 LOGIN_TIMEOUT,
             )
             return None
+        except asyncio.CancelledError:
+            raise
 
 
 class ModelsFetchMixin(ModelsCacheMixin):
@@ -138,19 +140,19 @@ class ModelsFetchMixin(ModelsCacheMixin):
                 return list(self._models)
             return self.load_models_cache()
 
-        session = await self.get_valid_session()
-        if not session:
-            return _keep_cached()
-        try:
-            async def _run() -> List[str]:
-                s = await self._ensure_http_session()
-                return await self._fetch_models_remote(s, session, now, _keep_cached)
+        async with self.lease_valid_session() as session:
+            if not session:
+                return _keep_cached()
+            try:
+                async def _run() -> List[str]:
+                    s = await self._ensure_http_session()
+                    return await self._fetch_models_remote(s, session, now, _keep_cached)
 
-            return await run_with_connection_retry(
-                "fetch_models", _run, transport_owner=self,
-            )
-        except Exception:
-            return _keep_cached()
+                return await run_with_connection_retry(
+                    "fetch_models", _run, transport_owner=self,
+                )
+            except Exception:
+                return _keep_cached()
 
     def load_models_cache(self) -> List[str]:
         disk_models: List[str] = []
