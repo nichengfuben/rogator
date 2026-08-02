@@ -50,7 +50,7 @@ python main.py
 
 ## Dependencies
 
-- **echotools** — Core library for logging (`echotools.base.logger`), protocol abstraction (`echotools.exec.protocol.base.ToolProtocol`), and function call injection (`echotools.exec.fncall.inject_fncall`)
+- **echotools** (`>=2.4.5`) — logging (`echotools.base.logger`), protocol (`ToolProtocol`), fncall inject, tool id (`gen_tool_id`, `fix_tool_call_id`)
 - No pyproject.toml or requirements.txt — dependencies are managed externally
 
 ## Code Style

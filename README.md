@@ -2,7 +2,7 @@
 
 多上游 AI 适配服务器 — 将 **Qwen** / **DeepSeek** 等通过 OpenAI 与 Anthropic 兼容 API 暴露给客户端。
 
-默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.3.43`。
+默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.4.5`（排除有缺陷的 `2.4.2`）。
 
 **平台**：macOS / Linux / Windows  
 **Python**：3.8 – 3.14
@@ -54,7 +54,7 @@ pip install -r requirements-dev.txt
 | 包 | 用途 |
 |----|------|
 | `aiohttp>=3.9.0` | HTTP 服务端与上游请求 |
-| `echotools>=2.3.43` | entml 工具调用、日志、thinking_level / thinking_behavior |
+| `echotools>=2.4.5,!=2.4.2` | entml 工具调用、tool id（`gen_tool_id` / `fix_tool_call_id`）、日志、thinking |
 | `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
 | `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
 

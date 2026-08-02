@@ -12,7 +12,7 @@
   python scripts/dump_full_prompt.py --demo-markup-warning
   python scripts/dump_full_prompt.py --input request.json --out full_prompt.txt
 
-校验项对齐 echotools 2.4.0+ entml prompt：
+校验项对齐 echotools 2.4.5+ entml prompt：
   - history 使用 ``<entml:invoke>`` / ``<!-- Tool Result ID:… -->``（非旧 ``{Tool: …}`` / ``<tool>``）
   - ``<entml:funtions_results>`` 与 ``<function_calling_behavior>`` 独立块
   - thinking 规则仅在 ``<thinking_behavior>``（on/level 强制、auto 建议、off+history 禁止）
