@@ -1,4 +1,5 @@
 qwen3-8-max-preview:qwen3.8-max-preview:false:true
+qwen3-8-max:qwen3.8-max:true:true
 qwen3-7-max:qwen3.7-max:true:true
 qwen3-6-plus:qwen3.6-plus:true:true
 qwen3-5-plus:qwen3.5-plus:true:true

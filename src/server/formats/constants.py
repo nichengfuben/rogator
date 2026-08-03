@@ -32,6 +32,7 @@ DEFAULT_USER_AGENT: str = (
 )
 DEFAULT_MODELS: List[str] = [
     "qwen3.8-max-preview",
+    "qwen3.8-max",
     "qwen3.7-max",
     "qwen3.6-plus",
     "qwen3.5-plus",
