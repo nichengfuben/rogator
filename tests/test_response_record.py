@@ -106,7 +106,7 @@ def test_prompt_and_response_share_req_id(
 
 def test_load_config_record_response_flag(tmp_path) -> None:
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text("[fncall]\nrecord_response = true\n", encoding="utf-8")
+    cfg_path.write_text("[fncall]\nrecord_all = true\n", encoding="utf-8")
     tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
     from server.config import load_config
 

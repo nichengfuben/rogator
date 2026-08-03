@@ -116,10 +116,26 @@ def test_print_prompt_also_dumps_file(
     assert len(list(dump.glob("req_print.txt"))) == 1
 
 
-def test_load_config_fncall_flags(tmp_path) -> None:
+def test_load_config_fncall_flags_disabled_by_record_all(tmp_path) -> None:
     cfg_path = tmp_path / "config.toml"
     cfg_path.write_text(
-        "[fncall]\nrecord_prompt = true\nprint_prompt = true\n",
+        "[fncall]\nrecord_all = false\nrecord_prompt = true\nprint_prompt = true\n",
+        encoding="utf-8",
+    )
+    tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
+    from server.config import load_config
+
+    cfg = load_config(cfg_path, template_path=tpl_path)
+    assert cfg.record_prompt is False
+    assert cfg.print_prompt is False
+    assert cfg.record_response is False
+    assert cfg.record_sse is False
+
+
+def test_load_config_record_all_enables_record_flags(tmp_path) -> None:
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text(
+        "[fncall]\nrecord_all = true\n",
         encoding="utf-8",
     )
     tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
@@ -128,6 +144,8 @@ def test_load_config_fncall_flags(tmp_path) -> None:
     cfg = load_config(cfg_path, template_path=tpl_path)
     assert cfg.record_prompt is True
     assert cfg.print_prompt is True
+    assert cfg.record_response is True
+    assert cfg.record_sse is True
 
 
 def test_prompt_dump_dir_under_project_root() -> None:

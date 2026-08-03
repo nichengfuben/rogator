@@ -10,7 +10,6 @@ from typing import Any, Dict, Iterator
 from server.config.files import (
     PROJECT_ROOT,
     LEGACY_UPSTREAM_DEFAULTS_NAME,
-    UPSTREAM_CONFIG_TEMPLATE_NAME,
     USER_CONFIG_DIR,
     USER_UPSTREAM_DIR,
     ensure_user_config_file,
@@ -131,7 +130,15 @@ def _resolve_log_field(raw: Dict[str, Any], *keys: str) -> Any:
     return _require_get(raw, "logging", *keys)
 
 
+def _resolve_fncall_record_flags(raw: Dict[str, Any]) -> tuple[bool, bool, bool, bool]:
+    record_all = bool(_require_get(raw, "fncall", "record_all"))
+    if record_all:
+        return True, True, True, True
+    return False, False, False, False
+
+
 def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
+    record_prompt, print_prompt, record_response, record_sse = _resolve_fncall_record_flags(raw)
     return AppConfig(
         port=int(_require_get(raw, "server", "port")),
         host=str(_require_get(raw, "server", "host")),
@@ -152,10 +159,10 @@ def _build_app_config(raw: Dict[str, Any]) -> AppConfig:
         ),
         shutdown_total_timeout=float(_require_get(raw, "shutdown", "total_timeout")),
         shutdown_hard_exit_timeout=float(_require_get(raw, "shutdown", "hard_exit_timeout")),
-        record_prompt=bool(_require_get(raw, "fncall", "record_prompt")),
-        print_prompt=bool(_require_get(raw, "fncall", "print_prompt")),
-        record_response=bool(_require_get(raw, "fncall", "record_response")),
-        record_sse=bool(_require_get(raw, "fncall", "record_sse")),
+        record_prompt=record_prompt,
+        print_prompt=print_prompt,
+        record_response=record_response,
+        record_sse=record_sse,
         log_level=str(_resolve_log_field(raw, "level")).upper(),
         log_to_file=bool(_resolve_log_field(raw, "log_to_file")),
         log_name=str(_resolve_log_field(raw, "log_name")),
@@ -200,10 +207,9 @@ def _overlay_if_exists(
 
 
 def _load_upstream_toml(name: str) -> Dict[str, Any]:
-    """template/upstream_config.toml → config/upstream_config.toml → template/upstream/<name>.toml → config/upstream/<name>/config.toml。"""
+    """template/upstream_config.toml → template/upstream/<name>.toml → config/upstream/<name>/config.toml。"""
     raw: Dict[str, Any] = {}
     raw = _overlay_if_exists(raw, upstream_config_template_path())
-    raw = _overlay_if_exists(raw, USER_CONFIG_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME)
     legacy_defaults = USER_CONFIG_DIR / LEGACY_UPSTREAM_DEFAULTS_NAME
     if legacy_defaults.is_file():
         raw = _overlay_if_exists(raw, legacy_defaults)

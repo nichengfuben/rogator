@@ -102,6 +102,16 @@ def _move_if_missing(src: Path, dest: Path) -> None:
     shutil.move(str(src), str(dest))
 
 
+def _archive_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    backup = path.with_suffix(path.suffix + ".bak")
+    if backup.is_file():
+        backup.unlink()
+    shutil.move(str(path), str(backup))
+    logger.info("已归档 %s → %s", path, backup)
+
+
 def _upstream_config_dest(name: str, root: Path) -> Path:
     key = name.strip().lower()
     return root / "config" / "upstream" / key / USER_CONFIG_NAME
@@ -152,6 +162,8 @@ def migrate_config_layout() -> None:
         _move_if_missing(USER_CONFIG_DIR / name, _upstream_config_dest(Path(name).stem, PROJECT_ROOT))
 
     migrate_upstream_toml_layout(PROJECT_ROOT)
+
+    _archive_file(USER_CONFIG_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME)
 
     from core.session.accounts import migrate_accounts_csv_layout
 

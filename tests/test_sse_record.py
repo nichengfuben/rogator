@@ -72,7 +72,7 @@ def test_record_sse_stream_context_and_append(tmp_path, monkeypatch) -> None:
 
 def test_load_config_record_sse_flag(tmp_path) -> None:
     cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text("[fncall]\nrecord_sse = true\n", encoding="utf-8")
+    cfg_path.write_text("[fncall]\nrecord_all = true\n", encoding="utf-8")
     tpl_path = Path(__file__).resolve().parents[1] / "template" / "config.toml"
     from server.config import load_config
 

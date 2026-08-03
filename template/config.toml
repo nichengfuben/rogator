@@ -47,6 +47,8 @@ total_timeout = 8.0
 hard_exit_timeout = 25.0
 
 [fncall]
+# record_all 总开关：true 全开，false 全关（下方单项在此开关下不生效）
+record_all = false
 # record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt
 record_prompt = false
 print_prompt = false
