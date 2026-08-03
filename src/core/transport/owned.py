@@ -23,11 +23,17 @@ class HttpTransportMixin:
     """进程级共享 connector 上的 per-client ClientSession 生命周期。"""
 
     _http: Optional[aiohttp.ClientSession]
-    _transport_lock: asyncio.Lock
+    _transport_lock_holder: Optional[asyncio.Lock]
+
+    @property
+    def _transport_lock(self) -> asyncio.Lock:
+        if self._transport_lock_holder is None:
+            self._transport_lock_holder = asyncio.Lock()
+        return self._transport_lock_holder
 
     def _init_http_transport(self) -> None:
         self._http = None
-        self._transport_lock = asyncio.Lock()
+        self._transport_lock_holder = None
 
     def _on_http_session_created(self, session: aiohttp.ClientSession) -> None:
         """新建 session 后钩子（如 DeepSeek rebind HIF）。"""
