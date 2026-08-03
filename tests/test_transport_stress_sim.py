@@ -181,19 +181,15 @@ class TestLoginTransportSim(unittest.IsolatedAsyncioTestCase):
         )
         probe = LoginProbe(script)
         account = Account(username="ok@test.com", password="secret")
-        with (
-            patch(
-                "upstream.qwen.account.fetch_user_id",
-                new_callable=AsyncMock,
-                return_value="uid-1",
-            ),
-            patch(
-                "upstream.qwen.account.regenerate_profile",
-            ),
-            patch(
-                "upstream.qwen.chat.upload.upstream_api.warmup_session",
-                new_callable=AsyncMock,
-            ),
+        with patch(
+            "upstream.qwen.account.fetch_user_id",
+            new_callable=AsyncMock,
+            return_value="uid-1",
+        ), patch(
+            "upstream.qwen.account.regenerate_profile",
+        ), patch(
+            "upstream.qwen.chat.upload.upstream_api.warmup_session",
+            new_callable=AsyncMock,
         ):
             ps = await probe._perform_login(account)
         self.assertIsNotNone(ps)
@@ -323,15 +319,12 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
             yield {"type": "answer", "content": "ok"}
             return
 
-        with (
-            patch(
-                "upstream.qwen.client._iter_qwen_sse_or_reconnect",
-                side_effect=lambda *_a, **_k: _fake_iter(),
-            ),
-            patch(
-                "upstream.qwen.client.handle_chat_error",
-                new=AsyncMock(),
-            ),
+        with patch(
+            "upstream.qwen.client._iter_qwen_sse_or_reconnect",
+            side_effect=lambda *_a, **_k: _fake_iter(),
+        ), patch(
+            "upstream.qwen.client.handle_chat_error",
+            new=AsyncMock(),
         ):
             events = [
                 evt

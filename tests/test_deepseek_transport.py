@@ -60,14 +60,6 @@ class TestDeepSeekTransport(unittest.IsolatedAsyncioTestCase):
 
     async def test_login_retries_after_session_closed(self) -> None:
         account = Account(username="c@test.com", password="pw")
-        with patch(
-            "core.session.pool.load_upstream_sessions",
-            return_value=([], SessionStoreMeta()),
-        ), patch(
-            "upstream.deepseek.client.accounts_for_upstream",
-            return_value=[account],
-        ):
-            client = DeepSeekClient()
         calls = {"n": 0}
 
         async def _fake_login_once(_account):
@@ -76,9 +68,18 @@ class TestDeepSeekTransport(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError("Session is closed")
             return MagicMock(token="tok", user_id="uid")
 
-        client._login_once = _fake_login_once  # type: ignore[method-assign]
-        client.reset_http_transport = AsyncMock()  # type: ignore[method-assign]
-        result = await client._perform_login(account)
+        with patch(
+            "core.session.pool.load_upstream_sessions",
+            return_value=([], SessionStoreMeta()),
+        ), patch(
+            "upstream.deepseek.client.accounts_for_upstream",
+            return_value=[account],
+        ):
+            client = DeepSeekClient()
+            client._login_once = _fake_login_once  # type: ignore[method-assign]
+            client.reset_http_transport = AsyncMock()  # type: ignore[method-assign]
+            result = await client._perform_login(account)
+
         self.assertIsNotNone(result)
         self.assertEqual(calls["n"], 2)
         client.reset_http_transport.assert_awaited_once()

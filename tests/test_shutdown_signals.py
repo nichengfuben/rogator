@@ -13,9 +13,13 @@ from server.config.shutdown import (
 class TestShutdownSignals(unittest.TestCase):
     def setUp(self) -> None:
         reset_shutdown_signal_state_for_tests()
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
 
     def tearDown(self) -> None:
         reset_shutdown_signal_state_for_tests()
+        self._loop.close()
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     def test_first_interrupt_sets_event(self) -> None:
         state = MagicMock()

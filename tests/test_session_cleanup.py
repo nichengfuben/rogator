@@ -88,8 +88,11 @@ class TestSessionExpiry(unittest.TestCase):
         client.replenish_sessions = AsyncMock()
         client._ensure_cleanup = AsyncMock()
 
-        import asyncio
-        session = asyncio.run(client.get_valid_session())
+        loop = asyncio.new_event_loop()
+        try:
+            session = loop.run_until_complete(client.get_valid_session())
+        finally:
+            loop.close()
 
         self.assertEqual(len(client._sessions), 1)
         self.assertIsNotNone(session)
@@ -97,7 +100,9 @@ class TestSessionExpiry(unittest.TestCase):
         self.assertEqual(session.username, "ok@test.com")
 
     def test_current_session_hides_expired(self) -> None:
-        client = QwenClient(MagicMock())
+        empty_meta = SessionStoreMeta()
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+            client = QwenClient(MagicMock())
         client._sessions = [_session(-1, name="gone@test.com")]
         client._current_index = 0
         self.assertIsNone(client.current_session)
