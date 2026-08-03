@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import aclosing
 from typing import (
     Any,
     AsyncGenerator,
@@ -19,6 +18,7 @@ from typing import (
 
 from aiohttp import web
 
+from core.transport.compat import aclosing
 from core.dispatch import resolve_upstream
 from handlers import extract_system_for_inject
 from handlers.openai.protocol import _inject_protocol_options

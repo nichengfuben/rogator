@@ -108,7 +108,7 @@ class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
     async def test_perform_login_waf_challenge_mutes_account(self) -> None:
         waf_account = Account(username="waf@test.com", password="pw")
         with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())), patch(
-            "core.session.pool.accounts_for_upstream",
+            "upstream.deepseek.client.accounts_for_upstream",
             return_value=[waf_account],
         ):
             client = DeepSeekClient(MagicMock())

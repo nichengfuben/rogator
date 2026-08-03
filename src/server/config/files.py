@@ -56,9 +56,7 @@ def user_config_path() -> Path:
 
 
 def _loads_toml(text: str) -> Dict[str, Any]:
-    if sys.version_info >= (3, 11):
-        return _toml_loader.loads(text)
-    return _toml_loader.loads(text.encode("utf-8"))
+    return _toml_loader.loads(text)
 
 
 def overlay_user_config(

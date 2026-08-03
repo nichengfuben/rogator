@@ -64,7 +64,7 @@ class TestDeepSeekTransport(unittest.IsolatedAsyncioTestCase):
             "core.session.pool.load_upstream_sessions",
             return_value=([], SessionStoreMeta()),
         ), patch(
-            "core.session.pool.accounts_for_upstream",
+            "upstream.deepseek.client.accounts_for_upstream",
             return_value=[account],
         ):
             client = DeepSeekClient()
