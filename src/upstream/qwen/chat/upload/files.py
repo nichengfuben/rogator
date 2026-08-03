@@ -11,8 +11,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from upstream.qwen.chat.routes import BASE_URL, GENERATED_IMAGE_DIR, GENERATED_VIDEO_DIR, USER_AGENT
 from upstream.qwen.auth.crypto import build_headers
+from upstream.qwen.chat.routes import (
+    BASE_URL,
+    GENERATED_IMAGE_DIR,
+    GENERATED_VIDEO_DIR,
+    USER_AGENT,
+)
+from upstream.qwen.chat.store import QwenSession
+from upstream.qwen.chat.upload.oss import upload_to_oss
+from upstream.qwen.chat.upload.parse import wait_file_parsed
 from upstream.qwen.chat.upload.storage import (
     DATA_URI_EXT_MAP,
     build_file_object,
@@ -21,9 +29,6 @@ from upstream.qwen.chat.upload.storage import (
     save_image_file,
     save_video_file,
 )
-from upstream.qwen.chat.upload.oss import upload_to_oss
-from upstream.qwen.chat.upload.parse import wait_file_parsed
-from upstream.qwen.chat.store import QwenSession
 
 logger = logging.getLogger("rogator")
 
@@ -36,10 +41,10 @@ _MAX_FILE_SIZES: Dict[str, int] = {
 
 
 class UploadMixin:
-    """OSS upload, base64 and remote URL media for QwenClient."""
-
     async def _maybe_parse_document(
-        self, session: QwenSession, file_obj: Dict[str, Any],
+        self,
+        session: QwenSession,
+        file_obj: Dict[str, Any],
     ) -> None:
         if file_obj.get("file_class") != "document":
             return
@@ -53,24 +58,38 @@ class UploadMixin:
                 file_obj.get("name", file_id[:8]),
             )
 
-    async def _request_sts_token(self, path: str, payload: Dict[str, Any],
-                                  headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    async def _request_sts_token(
+        self, path: str, payload: Dict[str, Any], headers: Dict[str, str]
+    ) -> Optional[Dict[str, Any]]:
         async with aiohttp.ClientSession() as s:
             async with s.post(
-                f"{BASE_URL}{path}", json=payload, headers=headers, ssl=False,
+                f"{BASE_URL}{path}",
+                json=payload,
+                headers=headers,
+                ssl=False,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status != 200:
                     return None
                 data = await resp.json()
                 creds = data.get("data", data)
-                if all(k in creds for k in ("access_key_id", "access_key_secret", "security_token")):
+                if all(
+                    k in creds
+                    for k in ("access_key_id", "access_key_secret", "security_token")
+                ):
                     return creds
                 return None
 
-    async def _get_sts_credentials(self, session: QwenSession, filename: str, filesize: int, filetype: str) -> Dict[str, Any]:
+    async def _get_sts_credentials(
+        self, session: QwenSession, filename: str, filesize: int, filetype: str
+    ) -> Dict[str, Any]:
         headers = build_headers(session.token, username=session.username)
-        headers.update({"Content-Type": "application/json;charset=UTF-8", "Accept": "application/json"})
+        headers.update(
+            {
+                "Content-Type": "application/json;charset=UTF-8",
+                "Accept": "application/json",
+            }
+        )
         payload = {"filename": filename, "filesize": filesize, "filetype": filetype}
         for path in ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]:
             try:
@@ -81,7 +100,9 @@ class UploadMixin:
                 continue
         raise RuntimeError("All STS endpoints failed")
 
-    async def upload_file(self, session: QwenSession, file_data: bytes, filename: str) -> Tuple[str, Dict[str, Any]]:
+    async def upload_file(
+        self, session: QwenSession, file_data: bytes, filename: str
+    ) -> Tuple[str, Dict[str, Any]]:
         content_type = get_mime_type(filename)
         file_type, _ = get_file_category(content_type)
         file_size = len(file_data)
@@ -101,8 +122,10 @@ class UploadMixin:
         await self._maybe_parse_document(session, file_obj)
         return file_url, file_obj
 
-    async def upload_file_from_base64(self, session: QwenSession, data_uri: str) -> Tuple[str, Dict[str, Any]]:
-        """将消息中的 base64 图片上传为 Qwen 文件对象。"""
+    async def upload_file_from_base64(
+        self, session: QwenSession, data_uri: str
+    ) -> Tuple[str, Dict[str, Any]]:
+
         if not data_uri.startswith("data:") or ";base64," not in data_uri:
             raise RuntimeError("invalid base64 data URI")
         header, encoded = data_uri.split(";base64,", 1)
@@ -110,12 +133,14 @@ class UploadMixin:
         padding = (-len(encoded)) % 4
         if padding:
             encoded += "=" * padding
-        filename = f"upload_{uuid.uuid4().hex[:8]}{DATA_URI_EXT_MAP.get(mime_type, '.bin')}"
+        filename = (
+            f"upload_{uuid.uuid4().hex[:8]}{DATA_URI_EXT_MAP.get(mime_type, '.bin')}"
+        )
         return await self.upload_file(session, base64.b64decode(encoded), filename)
 
     @staticmethod
     def extract_base64_images(messages: List[Dict[str, Any]]) -> List[str]:
-        """从 OpenAI 风格消息中提取内联 base64 图片。"""
+
         results: List[str] = []
         for message in messages:
             content = message.get("content", "")
@@ -125,13 +150,19 @@ class UploadMixin:
                 if not isinstance(part, dict) or part.get("type") != "image_url":
                     continue
                 image_url = part.get("image_url", {})
-                candidate = str(image_url.get("url", "")) if isinstance(image_url, dict) else str(image_url)
+                candidate = (
+                    str(image_url.get("url", ""))
+                    if isinstance(image_url, dict)
+                    else str(image_url)
+                )
                 if candidate.startswith("data:"):
                     results.append(candidate)
         return results
 
-    async def download_image(self, image_url: str, save_dir: str = GENERATED_IMAGE_DIR) -> Optional[str]:
-        """下载图片并保存到本地，返回保存路径。用于 Qwen 生成图的回存。"""
+    async def download_image(
+        self, image_url: str, save_dir: str = GENERATED_IMAGE_DIR
+    ) -> Optional[str]:
+        """下载图片并保存到本地，返回保存路径。"""
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 image_url,
@@ -148,10 +179,16 @@ class UploadMixin:
             ) as resp:
                 if resp.status != 200:
                     return None
-                return save_image_file(await resp.read(), resp.headers.get("Content-Type", "image/png"), save_dir)
+                return save_image_file(
+                    await resp.read(),
+                    resp.headers.get("Content-Type", "image/png"),
+                    save_dir,
+                )
 
-    async def upload_file_from_url(self, session: QwenSession, media_url: str) -> Tuple[str, Dict[str, Any]]:
-        """下载远程媒体 URL 并上传为 Qwen 文件对象。"""
+    async def upload_file_from_url(
+        self, session: QwenSession, media_url: str
+    ) -> Tuple[str, Dict[str, Any]]:
+
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 media_url,
@@ -165,15 +202,19 @@ class UploadMixin:
                 if resp.status != 200:
                     raise RuntimeError(f"download file failed: HTTP {resp.status}")
                 data = await resp.read()
-                content_type = resp.headers.get("Content-Type", "application/octet-stream").split(";", 1)[0]
+                content_type = resp.headers.get(
+                    "Content-Type", "application/octet-stream"
+                ).split(";", 1)[0]
         ext = DATA_URI_EXT_MAP.get(content_type, ".bin")
         filename = f"upload_{uuid.uuid4().hex[:8]}{ext}"
         return await self.upload_file(session, data, filename)
 
     async def upload_file_from_path(
-        self, session: QwenSession, file_path: str,
+        self,
+        session: QwenSession,
+        file_path: str,
     ) -> Tuple[str, Dict[str, Any]]:
-        """上传本地磁盘上的文件（按路径读取），返回 (file_url, file_obj)。"""
+
         if not os.path.exists(file_path):
             raise RuntimeError(f"file not found: {file_path}")
         data = Path(file_path).read_bytes()
@@ -181,7 +222,7 @@ class UploadMixin:
 
     @staticmethod
     def extract_remote_media_urls(messages: List[Dict[str, Any]]) -> List[str]:
-        """从消息中提取需先上传的非 data URI 远程媒体 URL（图片、视频、音频）。"""
+
         results: List[str] = []
         for message in messages:
             content = message.get("content", "")
@@ -198,7 +239,11 @@ class UploadMixin:
                     url_obj = part.get("video_url")
                 elif part_type == "input_audio":
                     audio_obj = part.get("input_audio") or {}
-                    url_obj = audio_obj.get("url") if isinstance(audio_obj, dict) else audio_obj
+                    url_obj = (
+                        audio_obj.get("url")
+                        if isinstance(audio_obj, dict)
+                        else audio_obj
+                    )
                 if isinstance(url_obj, dict):
                     candidate = str(url_obj.get("url", "") or "")
                 else:
@@ -207,8 +252,10 @@ class UploadMixin:
                     results.append(candidate)
         return results
 
-    async def download_video(self, video_url: str, save_dir: str = GENERATED_VIDEO_DIR) -> Optional[str]:
-        """下载生成的视频并保存到本地，返回保存路径。失败时记录日志并返回 None。"""
+    async def download_video(
+        self, video_url: str, save_dir: str = GENERATED_VIDEO_DIR
+    ) -> Optional[str]:
+
         try:
             async with aiohttp.ClientSession() as s:
                 async with s.get(
@@ -237,11 +284,7 @@ class UploadMixin:
         messages: List[Dict[str, Any]],
         extra_files: Optional[List[Tuple[bytes, str]]] = None,
     ) -> List[Dict[str, Any]]:
-        """汇总消息中所有需要上传的内容（额外文件 + 内联 base64 图片），
-
-        返回按顺序上传后的 Qwen 文件对象列表。单个文件上传失败会记录日志但
-        不中断其余文件的处理，最大程度保留可用的多模态输入。
-        """
+        # 单个文件上传失败会记录日志但不中断其余文件，最大程度保留可用多模态输入。
         file_objects: List[Dict[str, Any]] = []
         for data, name in extra_files or []:
             try:

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-"""ID 生成、格式构建与 Qwen 适配工具（按职责拆分子模块）。"""
-
 from server.formats.constants import (
     CAPABILITIES,
     DATA_DIR,

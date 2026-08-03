@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""上游连接级短重试（非换号）；与 server.retry.session_retry 职责分离。"""
+"""上游连接级短重试。"""
 
 import asyncio
 import logging

@@ -20,19 +20,20 @@ from typing import Any, Dict, Final, List, Optional
 # ---------------------------------------------------------------------------
 # Constants — 与 routes.py 对齐
 # ---------------------------------------------------------------------------
-
 from upstream.qwen.chat.routes import (
     APP_VERSION,
-    BAXIA_SDK_VERSION,
     BASE_URL,
+    BAXIA_SDK_VERSION,
     CHAT_ORIGIN,
-    USER_AGENT,
     SEC_CH_UA,
     SEC_CH_UA_PLATFORM,
+    USER_AGENT,
 )
 
 BAXIA_VERSION: Final[str] = "0.0.3"
-CUSTOM_BASE64_CHARS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+CUSTOM_BASE64_CHARS: Final[str] = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +42,7 @@ CUSTOM_BASE64_CHARS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrs
 
 
 def hash_password(password: str) -> str:
-    """Return the SHA-256 digest used by the Qwen web login flow."""
+
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
@@ -51,7 +52,7 @@ def hash_password(password: str) -> str:
 
 
 def validate_bxumidtoken(token: str) -> bool:
-    """Return whether the token matches the expected compact format."""
+
     return bool(token and re.fullmatch(r"(?:T2gA)?[A-Za-z0-9+/=]{20,}", token))
 
 
@@ -68,7 +69,7 @@ HASH_FIELDS: Final[list] = [
 
 
 def generate_cookies(fingerprint: str) -> Dict[str, Any]:
-    """Return a compatibility cookie mapping."""
+
     return {
         "ssxmod_itna": "",
         "ssxmod_itna2": "",
@@ -82,7 +83,7 @@ def generate_cookies(fingerprint: str) -> Dict[str, Any]:
 
 
 def generate_device_id() -> str:
-    """Return a browser-like device identifier."""
+
     return uuid.uuid4().hex
 
 
@@ -111,28 +112,28 @@ def build_fingerprint(*, device_id: str | None = None) -> str:
 
 
 def collect_fingerprint_data() -> str:
-    """Build the compact fingerprint string used for Baxia headers."""
+
     return build_fingerprint()
 
 
 def generate_fingerprint() -> str:
-    """Return a stable-format fingerprint string."""
+
     return build_fingerprint()
 
 
 def _encode_payload(text: str) -> str:
-    """Encode a Baxia payload with URL-safe base64 without padding."""
+
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
 def generate_bxua(fingerprint: str) -> str:
-    """Build the ``bx-ua`` header value."""
+
     payload = f"{fingerprint}|{int(time.time() * 1000)}|{BAXIA_VERSION}"
     return _encode_payload(payload)
 
 
 def get_bxumidtoken(token: str = "") -> str:
-    """Return the ``bx-umidtoken`` value, using env override when present."""
+
     if token:
         return token
     env_value = os.environ.get("QWEN_BX_UMIDTOKEN", "").strip()
@@ -143,7 +144,7 @@ def get_bxumidtoken(token: str = "") -> str:
 
 
 def lzw_compress(data: str, bits: int = 6, alphabet: str = CUSTOM_BASE64_CHARS) -> str:
-    """Compatibility placeholder for the historical LZW helper."""
+
     if not data:
         return ""
     encoded = base64.urlsafe_b64encode(data.encode("utf-8")).decode("ascii").rstrip("=")
@@ -153,7 +154,7 @@ def lzw_compress(data: str, bits: int = 6, alphabet: str = CUSTOM_BASE64_CHARS) 
 
 
 def custom_encode(data: str, url_safe: bool = True) -> str:
-    """Compatibility wrapper around the legacy custom encoder name."""
+
     encoded = lzw_compress(data)
     if url_safe:
         return encoded
@@ -168,7 +169,7 @@ def get_baxia_tokens(
     username: str = "",
     fingerprint_override: str = "",
 ) -> Dict[str, str]:
-    """Return Baxia header triplet; 有 username 时用持久化 profile。"""
+    # 有 username 时使用持久化 profile，否则随机生成。
     if username.strip():
         from upstream.qwen.auth.baxia_store import get_profile
 
@@ -195,7 +196,7 @@ def get_baxia_tokens(
 
 
 def make_request_id() -> str:
-    """Return a new request identifier."""
+
     return str(uuid.uuid4())
 
 
@@ -204,7 +205,9 @@ def make_timezone() -> str:
     return datetime.now().astimezone().strftime("%a %b %d %Y %H:%M:%S GMT%z")
 
 
-def merge_session_cookies(token: str, extra: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+def merge_session_cookies(
+    token: str, extra: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
     cookies: Dict[str, str] = {"token": token}
     if extra:
         for key, value in extra.items():
@@ -214,10 +217,12 @@ def merge_session_cookies(token: str, extra: Optional[Dict[str, Any]] = None) ->
 
 
 def build_cookie_string(cookies: Optional[Dict[str, Any]]) -> str:
-    """Convert a cookie mapping into a request header string."""
+
     if not cookies:
         return ""
-    return "; ".join(f"{key}={value}" for key, value in cookies.items() if value not in {None, ""})
+    return "; ".join(
+        f"{key}={value}" for key, value in cookies.items() if value not in {None, ""}
+    )
 
 
 def _base_headers() -> Dict[str, str]:
@@ -239,7 +244,7 @@ def _base_headers() -> Dict[str, str]:
 
 
 def build_login_headers(*, username: str = "") -> Dict[str, str]:
-    """Build headers for the v2 sign-in endpoint."""
+
     headers = _base_headers()
     headers["Version"] = APP_VERSION
     headers["x-request-origin"] = BASE_URL
@@ -263,7 +268,7 @@ def build_headers(
     extra_headers: Optional[Dict[str, str]] = None,
     use_bearer: bool = True,
 ) -> Dict[str, str]:
-    """Build authenticated headers for Qwen chat APIs."""
+
     headers = _base_headers()
     if use_bearer and token:
         headers["Authorization"] = f"Bearer {token}"
@@ -282,7 +287,9 @@ def build_headers(
         headers["X-Accel-Buffering"] = "no"
     merged = merge_session_cookies(token) if token else {}
     if cookies:
-        merged.update({str(k): str(v) for k, v in cookies.items() if v not in (None, "")})
+        merged.update(
+            {str(k): str(v) for k, v in cookies.items() if v not in (None, "")}
+        )
     cookie_string = build_cookie_string(merged)
     if cookie_string:
         headers["Cookie"] = cookie_string
@@ -292,12 +299,12 @@ def build_headers(
 
 
 def build_stop_headers(token: str, *, username: str = "") -> Dict[str, str]:
-    """Build headers for the stop-generation endpoint."""
+
     return build_headers(token, username=username, include_version=True)
 
 
 def build_asr_ws_headers(token: str, *, username: str = "") -> Dict[str, str]:
-    """ASR WebSocket 握手头（需 Baxia + Cookie 绕过 WAF）。"""
+    # 需 Baxia + Cookie 以绕过 WAF。
     headers = build_headers(token, username=username, include_version=True)
     headers.pop("Content-Type", None)
     return headers

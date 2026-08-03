@@ -12,8 +12,6 @@ def load_use_proxy() -> bool:
 
 @dataclass
 class Candidate:
-    """轻量候选项（本地轻量替代 core.dispatch.cand）。"""
-
     id: str
     platform: str
     resource_id: str

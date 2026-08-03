@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-"""共享上游 HTTP 传输：连接池、TLS、超时（对齐 Provider-Evo provider-core）。"""
+"""共享上游 HTTP 传输：连接池、TLS、超时。"""
 
 import ssl
 from typing import Any, Mapping, Optional
 
 import aiohttp
 
-# 与 provider-core template [http_pool] 缺省一致
 _POOL_LIMIT = 200
 _POOL_LIMIT_PER_HOST = 20
 _POOL_KEEPALIVE_TIMEOUT = 30
@@ -56,7 +55,9 @@ async def close_shared_connector() -> None:
     await conn.close()
 
 
-async def reset_upstream_transport(session: Optional[aiohttp.ClientSession] = None) -> None:
+async def reset_upstream_transport(
+    session: Optional[aiohttp.ClientSession] = None,
+) -> None:
     """关闭指定 ClientSession，供 transport 重试前调用。
 
     注意：不再关闭共享 connector，避免其他并发 client 的 session 被连带失效。

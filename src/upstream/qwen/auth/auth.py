@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from upstream.qwen.account import Account
+
+from .baxia_store import regenerate_profile
 from .crypto import (
     BASE_URL,
     build_headers,
@@ -19,7 +21,6 @@ from .crypto import (
     generate_fingerprint,
     hash_password,
 )
-from .baxia_store import regenerate_profile
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +114,6 @@ DEFAULT_FULL_SETTINGS: Dict[str, Any] = {
 
 
 class AuthMixin:
-    """Mixin implementing Qwen account authentication workflows."""
-
     async def _login(self, account: Account) -> bool:
         account.password_hash = account.password_hash or hash_password(account.password)
         payload = {"email": account.username, "password": account.password_hash}
@@ -127,9 +126,15 @@ class AuthMixin:
             proxy=self._get_proxy_kwarg(),
         ) as response:
             if response.status != 200:
-                raise RuntimeError(f"Qwen 登录失败 HTTP {response.status}: {(await response.text())[:300]}")
+                raise RuntimeError(
+                    f"Qwen 登录失败 HTTP {response.status}: {(await response.text())[:300]}"
+                )
             data = await response.json()
-            token = ((data.get("data") or {}).get("access_token") or data.get("access_token") or "")
+            token = (
+                (data.get("data") or {}).get("access_token")
+                or data.get("access_token")
+                or ""
+            )
             if not token:
                 raise RuntimeError(f"Qwen 登录响应缺少 token: {data}")
             account.token = token
@@ -165,14 +170,25 @@ class AuthMixin:
     async def _configure_account(self, account: Account) -> None:
         profile = await self._fetch_user_profile(account)
         profile_data = profile.get("data", profile) if isinstance(profile, dict) else {}
-        account.user_id = str(profile_data.get("id") or profile_data.get("user_id") or account.user_id or "")
+        account.user_id = str(
+            profile_data.get("id")
+            or profile_data.get("user_id")
+            or account.user_id
+            or ""
+        )
 
         settings = await self._fetch_user_settings(account)
-        settings_data = settings.get("data", settings) if isinstance(settings, dict) else {}
+        settings_data = (
+            settings.get("data", settings) if isinstance(settings, dict) else {}
+        )
         memory = settings_data.get("memory") if isinstance(settings_data, dict) else {}
         if isinstance(memory, dict):
             account.memory_disabled = not bool(memory.get("enabled", True))
-        context_length = settings_data.get("context_length") if isinstance(settings_data, dict) else None
+        context_length = (
+            settings_data.get("context_length")
+            if isinstance(settings_data, dict)
+            else None
+        )
         if isinstance(context_length, int) and context_length > 0:
             account.context_length = context_length
 
@@ -204,11 +220,17 @@ class AuthMixin:
         return account.token_expires <= time.time() + TOKEN_EXPIRY_MARGIN
 
     def _select_login_batch(self) -> List[Account]:
-        pool = [acc for acc in self._account_states.values() if self._is_token_expired(acc) or not acc.is_login]
+        pool = [
+            acc
+            for acc in self._account_states.values()
+            if self._is_token_expired(acc) or not acc.is_login
+        ]
         if not pool:
             return []
         random.shuffle(pool)
-        upper = min(LOGIN_SELECT_MAX, max(LOGIN_SELECT_MIN, LOGIN_BATCH_SIZE), len(pool))
+        upper = min(
+            LOGIN_SELECT_MAX, max(LOGIN_SELECT_MIN, LOGIN_BATCH_SIZE), len(pool)
+        )
         lower = min(LOGIN_SELECT_MIN, upper)
         size = upper if upper == lower else random.randint(lower, upper)
         return pool[:size]

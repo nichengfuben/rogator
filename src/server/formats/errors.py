@@ -122,6 +122,15 @@ def _connection_error_message(hint: str, *, upstream: str = "") -> str:
     return "上游连接失败: {0}".format(hint)
 
 
+def _traceback_touches_aiohttp_client(exc: BaseException) -> bool:
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename.replace("\\", "/").endswith("aiohttp/client.py"):
+            return True
+        tb = tb.tb_next
+    return False
+
+
 def _is_stale_http_session_error(exc: BaseException) -> bool:
     """识别 aiohttp ClientSession 被并发 reset/close 后的典型异常。"""
     if isinstance(exc, RuntimeError):
@@ -130,6 +139,9 @@ def _is_stale_http_session_error(exc: BaseException) -> bool:
     if isinstance(exc, AttributeError):
         text = str(exc).strip()
         return "_timeout_ceil_threshold" in text
+    if isinstance(exc, AssertionError) and _traceback_touches_aiohttp_client(exc):
+        # aiohttp 在 session._connector 已被 detach 后以 post/get 进入时会 assert
+        return True
     return False
 
 

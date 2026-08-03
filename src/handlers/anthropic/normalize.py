@@ -24,15 +24,19 @@ def _append_thinking_block(block: Dict[str, Any], thinking_parts: List[str]) -> 
             thinking_parts.append(t)
 
 
-def _append_tool_use_block(block: Dict[str, Any], tool_calls: List[Dict[str, Any]]) -> None:
-    tool_calls.append({
-        "id": block.get("id") or "",
-        "type": "function",
-        "function": {
-            "name": block.get("name") or "",
-            "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
-        },
-    })
+def _append_tool_use_block(
+    block: Dict[str, Any], tool_calls: List[Dict[str, Any]]
+) -> None:
+    tool_calls.append(
+        {
+            "id": block.get("id") or "",
+            "type": "function",
+            "function": {
+                "name": block.get("name") or "",
+                "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+            },
+        }
+    )
 
 
 def _tool_result_message(block: Dict[str, Any]) -> Dict[str, Any]:
@@ -71,7 +75,10 @@ def _process_content_block(
     _append_thinking_block(block, thinking_parts)
     if btype == "tool_use":
         _append_tool_use_block(block, tool_calls)
-    elif btype not in ("text", "thinking", "redacted_thinking", "reasoning") and "text" in block:
+    elif (
+        btype not in ("text", "thinking", "redacted_thinking", "reasoning")
+        and "text" in block
+    ):
         text_parts.append(str(block.get("text") or ""))
 
 
@@ -120,8 +127,10 @@ def _normalize_message_blocks(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
-def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """鎶� Anthropic messages锛堝惈 content 鏁扮粍 / tool_use / tool_result锛夎浆鎴� OpenAI 椋庢牸銆�"""
+def _normalize_anthropic_messages(
+    messages: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """把 Anthropic messages（含 content 数组 / tool_use / tool_result）转为 OpenAI 风格。"""
     out: List[Dict[str, Any]] = []
     for msg in messages or []:
         out.extend(_normalize_message_blocks(msg))
@@ -129,7 +138,7 @@ def _normalize_anthropic_messages(messages: List[Dict[str, Any]]) -> List[Dict[s
 
 
 def _normalize_anthropic_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Anthropic tools锛坣ame/input_schema锛夆啋 OpenAI function tools銆�"""
+    """Anthropic tools → OpenAI function tools。"""
     return convert_tools_to_openai(tools or [])
 
 
@@ -142,7 +151,7 @@ _ANTHROPIC_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 def _parse_anthropic_effort(body: Dict[str, Any]) -> str:
-    """璇诲彇 output_config.effort锛涚渷鐣ユ椂瀹樻柟榛樿�や负 high銆�"""
+    """读取 output_config.effort；省略时官方默认为 high。"""
     output_config = body.get("output_config")
     if not isinstance(output_config, dict) or "effort" not in output_config:
         return "high"
@@ -153,7 +162,7 @@ def _parse_anthropic_effort(body: Dict[str, Any]) -> str:
 
 
 def _build_anthropic_protocol_options(body: Dict[str, Any]) -> Dict[str, Any]:
-    """鎸� Anthropic Messages API 瑙ｆ瀽 thinking 涓� output_config.effort銆�"""
+    """按 Anthropic Messages API 解析 thinking 与 output_config.effort。"""
     effort = _parse_anthropic_effort(body)
     opts: Dict[str, Any] = {"include_thinking_in_history": True}
 

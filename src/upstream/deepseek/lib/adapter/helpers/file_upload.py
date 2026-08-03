@@ -20,18 +20,20 @@ POLL_INTERVAL_SEC: float = 3.0
 MAX_POLL_ATTEMPTS: int = 60
 
 _PARSE_SUCCESS = frozenset({"SUCCESS"})
-_PARSE_ERRORS = frozenset({
-    "FAILED",
-    "CONTENT_FILTER",
-    "CONTENT_TOO_LONG",
-    "CANCELLED",
-    "CONTENT_EMPTY",
-    "_CUSTOM_SYSTEM_ERROR_FAIL",
-})
+_PARSE_ERRORS = frozenset(
+    {
+        "FAILED",
+        "CONTENT_FILTER",
+        "CONTENT_TOO_LONG",
+        "CANCELLED",
+        "CONTENT_EMPTY",
+        "_CUSTOM_SYSTEM_ERROR_FAIL",
+    }
+)
 
 
 def resolve_model_type(model: str) -> str:
-    """网关模型名 → DeepSeek x-model-type。"""
+
     return "vision" if model == MODEL_VISION else "default"
 
 
@@ -131,15 +133,20 @@ async def upload_file(
     model_type: str = "default",
     thinking_enabled: bool = False,
 ) -> Dict[str, Any]:
-    """POST multipart /api/v0/file/upload_file。"""
+
     pow_resp = ""
     if pow_solver is not None and getattr(pow_solver, "available", False):
         pow_resp = await get_pow_response(session, token, pow_solver, UPLOAD_PATH)
 
     headers, form = _build_upload_headers(
-        token, file_bytes, filename,
-        hif_leim=hif_leim, hif_dliq=hif_dliq, pow_resp=pow_resp,
-        model_type=model_type, thinking_enabled=thinking_enabled,
+        token,
+        file_bytes,
+        filename,
+        hif_leim=hif_leim,
+        hif_dliq=hif_dliq,
+        pow_resp=pow_resp,
+        model_type=model_type,
+        thinking_enabled=thinking_enabled,
     )
 
     async with session.post(
@@ -156,7 +163,8 @@ async def upload_file(
             inner = data.get("data") or {}
             raise RuntimeError(
                 "upload_file biz_code={} msg={}".format(
-                    inner.get("biz_code"), inner.get("biz_msg"),
+                    inner.get("biz_code"),
+                    inner.get("biz_msg"),
                 )
             )
         record = _extract_file_record(data)
@@ -170,7 +178,7 @@ async def fetch_files(
     token: str,
     file_ids: Sequence[str],
 ) -> List[Dict[str, Any]]:
-    """GET /api/v0/file/fetch_files?file_ids=。"""
+
     if not file_ids:
         return []
     async with session.get(
@@ -187,7 +195,8 @@ async def fetch_files(
             inner = data.get("data") or {}
             raise RuntimeError(
                 "fetch_files biz_code={} msg={}".format(
-                    inner.get("biz_code"), inner.get("biz_msg"),
+                    inner.get("biz_code"),
+                    inner.get("biz_msg"),
                 )
             )
         inner = data.get("data") or {}
@@ -204,7 +213,7 @@ async def wait_files_ready(
     poll_interval: float = POLL_INTERVAL_SEC,
     max_attempts: int = MAX_POLL_ATTEMPTS,
 ) -> List[Dict[str, Any]]:
-    """轮询直到全部文件 SUCCESS 或出现终态错误。"""
+
     pending = set(file_ids)
     latest: Dict[str, Dict[str, Any]] = {}
     for _ in range(max_attempts):
@@ -245,7 +254,7 @@ async def upload_and_wait(
     model_type: str = "default",
     thinking_enabled: bool = False,
 ) -> str:
-    """上传单个文件并等待解析完成，返回 file id。"""
+
     hif_leim = ""
     hif_dliq = ""
     mgr = hif_managers.get(username)

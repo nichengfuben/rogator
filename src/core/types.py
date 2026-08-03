@@ -21,20 +21,20 @@ class UpstreamInfo(TypedDict, total=False):
 
 
 class UpstreamError(RuntimeError):
-    """Generic upstream failure."""
+    pass
 
 
 class RateLimitError(UpstreamError):
-    """Upstream rate limited."""
+    pass
 
 
 class AuthError(UpstreamError):
-    """Upstream authentication failed."""
+    pass
 
 
 class ModelNotAvailableError(UpstreamError):
-    """No upstream has the requested model (and capabilities)."""
+    pass
 
 
 class CapabilityError(UpstreamError):
-    """No upstream satisfies requested capabilities."""
+    pass

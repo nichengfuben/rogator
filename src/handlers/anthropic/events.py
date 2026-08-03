@@ -35,7 +35,9 @@ def _message_start_event(
             "model": model,
             "stop_reason": None,
             "stop_sequence": None,
-            "usage": usage if usage is not None else {"input_tokens": 0, "output_tokens": 0},
+            "usage": usage
+            if usage is not None
+            else {"input_tokens": 0, "output_tokens": 0},
         },
     }
 
@@ -60,46 +62,63 @@ def _message_stop_event() -> Dict[str, Any]:
 
 
 def _tool_use_block_events(
-    block_idx: int, tool_id: str, name: str, input_dict: Dict[str, Any],
+    block_idx: int,
+    tool_id: str,
+    name: str,
+    input_dict: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
-    """鍗曚釜 tool_use 鍧楃殑 SSE 浜嬩欢搴忓垪锛堜笌 mock.py _build_tool_events 涓�鑷达級銆�"""
-    events: List[Dict[str, Any]] = [{
-        "type": "content_block_start",
-        "index": block_idx,
-        "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
-    }]
+    """单个 tool_use 块的 SSE 事件序列。"""
+    events: List[Dict[str, Any]] = [
+        {
+            "type": "content_block_start",
+            "index": block_idx,
+            "content_block": {
+                "type": "tool_use",
+                "id": tool_id,
+                "name": name,
+                "input": {},
+            },
+        }
+    ]
     params_json = json.dumps(input_dict, ensure_ascii=False)
     for piece in iter_text_chunks(params_json, STREAM_CHUNK_SIZE):
-        events.append({
-            "type": "content_block_delta",
-            "index": block_idx,
-            "delta": {
-                "type": "input_json_delta",
-                "partial_json": piece,
-            },
-        })
+        events.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": piece,
+                },
+            }
+        )
     events.append(_content_block_stop_event(block_idx))
     return events
 
 
 def _anthropic_event_bytes(event: Dict[str, Any]) -> bytes:
     return (
-        f"event: {event['type']}\n"
-        f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
     ).encode("utf-8")
 
 
 async def _write_stream_error(resp, error_msg: dict, disconnected: list) -> None:
-    """鍚� Anthropic SSE 娴佸啓鍏� error 浜嬩欢銆�"""
+    """向 Anthropic SSE 流写入 error 事件。"""
     payload = json.dumps(error_msg)
-    await _safe_write(resp, f"event: error\ndata: {payload}\n\n".encode("utf-8"), disconnected)
+    await _safe_write(
+        resp, f"event: error\ndata: {payload}\n\n".encode("utf-8"), disconnected
+    )
 
 
-async def _emit_anthropic_event(resp, event: Dict[str, Any], disconnected: list) -> bool:
+async def _emit_anthropic_event(
+    resp, event: Dict[str, Any], disconnected: list
+) -> bool:
     return await _safe_write(resp, _anthropic_event_bytes(event), disconnected)
 
 
-async def _emit_anthropic_events(resp, events: List[Dict[str, Any]], disconnected: list) -> bool:
+async def _emit_anthropic_events(
+    resp, events: List[Dict[str, Any]], disconnected: list
+) -> bool:
     for event in events:
         if not await _emit_anthropic_event(resp, event, disconnected):
             return False
@@ -107,41 +126,55 @@ async def _emit_anthropic_events(resp, events: List[Dict[str, Any]], disconnecte
 
 
 async def _close_block(resp, idx: int, disconnected: list) -> int:
-    """鍏抽棴 content block銆傝繑鍥炲凡鍏抽棴鐨� index锛堜笉鑷�澧烇紝閬垮厤涓庝笅涓�鍧� start 鐨� +=1 鍙岃烦锛夈��"""
+    """关闭 content block，返回已关闭的 index（不自增，避免与下一块 start 的 +=1 双跳）。"""
     if idx >= 0:
         await _emit_anthropic_event(resp, _content_block_stop_event(idx), disconnected)
     return idx
 
 
 async def _send_anthropic_finish(
-    resp, tool_calls, disconnected, *, streamed_tool_count: int = 0,
+    resp,
+    tool_calls,
+    disconnected,
+    *,
+    streamed_tool_count: int = 0,
     usage: Optional[Dict[str, int]] = None,
 ):
-    """message_delta + message_stop锛堝�归綈 mock.py _build_message_delta锛夈��"""
+    """发送 message_delta + message_stop 收尾。"""
     stop_reason = "tool_use" if (tool_calls or streamed_tool_count > 0) else "end_turn"
-    await _emit_anthropic_event(resp, _message_delta_event(stop_reason, usage=usage), disconnected)
+    await _emit_anthropic_event(
+        resp, _message_delta_event(stop_reason, usage=usage), disconnected
+    )
     await _emit_anthropic_event(resp, _message_stop_event(), disconnected)
 
 
-async def _send_text_block(resp, clean_text: str, block_idx: int, disconnected: list) -> int:
+async def _send_text_block(
+    resp, clean_text: str, block_idx: int, disconnected: list
+) -> int:
     block_idx += 1
-    events: List[Dict[str, Any]] = [{
-        "type": "content_block_start",
-        "index": block_idx,
-        "content_block": {"type": "text", "text": ""},
-    }]
-    for piece in iter_text_chunks(clean_text, STREAM_CHUNK_SIZE):
-        events.append({
-            "type": "content_block_delta",
+    events: List[Dict[str, Any]] = [
+        {
+            "type": "content_block_start",
             "index": block_idx,
-            "delta": {"type": "text_delta", "text": piece},
-        })
+            "content_block": {"type": "text", "text": ""},
+        }
+    ]
+    for piece in iter_text_chunks(clean_text, STREAM_CHUNK_SIZE):
+        events.append(
+            {
+                "type": "content_block_delta",
+                "index": block_idx,
+                "delta": {"type": "text_delta", "text": piece},
+            }
+        )
     events.append(_content_block_stop_event(block_idx))
     await _emit_anthropic_events(resp, events, disconnected)
     return block_idx
 
 
-async def _send_tool_use_blocks(resp, tool_calls, block_idx: int, disconnected: list) -> int:
+async def _send_tool_use_blocks(
+    resp, tool_calls, block_idx: int, disconnected: list
+) -> int:
     for tc in tool_calls:
         fixed = _fix_tool_call_id(tc)
         block_idx += 1
@@ -181,7 +214,9 @@ def stream_result_tuple(
     usage_tracker: UpstreamUsageTracker,
     *,
     early_return: bool = False,
-) -> Tuple[int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker]:
+) -> Tuple[
+    int, Optional[str], str, bool, int, List[Dict[str, Any]], UpstreamUsageTracker
+]:
     return (
         state.block_idx,
         state.block_type,

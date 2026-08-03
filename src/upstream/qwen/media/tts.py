@@ -13,9 +13,12 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from upstream.qwen.chat.routes import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
 from upstream.qwen.auth.crypto import build_headers
-from upstream.qwen.chat.upload.payload import build_replace_content_payload, build_tts_payload
+from upstream.qwen.chat.routes import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
+from upstream.qwen.chat.upload.payload import (
+    build_replace_content_payload,
+    build_tts_payload,
+)
 from upstream.qwen.chat.upload.storage import save_wav_file
 
 logger = logging.getLogger(__name__)
@@ -23,8 +26,10 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 
 
-def build_tts_headers(token: str, chat_id: str, fingerprint: str, cookies: dict) -> dict:
-    """Build headers for TTS request."""
+def build_tts_headers(
+    token: str, chat_id: str, fingerprint: str, cookies: dict
+) -> dict:
+
     headers = build_headers(
         token,
         chat_id=chat_id,
@@ -37,7 +42,7 @@ def build_tts_headers(token: str, chat_id: str, fingerprint: str, cookies: dict)
 
 
 async def process_tts_response(response: aiohttp.ClientResponse) -> List[str]:
-    """Process SSE response and extract TTS fragments."""
+
     chunks: List[str] = []
     buffer = b""
     async for raw in response.content.iter_any():
@@ -70,7 +75,7 @@ async def process_tts_response(response: aiohttp.ClientResponse) -> List[str]:
 
 
 def decode_and_save_wav(chunks: List[str], save_dir: str) -> Optional[str]:
-    """Combine chunks, decode base64, and save as WAV file."""
+
     if not chunks:
         return None
     combined = "".join(chunks)
@@ -81,8 +86,6 @@ def decode_and_save_wav(chunks: List[str], save_dir: str) -> Optional[str]:
 
 
 class TtsService:
-    """Encapsulate the end-to-end TTS flow."""
-
     def __init__(
         self,
         session: aiohttp.ClientSession,
@@ -90,7 +93,9 @@ class TtsService:
         cookies_provider: Callable[[], dict],
         fingerprint_provider: Callable[[], str],
         create_chat: Callable[[str, str, str], Awaitable[str]],
-        get_response_id: Callable[[str, str, str], Awaitable[Tuple[Optional[str], str]]],
+        get_response_id: Callable[
+            [str, str, str], Awaitable[Tuple[Optional[str], str]]
+        ],
         cleanup_chat: Callable[[str, str], Awaitable[None]],
     ) -> None:
         self._session = session
@@ -111,10 +116,14 @@ class TtsService:
         """Run the full placeholder-replace-synthesize TTS flow."""
         try:
             chat_id = await self._create_chat(token, model, "t2t")
-            response_id, origin_text = await self._get_response_id(chat_id, token, model)
+            response_id, origin_text = await self._get_response_id(
+                chat_id, token, model
+            )
             if not response_id:
                 return None
-            if not await self.replace_message_content(chat_id, response_id, text, origin_text.strip(), token):
+            if not await self.replace_message_content(
+                chat_id, response_id, text, origin_text.strip(), token
+            ):
                 return None
             return await self.request_tts(chat_id, response_id, token, save_dir)
         finally:
@@ -147,7 +156,11 @@ class TtsService:
                 ) as resp:
                     if resp.status == 200:
                         return True
-                    logger.warning("内容替换失败 HTTP %d: %s", resp.status, (await resp.text())[:200])
+                    logger.warning(
+                        "内容替换失败 HTTP %d: %s",
+                        resp.status,
+                        (await resp.text())[:200],
+                    )
             except Exception as exc:
                 logger.warning("内容替换异常: %s", exc)
         return False
@@ -160,7 +173,9 @@ class TtsService:
         save_dir: str = TTS_DIR,
     ) -> Optional[str]:
         """Request TTS audio and persist the decoded WAV file."""
-        headers = build_tts_headers(token, chat_id, self._fingerprint(), self._cookies())
+        headers = build_tts_headers(
+            token, chat_id, self._fingerprint(), self._cookies()
+        )
         async with self._session.post(
             f"{BASE_URL}{TTS_PATH}?chat_id={chat_id}",
             json=build_tts_payload(chat_id, response_id),
@@ -204,7 +219,11 @@ class MediaMixin:
                 ) as resp:
                     if resp.status == 200:
                         return True
-                    logger.warning("内容替换失败 HTTP %d: %s", resp.status, (await resp.text())[:200])
+                    logger.warning(
+                        "内容替换失败 HTTP %d: %s",
+                        resp.status,
+                        (await resp.text())[:200],
+                    )
             except Exception as exc:
                 logger.warning("内容替换异常: %s", exc)
         return False
@@ -243,10 +262,14 @@ class MediaMixin:
         chat_id: Optional[str] = None
         try:
             chat_id = await self._create_chat(token, model, "t2t")
-            response_id, origin_text = await self._send_placeholder_message(chat_id, token, model)
+            response_id, origin_text = await self._send_placeholder_message(
+                chat_id, token, model
+            )
             if not response_id:
                 return None
-            ok = await self._replace_message_content(chat_id, response_id, text, origin_text.strip(), token)
+            ok = await self._replace_message_content(
+                chat_id, response_id, text, origin_text.strip(), token
+            )
             if not ok:
                 return None
             return await self.request_tts(chat_id, response_id, token, save_dir)

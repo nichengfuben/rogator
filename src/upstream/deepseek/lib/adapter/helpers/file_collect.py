@@ -45,8 +45,10 @@ def _decode_data_uri(uri: str) -> Tuple[bytes, str]:
     return base64.b64decode(encoded), filename
 
 
-def extract_base64_images(messages: Sequence[Dict[str, Any]]) -> List[Tuple[bytes, str]]:
-    """从 OpenAI 风格消息中提取内联 base64 图片。"""
+def extract_base64_images(
+    messages: Sequence[Dict[str, Any]],
+) -> List[Tuple[bytes, str]]:
+
     out: List[Tuple[bytes, str]] = []
     for message in messages:
         content = message.get("content", "")
@@ -71,7 +73,7 @@ def extract_base64_images(messages: Sequence[Dict[str, Any]]) -> List[Tuple[byte
 
 
 def extract_remote_media_urls(messages: Sequence[Dict[str, Any]]) -> List[str]:
-    """提取需先下载再上传的远程媒体 URL。"""
+
     seen: set = set()
     urls: List[str] = []
     for message in messages:
@@ -91,7 +93,9 @@ def extract_remote_media_urls(messages: Sequence[Dict[str, Any]]) -> List[str]:
                 )
             elif part_type in ("input_audio", "video_url"):
                 nested = part.get(part_type) or {}
-                candidate = str(nested.get("url", "")) if isinstance(nested, dict) else ""
+                candidate = (
+                    str(nested.get("url", "")) if isinstance(nested, dict) else ""
+                )
             else:
                 continue
             if candidate.startswith(("http://", "https://")) and candidate not in seen:
@@ -124,7 +128,7 @@ def collect_message_attachments(
     filename: Optional[str] = None,
     file_bytes: Optional[bytes] = None,
 ) -> List[Tuple[bytes, str]]:
-    """汇总消息内联图片与 splitter 文本附件。"""
+
     items: List[Tuple[bytes, str]] = []
     items.extend(extract_base64_images(messages))
     if filename and file_bytes:
@@ -140,7 +144,9 @@ async def collect_message_attachments_async(
 ) -> List[Tuple[bytes, str]]:
     """异步版：额外下载远程 URL 媒体。"""
     items = collect_message_attachments(
-        messages, filename=filename, file_bytes=file_bytes,
+        messages,
+        filename=filename,
+        file_bytes=file_bytes,
     )
     for url in extract_remote_media_urls(messages):
         try:

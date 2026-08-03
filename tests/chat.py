@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Standalone async chat smoke-test for the current Qwen web flow."""
+"""Qwen 直连流式聊天冒烟测试（独立脚本，不依赖 Rogator 服务端）。"""
 
 import asyncio
 import json
@@ -21,13 +21,13 @@ if __package__ in {None, ""}:
             sys.path.insert(0, s)
     import path_setup  # noqa: F401
 
-from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
 from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
+from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
 from upstream.qwen.chat.sse import parse_sse_event
 
 
 def get_credentials() -> Tuple[str, str]:
-    """Return credentials from environment variables GENERALUSR/GENERALPWD."""
+
     email = os.environ.get("GENERALUSR", "").strip()
     password = os.environ.get("GENERALPWD", "").strip()
     if not email or not password:
@@ -36,7 +36,7 @@ def get_credentials() -> Tuple[str, str]:
 
 
 async def _login(session: aiohttp.ClientSession, email: str, password: str) -> str:
-    """Log in with the current v2 endpoint and return the access token."""
+
     async with session.post(
         f"{AUTH_BASE_URL}/api/v2/auths/signin",
         json={"email": email, "password": hash_password(password), "remember_me": True},
@@ -45,7 +45,9 @@ async def _login(session: aiohttp.ClientSession, email: str, password: str) -> s
         timeout=aiohttp.ClientTimeout(total=30),
     ) as response:
         if response.status != 200:
-            raise RuntimeError(f"login HTTP {response.status}: {(await response.text())[:300]}")
+            raise RuntimeError(
+                f"login HTTP {response.status}: {(await response.text())[:300]}"
+            )
         data = await response.json()
         if not data.get("success"):
             raise RuntimeError(f"login failed: {data}")
@@ -56,7 +58,7 @@ async def _login(session: aiohttp.ClientSession, email: str, password: str) -> s
 
 
 async def _create_chat(session: aiohttp.ClientSession, token: str, model: str) -> str:
-    """Create a chat and return the chat identifier."""
+
     async with session.post(
         f"{BASE_URL}{NEW_CHAT_PATH}",
         json={
@@ -72,7 +74,9 @@ async def _create_chat(session: aiohttp.ClientSession, token: str, model: str) -
         timeout=aiohttp.ClientTimeout(total=30),
     ) as response:
         if response.status != 200:
-            raise RuntimeError(f"create chat HTTP {response.status}: {(await response.text())[:300]}")
+            raise RuntimeError(
+                f"create chat HTTP {response.status}: {(await response.text())[:300]}"
+            )
         data = await response.json()
         chat_id = str((data.get("data") or {}).get("id", ""))
         if not data.get("success") or not chat_id:
@@ -81,7 +85,7 @@ async def _create_chat(session: aiohttp.ClientSession, token: str, model: str) -
 
 
 def _build_chat_payload(model: str, chat_id: str, message: str) -> Dict[str, Any]:
-    """Build the chat completion payload."""
+
     return {
         "stream": True,
         "version": "2.1",
@@ -90,35 +94,37 @@ def _build_chat_payload(model: str, chat_id: str, message: str) -> Dict[str, Any
         "chat_mode": "local",
         "model": model,
         "parent_id": None,
-        "messages": [{
-            "fid": str(uuid.uuid4()),
-            "parentId": None,
-            "childrenIds": [str(uuid.uuid4())],
-            "role": "user",
-            "content": message,
-            "user_action": "chat",
-            "files": [],
-            "timestamp": int(time.time() * 1000),
-            "models": [model],
-            "chat_type": "t2t",
-            "feature_config": {
-                "thinking_enabled": True,
-                "output_schema": "phase",
-                "research_mode": "normal",
-                "auto_thinking": False,
-                "thinking_mode": "Thinking",
-                "thinking_format": "raw",
-                "auto_search": False,
-            },
-            "extra": {"meta": {"subChatType": "t2t"}},
-            "sub_chat_type": "t2t",
-        }],
+        "messages": [
+            {
+                "fid": str(uuid.uuid4()),
+                "parentId": None,
+                "childrenIds": [str(uuid.uuid4())],
+                "role": "user",
+                "content": message,
+                "user_action": "chat",
+                "files": [],
+                "timestamp": int(time.time() * 1000),
+                "models": [model],
+                "chat_type": "t2t",
+                "feature_config": {
+                    "thinking_enabled": True,
+                    "output_schema": "phase",
+                    "research_mode": "normal",
+                    "auto_thinking": False,
+                    "thinking_mode": "Thinking",
+                    "thinking_format": "raw",
+                    "auto_search": False,
+                },
+                "extra": {"meta": {"subChatType": "t2t"}},
+                "sub_chat_type": "t2t",
+            }
+        ],
         "timestamp": int(time.time() * 1000),
     }
 
 
 def _parse_sse_line(data_str: str) -> Dict[str, Any]:
-    """Parse a single SSE data line."""
+
     try:
         payload = json.loads(data_str)
     except Exception:
@@ -136,8 +142,10 @@ def _parse_sse_line(data_str: str) -> Dict[str, Any]:
     return {}
 
 
-async def get_qwen_stream(message: str, model: str = "qwen3.7-max") -> AsyncGenerator[Dict[str, Any], None]:
-    """Log in directly and stream one response without host-project dependencies."""
+async def get_qwen_stream(
+    message: str, model: str = "qwen3.7-max"
+) -> AsyncGenerator[Dict[str, Any], None]:
+
     email, password = get_credentials()
     async with aiohttp.ClientSession() as session:
         try:
@@ -153,7 +161,9 @@ async def get_qwen_stream(message: str, model: str = "qwen3.7-max") -> AsyncGene
                 timeout=aiohttp.ClientTimeout(total=300),
             ) as response:
                 if response.status != 200:
-                    raise RuntimeError(f"chat HTTP {response.status}: {(await response.text())[:300]}")
+                    raise RuntimeError(
+                        f"chat HTTP {response.status}: {(await response.text())[:300]}"
+                    )
                 async for raw in response.content:
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
@@ -170,7 +180,7 @@ async def get_qwen_stream(message: str, model: str = "qwen3.7-max") -> AsyncGene
 
 
 async def get_qwen_response(message: str, model: str = "qwen3.7-max") -> str:
-    """Non-streaming convenience wrapper that returns the full answer text."""
+
     parts: list[str] = []
     async for event in get_qwen_stream(message, model):
         etype = event.get("type")
@@ -181,8 +191,10 @@ async def get_qwen_response(message: str, model: str = "qwen3.7-max") -> str:
     return "".join(parts)
 
 
-async def get_qwen_with_thinking(message: str, model: str = "qwen3.7-max") -> Dict[str, str]:
-    """Return both the thinking trace and the final answer."""
+async def get_qwen_with_thinking(
+    message: str, model: str = "qwen3.7-max"
+) -> Dict[str, str]:
+
     thinking_parts: list[str] = []
     answer_parts: list[str] = []
     async for event in get_qwen_stream(message, model):
@@ -197,7 +209,7 @@ async def get_qwen_with_thinking(message: str, model: str = "qwen3.7-max") -> Di
 
 
 async def main() -> None:
-    """Run a single smoke-test chat request."""
+
     async for event in get_qwen_stream("你好"):
         print(event)
 

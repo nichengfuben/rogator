@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""OpenAI / Anthropic ?? ASR?/v1/audio/transcriptions ??"""
+"""OpenAI / Anthropic ASR /v1/audio/transcriptions 端点。"""
 
 import json
 import logging
@@ -14,7 +14,12 @@ from handlers.shared.api_errors import (
     model_resolve_error_response,
     resolve_handler_model,
 )
-from server.formats import ClientDisconnectedError, _error_response, _json_response, client_disconnected_response
+from server.formats import (
+    ClientDisconnectedError,
+    _error_response,
+    _json_response,
+    client_disconnected_response,
+)
 from server.model.model_registry import ModelResolveError
 
 logger = logging.getLogger("rogator")
@@ -47,9 +52,13 @@ async def _read_multipart_audio(
         elif field.name == "language":
             language = (await field.read()).decode("utf-8", errors="replace").strip()
         elif field.name == "response_format":
-            response_format = (await field.read()).decode("utf-8", errors="replace").strip() or "json"
+            response_format = (await field.read()).decode(
+                "utf-8", errors="replace"
+            ).strip() or "json"
         elif field.name == "stream":
-            stream = _parse_bool_field((await field.read()).decode("utf-8", errors="replace"))
+            stream = _parse_bool_field(
+                (await field.read()).decode("utf-8", errors="replace")
+            )
     if not audio:
         raise ValueError("缺少 file 字段")
     return audio, filename, content_type, model, language, stream, response_format
@@ -69,7 +78,9 @@ def _oai_sse_done(text: str) -> bytes:
     return f"data: {json.dumps({'type': 'transcript.text.done', 'text': text}, ensure_ascii=False)}\n\n".encode()
 
 
-async def _stream_openai_asr(qwen: Any, session: Any, pcm: bytes, language: str) -> web.StreamResponse:
+async def _stream_openai_asr(
+    qwen: Any, session: Any, pcm: bytes, language: str
+) -> web.StreamResponse:
     from upstream.qwen.media.asr import AsrTranscriber
 
     resp = web.StreamResponse(
@@ -86,7 +97,7 @@ async def _stream_openai_asr(qwen: Any, session: Any, pcm: bytes, language: str)
     prev = ""
     try:
         async for full in asr.transcribe_stream(pcm, language=language or "zh-CN"):
-            delta = full[len(prev):]
+            delta = full[len(prev) :]
             prev = full
             if delta:
                 await resp.write(_oai_sse_delta(delta))
@@ -98,7 +109,9 @@ async def _stream_openai_asr(qwen: Any, session: Any, pcm: bytes, language: str)
     return resp
 
 
-async def _stream_anthropic_asr(qwen: Any, session: Any, pcm: bytes, language: str) -> web.StreamResponse:
+async def _stream_anthropic_asr(
+    qwen: Any, session: Any, pcm: bytes, language: str
+) -> web.StreamResponse:
     from upstream.qwen.media.asr import AsrTranscriber
 
     resp = web.StreamResponse(
@@ -115,7 +128,7 @@ async def _stream_anthropic_asr(qwen: Any, session: Any, pcm: bytes, language: s
     prev = ""
     try:
         async for full in asr.transcribe_stream(pcm, language=language or "zh-CN"):
-            delta = full[len(prev):]
+            delta = full[len(prev) :]
             prev = full
             if not delta:
                 continue
@@ -129,14 +142,24 @@ async def _stream_anthropic_asr(qwen: Any, session: Any, pcm: bytes, language: s
         )
     except Exception as exc:
         err = {"type": "error", "error": {"type": "api_error", "message": str(exc)}}
-        await resp.write(f"event: error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n".encode())
+        await resp.write(
+            f"event: error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
+        )
     return resp
 
 
 async def audio_transcriptions_handler(request: web.Request) -> web.Response:
     state = get_state()
     try:
-        audio, filename, ctype, model, language, stream, fmt = await _read_multipart_audio(request)
+        (
+            audio,
+            filename,
+            ctype,
+            model,
+            language,
+            stream,
+            fmt,
+        ) = await _read_multipart_audio(request)
     except ClientDisconnectedError:
         return client_disconnected_response()
     except ValueError as exc:
@@ -154,10 +177,17 @@ async def audio_transcriptions_handler(request: web.Request) -> web.Response:
         try:
             if stream:
                 from upstream.qwen.media.asr import aprepare_pcm16_16k_mono
-                pcm = await aprepare_pcm16_16k_mono(audio, filename=filename, content_type=ctype)
+
+                pcm = await aprepare_pcm16_16k_mono(
+                    audio, filename=filename, content_type=ctype
+                )
                 return await _stream_openai_asr(qwen, session, pcm, language)
             text = await qwen.transcribe_audio(
-                audio, session, filename=filename, content_type=ctype, language=language,
+                audio,
+                session,
+                filename=filename,
+                content_type=ctype,
+                language=language,
             )
         except Exception as exc:
             logger.warning("ASR failed: %s", exc)
@@ -168,7 +198,15 @@ async def audio_transcriptions_handler(request: web.Request) -> web.Response:
 async def anthropic_audio_transcriptions_handler(request: web.Request) -> web.Response:
     state = get_state()
     try:
-        audio, filename, ctype, model, language, stream, fmt = await _read_multipart_audio(request)
+        (
+            audio,
+            filename,
+            ctype,
+            model,
+            language,
+            stream,
+            fmt,
+        ) = await _read_multipart_audio(request)
     except ClientDisconnectedError:
         return client_disconnected_response()
     except ValueError as exc:
@@ -186,10 +224,17 @@ async def anthropic_audio_transcriptions_handler(request: web.Request) -> web.Re
         try:
             if stream:
                 from upstream.qwen.media.asr import aprepare_pcm16_16k_mono
-                pcm = await aprepare_pcm16_16k_mono(audio, filename=filename, content_type=ctype)
+
+                pcm = await aprepare_pcm16_16k_mono(
+                    audio, filename=filename, content_type=ctype
+                )
                 return await _stream_anthropic_asr(qwen, session, pcm, language)
             text = await qwen.transcribe_audio(
-                audio, session, filename=filename, content_type=ctype, language=language,
+                audio,
+                session,
+                filename=filename,
+                content_type=ctype,
+                language=language,
             )
         except Exception as exc:
             logger.warning("ASR failed: %s", exc)

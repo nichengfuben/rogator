@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""OpenAI Realtime API ??????? WebSocket?/v1/realtime??"""
+"""OpenAI Realtime API ASR WebSocket /v1/realtime 端点。"""
 
 import asyncio
 import base64
@@ -35,7 +35,9 @@ async def _send_json(ws: web.WebSocketResponse, payload: dict) -> None:
     await ws.send_str(json.dumps(payload, ensure_ascii=False))
 
 
-async def _send_error(ws: web.WebSocketResponse, message: str, *, code: str = "invalid_request") -> None:
+async def _send_error(
+    ws: web.WebSocketResponse, message: str, *, code: str = "invalid_request"
+) -> None:
     await _send_json(ws, _oai_event("error", error={"type": code, "message": message}))
 
 
@@ -81,17 +83,20 @@ class OaiRealtimeAsrConnection:
         return self._http
 
     async def send_created(self) -> None:
-        await _send_json(self._ws, _oai_event(
-            "session.created",
-            session={
-                "id": self._session_id,
-                "object": "realtime.session",
-                "model": self._model,
-                "modalities": ["text"],
-                "input_audio_format": "pcm16",
-                "input_audio_transcription": {"model": "whisper-1"},
-            },
-        ))
+        await _send_json(
+            self._ws,
+            _oai_event(
+                "session.created",
+                session={
+                    "id": self._session_id,
+                    "object": "realtime.session",
+                    "model": self._model,
+                    "modalities": ["text"],
+                    "input_audio_format": "pcm16",
+                    "input_audio_transcription": {"model": "whisper-1"},
+                },
+            ),
+        )
 
     async def _pump_turn(self, turn: _OaiTranscriptionTurn) -> None:
         assert turn.upstream is not None
@@ -106,19 +111,25 @@ class OaiRealtimeAsrConnection:
 
     async def _emit_upstream_event(self, item_id: str, evt: AsrStreamEvent) -> None:
         if evt.kind == "delta" and evt.delta:
-            await _send_json(self._ws, _oai_event(
-                "conversation.item.input_audio_transcription.delta",
-                item_id=item_id,
-                content_index=0,
-                delta=evt.delta,
-            ))
+            await _send_json(
+                self._ws,
+                _oai_event(
+                    "conversation.item.input_audio_transcription.delta",
+                    item_id=item_id,
+                    content_index=0,
+                    delta=evt.delta,
+                ),
+            )
         elif evt.kind == "completed":
-            await _send_json(self._ws, _oai_event(
-                "conversation.item.input_audio_transcription.completed",
-                item_id=item_id,
-                content_index=0,
-                transcript=evt.text,
-            ))
+            await _send_json(
+                self._ws,
+                _oai_event(
+                    "conversation.item.input_audio_transcription.completed",
+                    item_id=item_id,
+                    content_index=0,
+                    transcript=evt.text,
+                ),
+            )
         elif evt.kind == "failed":
             await _send_error(self._ws, evt.text or "ASR failed", code="server_error")
 
@@ -127,7 +138,8 @@ class OaiRealtimeAsrConnection:
             self._turn = _OaiTranscriptionTurn(new_item_id())
             http = await self._http_session()
             self._turn.upstream = AsrRealtimeSession(
-                http, self._qwen_session.token,
+                http,
+                self._qwen_session.token,
                 username=self._qwen_session.username,
                 language=self._language,
             )
@@ -144,21 +156,24 @@ class OaiRealtimeAsrConnection:
             await turn.upstream.commit()
         if turn.pump_task:
             await turn.pump_task
-        await _send_json(self._ws, _oai_event("input_audio_buffer.committed", item_id=turn.item_id))
+        await _send_json(
+            self._ws, _oai_event("input_audio_buffer.committed", item_id=turn.item_id)
+        )
         if turn.upstream:
             await turn.upstream.close()
 
-    async def handle_client_event(self, data: dict) -> None:
+    async def _handle_session_update(self, data: dict) -> None:
         etype = str(data.get("type") or "")
-        if etype in ("session.update", "transcription_session.update"):
-            if etype == "session.update":
-                session = data.get("session")
-            else:
-                session = {k: v for k, v in data.items() if k != "type"}
-            if isinstance(session, dict):
-                self._language = parse_transcription_language(session)
-            self._configured = True
-            await _send_json(self._ws, _oai_event(
+        if etype == "session.update":
+            session = data.get("session")
+        else:
+            session = {k: v for k, v in data.items() if k != "type"}
+        if isinstance(session, dict):
+            self._language = parse_transcription_language(session)
+        self._configured = True
+        await _send_json(
+            self._ws,
+            _oai_event(
                 "session.updated",
                 session={
                     "id": self._session_id,
@@ -169,7 +184,13 @@ class OaiRealtimeAsrConnection:
                     },
                     "turn_detection": None,
                 },
-            ))
+            ),
+        )
+
+    async def handle_client_event(self, data: dict) -> None:
+        etype = str(data.get("type") or "")
+        if etype in ("session.update", "transcription_session.update"):
+            await self._handle_session_update(data)
             return
         if not self._configured:
             await _send_error(self._ws, "send session.update before audio")
@@ -231,19 +252,30 @@ async def oai_realtime_ws_handler(request: web.Request) -> web.WebSocketResponse
     try:
         resolved = resolve_handler_model(state, model)
     except ModelResolveError as exc:
-        await ws.send_str(json.dumps({
-            "type": "error",
-            "error": {"message": str(exc), "type": "invalid_request"},
-        }))
+        await ws.send_str(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {"message": str(exc), "type": "invalid_request"},
+                }
+            )
+        )
         await ws.close()
         return ws
     qwen = state.client_for(resolved, ("asr",), upstream_name="qwen")
     async with qwen.lease_valid_session() as session:
         if not session:
-            await ws.send_str(json.dumps({
-                "type": "error",
-                "error": {"message": "No valid Qwen session", "type": "server_error"},
-            }))
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "message": "No valid Qwen session",
+                            "type": "server_error",
+                        },
+                    }
+                )
+            )
             await ws.close()
             return ws
         conn = OaiRealtimeAsrConnection(ws, qwen, session, model=resolved)

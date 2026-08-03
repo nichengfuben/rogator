@@ -18,18 +18,7 @@ async def create_session(
     session: aiohttp.ClientSession,
     token: str,
 ) -> str:
-    """创建新的聊天会话。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-
-    Returns:
-        新会话 ID。
-
-    Raises:
-        Exception: 创建失败时抛出。
-    """
     headers = build_headers(token)
     async with session.post(
         "https://{}/api/v0/chat_session/create".format(DEFAULT_HOST),
@@ -42,9 +31,8 @@ async def create_session(
             raise Exception("会话创建失败 HTTP {}".format(resp.status))
         data = await resp.json()
         biz_data = data.get("data", {}).get("biz_data", {})
-        session_id = (
-            biz_data.get("chat_session", {}).get("id")
-            or biz_data.get("id", "")
+        session_id = biz_data.get("chat_session", {}).get("id") or biz_data.get(
+            "id", ""
         )
         if not session_id:
             raise Exception("会话 ID 为空: {}".format(data))
@@ -58,7 +46,7 @@ async def get_session_list(
     pinned: bool = False,
     count: int = 0,
 ) -> List[Dict[str, Any]]:
-    """获取历史会话列表（对齐 HAR：lte_cursor.pinned=false）。"""
+
     headers = build_headers(token)
     params: Dict[str, Any] = {"lte_cursor.pinned": str(pinned).lower()}
     if count > 0:
@@ -74,9 +62,7 @@ async def get_session_list(
             logger.warning("获取会话列表失败 HTTP %d", resp.status)
             return []
         data = await resp.json()
-        return (
-            data.get("data", {}).get("biz_data", {}).get("chat_sessions", [])
-        )
+        return data.get("data", {}).get("biz_data", {}).get("chat_sessions", [])
 
 
 async def get_history_messages(
@@ -84,16 +70,7 @@ async def get_history_messages(
     token: str,
     chat_session_id: str,
 ) -> List[Dict[str, Any]]:
-    """获取对话历史消息。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        chat_session_id: 会话 ID。
-
-    Returns:
-        消息字典列表。
-    """
     headers = build_headers(token)
     async with session.get(
         "https://{}/api/v0/chat/history_messages".format(DEFAULT_HOST),
@@ -106,9 +83,7 @@ async def get_history_messages(
             logger.warning("获取历史消息失败 HTTP %d", resp.status)
             return []
         data = await resp.json()
-        return (
-            data.get("data", {}).get("biz_data", {}).get("chat_messages", [])
-        )
+        return data.get("data", {}).get("biz_data", {}).get("chat_messages", [])
 
 
 async def stop_stream(
@@ -117,17 +92,7 @@ async def stop_stream(
     chat_session_id: str,
     message_id: str,
 ) -> bool:
-    """停止流式生成。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        chat_session_id: 会话 ID。
-        message_id: 消息 ID。
-
-    Returns:
-        是否成功。
-    """
     headers = build_headers(token)
     try:
         async with session.post(
@@ -155,20 +120,7 @@ async def message_feedback(
     feedback_tag: str = "",
     description: str = "",
 ) -> bool:
-    """反馈消息。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        chat_session_id: 会话 ID。
-        message_id: 消息 ID。
-        feedback_type: GOOD 或 BAD。
-        feedback_tag: 标签（可选）。
-        description: 描述（可选）。
-
-    Returns:
-        是否成功。
-    """
     headers = build_headers(token)
     payload: Dict[str, Any] = {
         "chat_session_id": chat_session_id,
@@ -199,17 +151,7 @@ async def update_session_title(
     chat_session_id: str,
     title: str,
 ) -> bool:
-    """更新会话标题。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        chat_session_id: 会话 ID。
-        title: 新标题。
-
-    Returns:
-        是否成功。
-    """
     headers = build_headers(token)
     try:
         async with session.post(
@@ -230,16 +172,7 @@ async def delete_session(
     token: str,
     chat_session_id: str,
 ) -> bool:
-    """删除单个会话。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        chat_session_id: 会话 ID。
-
-    Returns:
-        是否成功。
-    """
     headers = build_headers(token)
     try:
         async with session.post(
@@ -259,15 +192,7 @@ async def delete_all_sessions(
     session: aiohttp.ClientSession,
     token: str,
 ) -> bool:
-    """删除所有会话。
 
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-
-    Returns:
-        是否成功。
-    """
     headers = build_headers(token)
     try:
         async with session.post(
@@ -289,17 +214,7 @@ async def update_pinned(
     chat_session_id: str,
     pinned: bool,
 ) -> bool:
-    """置顶或取消置顶会话。
-
-    Args:
-        session: aiohttp ClientSession。
-        token: Bearer 令牌。
-        chat_session_id: 会话 ID。
-        pinned: 是否置顶。
-
-    Returns:
-        是否成功。
-    """
+    """置顶或取消置顶会话。"""
     headers = build_headers(token)
     try:
         async with session.post(

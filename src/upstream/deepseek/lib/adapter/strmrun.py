@@ -9,19 +9,17 @@ from typing import Any, AsyncGenerator, Dict, List, Union
 
 import aiohttp
 
+from server.records.sse_record import append_sse_bytes
+from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_user_muted
+from upstream.deepseek.lib.adapter.helpers.pmtutil import translate_chunk
 from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST, MAX_CONTINUE
 from upstream.deepseek.lib.protocol.headers import build_headers
-from upstream.deepseek.lib.adapter.helpers.pmtutil import translate_chunk
-from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_user_muted
 from upstream.deepseek.lib.stream.strmpars import StreamParser
-from server.records.sse_record import append_sse_bytes
 
 logger = logging.getLogger(__name__)
 
 
 class _StreamRunMixin:
-    """承载 SSE 解析、续写循环与 usage 统计逻辑的混入类。"""
-
     def _build_continue_request(
         self,
         session_id: str,
@@ -30,18 +28,7 @@ class _StreamRunMixin:
         hif_dliq: str,
         message_id: str,
     ) -> tuple:
-        """构造 continue（截断续写）请求所需的 headers 与 payload。
 
-        Args:
-            session_id: 会话 ID。
-            token: 账号 token。
-            hif_leim: HIF leim 令牌。
-            hif_dliq: HIF dliq 令牌。
-            message_id: 需要续写的消息 ID。
-
-        Returns:
-            (headers, payload) 二元组。
-        """
         cont_headers = build_headers(
             token=token,
             session_id=session_id,
@@ -61,16 +48,7 @@ class _StreamRunMixin:
         parser: StreamParser,
         continue_flag: List[bool],
     ) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
-        """消费一次 continue 响应，并 yield 翻译后的增量内容。
 
-        Args:
-            cont_resp: aiohttp 响应对象。
-            parser: 当前请求复用的 StreamParser。
-            continue_flag: 单元素列表，用于向调用方回传是否需要再次续写。
-
-        Yields:
-            str（文本增量）或 dict（thinking）。
-        """
         async for chunk in self._parse_sse_stream(cont_resp, parser):
             if chunk.get("needs_continue"):
                 continue_flag[0] = True
@@ -88,19 +66,7 @@ class _StreamRunMixin:
         hif_dliq: str,
         needs_continue: bool,
     ) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
-        """处理 continue（截断续写）循环。
 
-        Args:
-            parser: 当前请求复用的 StreamParser。
-            session_id: 会话 ID。
-            token: 账号 token。
-            hif_leim: HIF leim 令牌。
-            hif_dliq: HIF dliq 令牌。
-            needs_continue: 首个响应结束后是否需要续写。
-
-        Yields:
-            str（文本增量）或 dict（thinking）。
-        """
         continue_count = 0
         while needs_continue and continue_count < MAX_CONTINUE:
             continue_count += 1
@@ -130,10 +96,8 @@ class _StreamRunMixin:
                     yield translated
                 needs_continue = continue_flag[0] or parser.should_continue
 
-    def _compute_usage(
-        self, parser: StreamParser, prompt: str
-    ) -> List[Dict[str, Any]]:
-        """根据上游 accumulated_token_usage 或累积字符估算 token 用量。"""
+    def _compute_usage(self, parser: StreamParser, prompt: str) -> List[Dict[str, Any]]:
+
         prompt_tokens = max(len(prompt) // 3, 1)
         upstream_total = parser.accumulated_token_usage
         if upstream_total > 0:
@@ -162,10 +126,8 @@ class _StreamRunMixin:
         ]
 
     @staticmethod
-    def _parse_line_if_nonempty(
-        parser: StreamParser, line: str
-    ) -> Any:
-        """解析一行 SSE 数据；空行返回 ``None``。"""
+    def _parse_line_if_nonempty(parser: StreamParser, line: str) -> Any:
+
         if not line.strip():
             return None
         return parser.parse_line(line)
@@ -175,15 +137,7 @@ class _StreamRunMixin:
         resp: Any,
         parser: StreamParser,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """解析 SSE 流式响应。
-
-        Args:
-            resp: aiohttp 响应对象。
-            parser: StreamParser 实例。
-
-        Yields:
-            解析后的 chunk 字典。
-        """
+        """解析 SSE 流式响应。"""
         buf = ""
         async for raw_chunk in resp.content.iter_chunked(4096):
             if not raw_chunk:

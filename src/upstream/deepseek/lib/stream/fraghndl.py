@@ -1,34 +1,13 @@
 from __future__ import annotations
 
-"""DeepSeek 流式解析——fragment / 批量操作处理混入类。
-
-从 ``streamparser.py`` 拆分而来，承载 ``_proc`` 及其各分支处理方法，
-减少单文件行数并将 ``_proc`` 拆分为若干条职责单一的私有方法。
-本模块只提供 Mixin，供 ``StreamParser`` 组合使用，不单独实例化。
-"""
+"""DeepSeek SSE fragment 与 BATCH 操作解析混入。"""
 
 from typing import Any, Dict, List, Optional
 
 
 class _FragmentHandlerMixin:
-    """封装 ``_proc`` 系列方法的混入类，供 ``StreamParser`` 继承。
-
-    依赖宿主类提供以下属性/方法：
-    ``_search``、``_msg_id``、``_parent_id``、``_status``、``_should_continue``、
-    ``_is_think``、``_think_started``、``_tok_usage``、``_first_frag``、
-    ``_skip_first_response_frag``、``_content``、``_think``、``_inc``、
-    ``_cur_event``、``_proc_cite``。
-    """
-
     def _proc_close_event(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """处理 ``close`` 事件携带的数据（点击行为 / 自动续写标记）。
 
-        Args:
-            data: JSON 数据字典。
-
-        Returns:
-            需要立即返回给上层的结果字典，或 None（继续正常处理）。
-        """
         click_behavior = data.get("click_behavior")
         auto_resume = data.get("auto_resume")
         if isinstance(click_behavior, str):
@@ -55,25 +34,14 @@ class _FragmentHandlerMixin:
         return None
 
     def _extract_message_ids(self, data: Dict[str, Any]) -> None:
-        """从数据中提取响应/请求消息 ID。
 
-        Args:
-            data: JSON 数据字典。
-        """
         if "response_message_id" in data:
             self._msg_id = data["response_message_id"]
         if "request_message_id" in data:
             self._parent_id = data["request_message_id"]
 
     def _proc_response_init(self, v: Any) -> Optional[Dict[str, Any]]:
-        """处理初始化响应体（包含完整 response 对象）。
 
-        Args:
-            v: data 中的 ``v`` 字段。
-
-        Returns:
-            首个产生输出的 fragment 处理结果，或 None。
-        """
         if not (isinstance(v, dict) and "response" in v):
             return None
         rd = v["response"]
@@ -97,15 +65,7 @@ class _FragmentHandlerMixin:
         return None
 
     def _proc_status(self, p: str, v: Any) -> Optional[Dict[str, Any]]:
-        """处理 ``response/status`` 状态更新。
 
-        Args:
-            p: data 中的 ``p`` 字段。
-            v: data 中的 ``v`` 字段。
-
-        Returns:
-            状态事件结果字典，或 None。
-        """
         if not (p == "response/status" and v):
             return None
         self._status = str(v)
@@ -124,19 +84,7 @@ class _FragmentHandlerMixin:
         return None
 
     def _proc_batch(self, p: str, o: Any, v: Any) -> Optional[Dict[str, Any]]:
-        """处理 ``response`` + ``BATCH`` 批量操作。
 
-        遍历所有操作，确保 references 等副作用操作不被跳过，
-        同时将多个 content/thinking 增量合并为单个 chunk 返回。
-
-        Args:
-            p: data 中的 ``p`` 字段。
-            o: data 中的 ``o`` 字段。
-            v: data 中的 ``v`` 字段。
-
-        Returns:
-            合并后的增量结果字典，或 None。
-        """
         if not (p == "response" and o == "BATCH" and isinstance(v, list)):
             return None
         merged_content: str = ""
@@ -202,7 +150,7 @@ class _FragmentHandlerMixin:
     def _proc_fragments_append(
         self, p: str, o: Any, v: Any
     ) -> Optional[Dict[str, Any]]:
-        """处理 ``fragments`` / ``response/fragments`` + ``APPEND`` 操作。"""
+
         if o != "APPEND" or not isinstance(v, list) or not v:
             return None
         if p not in ("fragments", "response/fragments"):
@@ -212,15 +160,7 @@ class _FragmentHandlerMixin:
         return None
 
     def _proc_content_delta(self, p: str, v: Any) -> Optional[Dict[str, Any]]:
-        """处理正文增量主路径与搜索结果/思考结束标记。
 
-        Args:
-            p: data 中的 ``p`` 字段。
-            v: data 中的 ``v`` 字段。
-
-        Returns:
-            内容增量处理结果字典，或 None。
-        """
         # 内容增量（主路径）
         if p == "response/fragments/-1/content" and v is not None:
             return self._handle_chunk(str(v))
@@ -236,18 +176,7 @@ class _FragmentHandlerMixin:
         return None
 
     def _proc_fallback(self, data: Dict[str, Any], v: Any) -> Optional[Dict[str, Any]]:
-        """兜底处理：裸值推送（无 ``p``/``o`` 字段的简单值更新）。
-
-        仅处理标量值（str/int/float/bool），跳过 list/dict 等复合类型，
-        避免将未识别的 BATCH 操作列表字符串化后泄漏到输出流。
-
-        Args:
-            data: JSON 数据字典。
-            v: data 中的 ``v`` 字段。
-
-        Returns:
-            兜底 chunk 处理结果字典，或 None。
-        """
+        # 仅标量，避免 BATCH 列表被字符串化泄漏到输出。
         if (
             v is not None
             and not isinstance(v, (dict, list))
@@ -260,14 +189,7 @@ class _FragmentHandlerMixin:
         return None
 
     def _proc(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """处理解析后的 JSON 数据对象。
-
-        Args:
-            data: JSON 数据字典。
-
-        Returns:
-            处理结果字典或 None。
-        """
+        """按事件类型分派 JSON 数据对象。"""
         if self._cur_event == "close":
             result = self._proc_close_event(data)
             if result is not None:

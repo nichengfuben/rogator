@@ -12,8 +12,6 @@ for _entry in (_root / "src", _root):
     _path = str(_entry)
     if _path not in sys.path:
         sys.path.insert(0, _path)
-import path_setup  # noqa: F401
-
 import asyncio
 import contextlib
 import os
@@ -22,35 +20,36 @@ from typing import Optional
 
 from aiohttp import web
 
+# echotools 日志：控制台 + logs/rogator.log
+from echotools.base.logger import get_logger
+
+import path_setup  # noqa: F401
 from server.config import CONFIG, load_config
 from server.config.files import user_config_path, warn_if_config_version_mismatch
-from server.config.logging_setup import setup_logging, shutdown_logging, resolve_access_log
+from server.config.logging_setup import (
+    resolve_access_log,
+    setup_logging,
+    shutdown_logging,
+)
 from server.config.reload import apply_session_pool_targets, start_config_watcher
-from server.config.startup_port import ensure_listen_port
 from server.config.shutdown import (
     cancel_leftover_tasks,
     install_asyncio_exception_handler,
     install_signal_handlers,
 )
-
-# ============================================================
-# echotools 日志：控制台 + logs/rogator.log
-# ============================================================
-from echotools.base.logger import get_logger
+from server.config.startup_port import ensure_listen_port
 
 _LOG_FILE = setup_logging()
 logger = get_logger("rogator")
 warn_if_config_version_mismatch(user_config_path(), logger)
 
-# ============================================================
-# 从模块导入
-# ============================================================
+
+from core.registry import load_upstreams
+from core.session.store import CLEANUP_INTERVAL, valid_session_count
 from handlers import get_state, setup_routes
 from handlers.shared.fncall_inject import prompt_dump_dir
 from server.records.response_record import response_dump_dir
 from server.records.sse_record import sse_dump_dir
-from core.session.store import CLEANUP_INTERVAL, valid_session_count
-from core.registry import load_upstreams
 from state import AppState
 
 load_upstreams()
@@ -74,9 +73,6 @@ logger.info(
     sse_dump_dir(),
 )
 
-# ============================================================
-# 全局常量
-# ============================================================
 
 APP_NAME: str = "Rogator"
 APP_VERSION: str = "2.2.1"
@@ -86,10 +82,6 @@ SHUTDOWN_CANCEL_GRACE: float = 0.3
 # 显示参数
 BANNER_WIDTH: int = 70
 
-
-# ============================================================
-# 启动辅助函数
-# ============================================================
 
 def _validate_config(port: int, prelogin_count: int) -> None:
     """验证配置参数。"""
@@ -103,11 +95,9 @@ def _install_signal_handlers(state: AppState) -> None:
     install_signal_handlers(state)
 
 
-# ============================================================
-# 启动流程函数
-# ============================================================
-
-def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: int) -> None:
+def _print_startup_info(
+    state: AppState, host: str, port: int, prelogin_count: int
+) -> None:
     """打印启动信息横幅。"""
     logger.info("=" * BANNER_WIDTH)
     logger.info("%s - %s", APP_NAME, APP_DESCRIPTION)
@@ -123,11 +113,20 @@ def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: i
     logger.info("  Upstreams   : %s", ", ".join(state._registry.names()))
     logger.info("  Sessions    : %s (max 12h)", ", ".join(session_parts) or "none")
     logger.info("  Models      : %d", len(state._models))
-    logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
-    logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)
+    logger.info(
+        "  Max body    : %d bytes (%.1f MiB)",
+        CONFIG.client_max_body_bytes,
+        CONFIG.client_max_body_bytes / (1024 * 1024),
+    )
+    logger.info(
+        "  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt
+    )
     logger.info("  Access log  : %s", CONFIG.access_log)
     logger.info("  Models refresh: every %ds", int(CONFIG.models_refresh_interval))
-    logger.info("  Cleanup     : background session pool + %ds maintenance", int(CLEANUP_INTERVAL))
+    logger.info(
+        "  Cleanup     : background session pool + %ds maintenance",
+        int(CLEANUP_INTERVAL),
+    )
     logger.info("  ID Format   : gen-{timestamp}-{random12}")
     logger.info("=" * BANNER_WIDTH)
 
@@ -164,7 +163,9 @@ async def _hard_exit_watchdog(deadline: float) -> None:
     os._exit(1)
 
 
-async def _graceful_shutdown(state: AppState, runner: web.AppRunner, site: Optional[web.TCPSite]) -> None:
+async def _graceful_shutdown(
+    state: AppState, runner: web.AppRunner, site: Optional[web.TCPSite]
+) -> None:
     deadline = time.monotonic() + CONFIG.shutdown_hard_exit_timeout
     watchdog = asyncio.create_task(_hard_exit_watchdog(deadline))
     try:
@@ -200,7 +201,9 @@ async def _graceful_shutdown(state: AppState, runner: web.AppRunner, site: Optio
     logger.info("Server stopped")
 
 
-async def _run_server(app: web.Application, state: AppState, host: str, port: int) -> None:
+async def _run_server(
+    app: web.Application, state: AppState, host: str, port: int
+) -> None:
     """启动 web 服务器并等待关机信号。"""
     runner = web.AppRunner(
         app,
@@ -211,7 +214,9 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
         await runner.setup()
         site = web.TCPSite(runner, host, port)
         await site.start()
-        logger.info("Listening on http://%s:%d (session login in background)", host, port)
+        logger.info(
+            "Listening on http://%s:%d (session login in background)", host, port
+        )
         _install_signal_handlers(state)
         install_asyncio_exception_handler(state)
         state.start_background_tasks()
@@ -233,10 +238,6 @@ async def _run_server(app: web.Application, state: AppState, host: str, port: in
         state.shutdown_event.set()
         await _graceful_shutdown(state, runner, site)
 
-
-# ============================================================
-# 异步入口
-# ============================================================
 
 async def main_async() -> None:
     """服务器异步主入口（配置来自 config.toml + template/config.toml）。"""
@@ -267,10 +268,6 @@ async def main_async() -> None:
     _print_startup_info(state, host, port, prelogin_count)
     await _run_server(app, state, host, port)
 
-
-# ============================================================
-# 同步入口
-# ============================================================
 
 def main() -> None:
     """服务器主入口。"""

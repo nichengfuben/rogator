@@ -4,28 +4,28 @@ from __future__ import annotations
 """DeepSeek HTTP 客户端——管理账号登录、PoW、HIF、流式补全"""
 
 import asyncio
-from typing import Any, AsyncGenerator, Dict, List, Optional, Union
-
 import logging
+from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import aiohttp
 
-from upstream.deepseek.lib.adapter.util import Candidate, make_candidate_id as make_id
+from upstream.deepseek.lib.adapter.helpers.client_helpers import (
+    prepare_full_request,
+    stream_initial_response,
+)
+from upstream.deepseek.lib.adapter.helpers.pmtutil import Account
+from upstream.deepseek.lib.adapter.life import _ClientLifecycleMixin
+from upstream.deepseek.lib.adapter.strmrun import _StreamRunMixin
+from upstream.deepseek.lib.adapter.util import Candidate
+from upstream.deepseek.lib.adapter.util import make_candidate_id as make_id
+from upstream.deepseek.lib.guard.hif import HifTokenManager
+from upstream.deepseek.lib.guard.pow import WasmPow
 from upstream.deepseek.lib.protocol.consts import (
     CAPS,
     DEFAULT_HOST,
     MAX_RETRIES,
     MODELS,
 )
-from upstream.deepseek.lib.adapter.life import _ClientLifecycleMixin
-from upstream.deepseek.lib.adapter.strmrun import _StreamRunMixin
-from upstream.deepseek.lib.adapter.helpers.pmtutil import Account
-from upstream.deepseek.lib.adapter.helpers.client_helpers import (
-    prepare_full_request,
-    stream_initial_response,
-)
-from upstream.deepseek.lib.guard.hif import HifTokenManager
-from upstream.deepseek.lib.guard.pow import WasmPow
 from upstream.deepseek.lib.stream.strmpars import StreamParser
 
 logger = logging.getLogger(__name__)
@@ -35,16 +35,11 @@ __all__ = ["Account", "Candidate", "DeepseekClient", "make_id"]
 
 # ── 客户端主类 ─────────────────────────────────────────────────────────────────
 
-class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
-    """DeepSeek HTTP 客户端（管理账号登录、PoW、HIF、流式补全）。
 
-    单次请求生命周期中的上下文提取/HIF与PoW获取/会话与请求头准备/
-    payload与post参数构造/初次响应流式解析等纯函数拆分至
-    ``client_helpers.py``。
-    """
+class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
+    """DeepSeek HTTP 客户端，管理账号登录、PoW、HIF 与流式补全。"""
 
     def __init__(self) -> None:
-        """初始化客户端。"""
         self._session: Optional[aiohttp.ClientSession] = None
         self._pow: WasmPow = WasmPow()
         self._models: List[str] = list(MODELS)
@@ -60,18 +55,13 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         session: aiohttp.ClientSession,
         accounts: Optional[List[Account]] = None,
     ) -> None:
-        """立即初始化（不阻塞）。
-
-        Args:
-            session: 共享的 aiohttp ClientSession。
-            accounts: 账号列表（可选）。未提供时尝试从 accounts 模块加载。
-        """
         self._session = session
         if accounts is not None:
             self._accounts = list(accounts)
         else:
             try:
                 from upstream.deepseek.accounts import accounts_for_upstream
+
                 self._accounts = [
                     Account(username=a.username, password=a.password)
                     for a in accounts_for_upstream("deepseek")
@@ -94,45 +84,31 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
             mgr.bind_session(session)
 
     def set_proxy_enabled(self, enabled: bool) -> None:
-        """设置此平台的代理覆盖开关。
-
-        Args:
-            enabled: True 强制使用代理，False 强制不使用。
-        """
         self._proxy_override = bool(enabled)
 
     def is_proxy_enabled(self) -> bool:
-        """返回此平台当前是否启用代理覆盖。
-
-        Returns:
-            是否启用代理。
-        """
         return bool(self._proxy_override)
 
     def _get_proxy_kwarg(self) -> Optional[str]:
-        """获取应传递给 session.request 的 proxy 值。"""
         if self._proxy_override is True:
             from upstream.deepseek.lib.adapter.util import load_use_proxy
 
             if not load_use_proxy():
                 return None
             from .runtime import get_proxy_server
+
             return get_proxy_server() or None
         return None
 
     def update_models(self, models: List[str]) -> None:
-        """更新模型列表，同步刷新所有候选项的 models 字段。
-
-        Args:
-            models: 新的模型列表。
-        """
-        merged = list(dict.fromkeys(list(models) + [m for m in MODELS if m not in models]))
+        merged = list(
+            dict.fromkeys(list(models) + [m for m in MODELS if m not in models])
+        )
         self._models = merged
         for cand in self._candidates:
             cand.models = list(self._models)
 
     def _rebuild_candidates(self) -> None:
-        """根据当前账号状态重建候选项列表。"""
         self._candidates = [
             Candidate(
                 id=make_id("deepseek", account.username[:20]),
@@ -152,22 +128,9 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         ]
 
     async def candidates(self) -> List[Any]:
-        """返回当前候选项列表。
-
-        Returns:
-            候选项列表。
-        """
         return list(self._candidates)
 
     async def ensure_candidates(self, count: int) -> int:
-        """返回可用候选项数量。
-
-        Args:
-            count: 期望数量（此处仅返回当前实际数量）。
-
-        Returns:
-            当前可用候选项数量。
-        """
         return len(self._candidates)
 
     async def complete(
@@ -181,20 +144,6 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         search: bool = False,
         **kw: Any,
     ) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
-        """执行聊天补全（含重试）。
-
-        Args:
-            candidate: 候选项。
-            messages: 消息列表。
-            model: 模型名（deepseek-v4-pro / deepseek-v4-flash / deepseek-v4-vision）。
-            stream: 是否流式。
-            thinking: 是否启用思考模式（两个模型均支持）。
-            search: 是否启用联网搜索（两个模型均支持）。
-            **kw: 额外参数透传。
-
-        Yields:
-            str（文本增量）或 dict（thinking/usage）。
-        """
         async for chunk in self._complete_with_retry(
             candidate,
             messages,
@@ -236,9 +185,7 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
                 return
             except Exception as exc:
                 last_exc = exc
-                logger.warning(
-                    "deepseek 重试 %d/%d: %s", attempt + 1, MAX_RETRIES, exc
-                )
+                logger.warning("deepseek 重试 %d/%d: %s", attempt + 1, MAX_RETRIES, exc)
         if last_exc:
             raise last_exc
 
@@ -253,20 +200,14 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         search: bool = False,
         ref_file_ids: Optional[List[str]] = None,
     ) -> AsyncGenerator[Union[str, Dict[str, Any]], None]:
-        """执行单次完整会话请求。
-
-        Args:
-            candidate: 候选项（含 token）。
-            messages: 消息列表。
-            model: 模型名。
-            stream: 是否流式。
-            thinking: 是否启用思考模式。
-            search: 是否启用联网搜索。
-
-        Yields:
-            str（文本增量）或 dict（thinking/usage）。
-        """
-        ctx, session_id, hif_leim, hif_dliq, post_kw, parser = await prepare_full_request(
+        (
+            ctx,
+            session_id,
+            hif_leim,
+            hif_dliq,
+            post_kw,
+            parser,
+        ) = await prepare_full_request(
             self._session,
             self._hif_managers,
             self._pow,
@@ -324,7 +265,9 @@ class DeepseekClient(_ClientLifecycleMixin, _StreamRunMixin):
         if message_id is None:
             return
         stopped = await self.stop_upstream_generation(
-            token, str(chat_session_id), message_id,
+            token,
+            str(chat_session_id),
+            message_id,
         )
         if stopped:
             logger.info(

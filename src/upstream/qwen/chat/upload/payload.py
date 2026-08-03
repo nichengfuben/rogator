@@ -28,7 +28,9 @@ def _extract_url(url_obj: Any) -> str:
     return ""
 
 
-def _extract_media_part(part: Dict[str, Any], part_type: str) -> Optional[Dict[str, Any]]:
+def _extract_media_part(
+    part: Dict[str, Any], part_type: str
+) -> Optional[Dict[str, Any]]:
     url = ""
     kind = ""
     if part_type == "image_url":
@@ -46,7 +48,9 @@ def _extract_media_part(part: Dict[str, Any], part_type: str) -> Optional[Dict[s
     return None
 
 
-def _collect_user_content(messages: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]]]:
+def _collect_user_content(
+    messages: List[Dict[str, Any]],
+) -> Tuple[List[str], List[Dict[str, Any]]]:
     text_parts: List[str] = []
     extra_files: List[Dict[str, Any]] = []
     for message in messages:
@@ -78,15 +82,17 @@ def _build_feature_config(
     thinking_format: str,
     auto_search: bool,
 ) -> Dict[str, Any]:
-    """Build the feature configuration."""
+
     config = dict(DEFAULT_FEATURE_CONFIG)
-    config.update({
-        "thinking_enabled": thinking_enabled,
-        "auto_thinking": auto_thinking,
-        "thinking_mode": thinking_mode,
-        "thinking_format": thinking_format,
-        "auto_search": auto_search,
-    })
+    config.update(
+        {
+            "thinking_enabled": thinking_enabled,
+            "auto_thinking": auto_thinking,
+            "thinking_mode": thinking_mode,
+            "thinking_format": thinking_format,
+            "auto_search": auto_search,
+        }
+    )
     return config
 
 
@@ -102,7 +108,7 @@ def _build_user_message(
     feature_config: Dict[str, Any],
     effective_sub_chat_type: str,
 ) -> Dict[str, Any]:
-    """Build the user message dictionary."""
+
     return {
         "fid": user_fid,
         "parentId": parent_id,
@@ -117,6 +123,28 @@ def _build_user_message(
         "feature_config": feature_config,
         "extra": {"meta": {"subChatType": effective_sub_chat_type}},
         "sub_chat_type": effective_sub_chat_type,
+    }
+
+
+def _wrap_chat_payload(
+    *,
+    stream: bool,
+    chat_id: str,
+    model: str,
+    parent_id: Optional[str],
+    user_message: Dict[str, Any],
+    timestamp: int,
+) -> Dict[str, Any]:
+    return {
+        "stream": stream,
+        "version": API_VERSION,
+        "incremental_output": True,
+        "chat_id": chat_id,
+        "chat_mode": "local" if USE_LOCAL_MODE else "normal",
+        "model": model,
+        "parent_id": parent_id,
+        "messages": [user_message],
+        "timestamp": timestamp,
     }
 
 
@@ -136,7 +164,6 @@ def build_payload(
     auto_search: bool = False,
     stream: bool = True,
 ) -> Dict[str, Any]:
-    """Build the current chat-completions payload."""
     effective_sub_chat_type = sub_chat_type or chat_type
     text_parts, extra_files = _collect_user_content(messages)
     content = "\n".join(part for part in text_parts if part)
@@ -163,16 +190,18 @@ def build_payload(
         feature_config=feature_config,
         effective_sub_chat_type=effective_sub_chat_type,
     )
-    return {
-        "stream": stream, "version": API_VERSION, "incremental_output": True,
-        "chat_id": chat_id, "chat_mode": "local" if USE_LOCAL_MODE else "normal",
-        "model": model, "parent_id": parent_id, "messages": [user_message],
-        "timestamp": timestamp,
-    }
+    return _wrap_chat_payload(
+        stream=stream,
+        chat_id=chat_id,
+        model=model,
+        parent_id=parent_id,
+        user_message=user_message,
+        timestamp=timestamp,
+    )
 
 
 def build_new_chat_payload(model: str, chat_type: str = "t2t") -> Dict[str, Any]:
-    """Build the create-chat payload."""
+
     return {
         "title": "新建对话",
         "models": [model],
@@ -184,7 +213,7 @@ def build_new_chat_payload(model: str, chat_type: str = "t2t") -> Dict[str, Any]
 
 
 def build_stop_payload(chat_id: str, response_id: str = "") -> Dict[str, Any]:
-    """Build the stop-generation payload."""
+
     payload: Dict[str, Any] = {"chat_id": chat_id}
     if response_id:
         payload["response_id"] = response_id
@@ -200,7 +229,7 @@ def build_i2v_payload(
     size: str,
     parent_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the image-to-video payload."""
+
     file_obj = {
         "type": "image",
         "name": image_name,
@@ -232,7 +261,7 @@ def build_i2v_payload(
 
 
 def build_tts_payload(chat_id: str, response_id: str) -> Dict[str, Any]:
-    """Build the TTS payload."""
+
     return {
         "chat_id": chat_id,
         "timestamp": int(time.time()),
@@ -240,7 +269,9 @@ def build_tts_payload(chat_id: str, response_id: str) -> Dict[str, Any]:
     }
 
 
-def build_replace_content_payload(new_content: str, origin_content: str) -> Dict[str, Any]:
+def build_replace_content_payload(
+    new_content: str, origin_content: str
+) -> Dict[str, Any]:
     """Build the content-replacement payload used before TTS."""
     return {
         "content_list": [
@@ -253,7 +284,9 @@ def build_replace_content_payload(new_content: str, origin_content: str) -> Dict
                 "usage": {
                     "input_tokens": max(1, len(origin_content) // 3),
                     "output_tokens": max(1, len(new_content) // 3),
-                    "total_tokens": max(1, (len(origin_content) + len(new_content)) // 3),
+                    "total_tokens": max(
+                        1, (len(origin_content) + len(new_content)) // 3
+                    ),
                     "prompt_tokens_details": {"cached_tokens": 0},
                 },
             }

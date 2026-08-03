@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """请求调度、活跃任务跟踪与弹性重试。"""
+
+from __future__ import annotations
 
 import asyncio
 import inspect
@@ -22,6 +22,7 @@ def _max_queue_size(fixed: Optional[int] = None) -> int:
     if fixed is not None:
         return int(fixed)
     import state as state_mod
+
     return int(state_mod.MAX_QUEUE_SIZE)
 
 
@@ -135,7 +136,9 @@ class ActiveRequestTracker:
     async def cancel_all(self) -> int:
         current = asyncio.current_task()
         async with self._lock:
-            targets = [t for t in self._tasks.values() if t is not current and not t.done()]
+            targets = [
+                t for t in self._tasks.values() if t is not current and not t.done()
+            ]
             for t in targets:
                 t.cancel()
             self._tasks = {r: t for r, t in self._tasks.items() if t is current}

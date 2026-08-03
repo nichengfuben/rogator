@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Session 池换号、预登与选号逻辑（从 pool.py 拆出以满足 achecker）。"""
+"""Session 池换号、预登与选号逻辑。"""
 
 import asyncio
 import logging
@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, List, Optional
 if TYPE_CHECKING:
     from state_sched import RequestScheduler
 
+import random
+
 from core.session.accounts import Account
 from core.session.store import PlatformSession, valid_session_count
-
-import random
 
 logger = logging.getLogger("rogator")
 
@@ -30,7 +30,9 @@ class SessionSwitchMixin:
     _inflight: dict
     _login_history: object
 
-    def _pick_account_for_login(self, *, skip: Optional[set] = None) -> Optional[Account]:
+    def _pick_account_for_login(
+        self, *, skip: Optional[set] = None
+    ) -> Optional[Account]:
         pool = self._pool_accounts()
         if not pool:
             return None
@@ -52,8 +54,10 @@ class SessionSwitchMixin:
         exclude_username: Optional[str] = None,
     ) -> List[PlatformSession]:
         return [
-            s for s in self._sessions
-            if s.is_valid and not s.is_expired()
+            s
+            for s in self._sessions
+            if s.is_valid
+            and not s.is_expired()
             and not self._is_account_blocked(s.username)
             and not self._is_account_muted(s.username)
             and (exclude_username is None or s.username != exclude_username)
@@ -68,7 +72,8 @@ class SessionSwitchMixin:
         if not valid:
             return None
         under_cap = [
-            s for s in valid
+            s
+            for s in valid
             if self._inflight_count(s.username) < MAX_INFLIGHT_PER_ACCOUNT
         ]
         pool = under_cap or valid
@@ -109,7 +114,8 @@ class SessionSwitchMixin:
         return await self._login_until_valid(account, skip, exclude_username)
 
     async def _fallback_valid_session(
-        self, exclude_username: Optional[str],
+        self,
+        exclude_username: Optional[str],
     ) -> Optional[PlatformSession]:
         async with self._lock:
             session = self._select_valid_session(exclude_username=exclude_username)
@@ -288,7 +294,10 @@ class SessionReplenishMixin:
         if urgent and need > 1:
             logger.debug(
                 "Session pool [%s] urgent replenish: valid=%d need=%d demand=%d",
-                self.UPSTREAM_NAME, valid, need, demand,
+                self.UPSTREAM_NAME,
+                valid,
+                need,
+                demand,
             )
         logged = await self._replenish_login_batch(need, interval)
         self._log_replenish_result(logged, target)

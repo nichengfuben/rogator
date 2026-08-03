@@ -16,7 +16,7 @@ SETTINGS_SCOPES: Tuple[str, ...] = ("main", "model", "web_upgrade", "banner")
 
 
 def collect_setting_ids(settings: Dict[str, Any]) -> List[int]:
-    """从 biz_data.settings 提取所有 setting id（用于 report）。"""
+
     ids: List[int] = []
     for item in settings.values():
         if not isinstance(item, dict):
@@ -39,7 +39,7 @@ async def fetch_client_settings(
     *,
     settings_token: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """GET /api/v0/client/settings?did=&scope=。"""
+
     headers = build_basic_headers(token)
     if settings_token:
         headers["x-settings-token"] = settings_token
@@ -75,7 +75,7 @@ async def report_client_settings(
     sso_id: str,
     settings_ids: List[int],
 ) -> bool:
-    """POST /api/v0/client/settings/report（HAR 等价上报）。"""
+
     if not settings_ids or not sso_id:
         return False
     headers = build_basic_headers(token)
@@ -112,7 +112,7 @@ async def warmup_account_client(
     device_id: str,
     user_id: str,
 ) -> None:
-    """登录后 warmup：拉取各 scope settings 并 report（对齐 FE 启动流）。"""
+    """登录后拉取各 scope settings 并 report，对齐 FE 启动序列。"""
     if not token or not device_id or not user_id:
         return
     collected: Set[int] = set()

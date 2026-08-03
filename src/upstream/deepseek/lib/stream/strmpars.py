@@ -15,21 +15,7 @@ __all__ = ["SearchResult", "StreamParser", "parse_sse_line"]
 
 
 class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
-    """DeepSeek SSE 流式响应解析器。
-
-    解析来自 /api/v0/chat/completion 等接口的 SSE 事件流，
-    将内部格式转换为标准化的 chunk 字典。
-
-    ``_proc`` 及其分支处理方法由 ``_FragmentHandlerMixin`` 提供，
-    以保持本文件行数受控、职责单一。
-    """
-
     def __init__(self, include_thinking: bool = False) -> None:
-        """初始化解析器。
-
-        Args:
-            include_thinking: 是否在输出中包含思考过程增量文本。
-        """
         self._inc: bool = include_thinking
         self._content: str = ""
         self._think: str = ""
@@ -51,32 +37,27 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
 
     @property
     def status(self) -> str:
-        """当前响应状态。"""
         return self._status
 
     @property
     def message_id(self) -> Optional[int]:
-        """响应消息 ID（用于 continue 请求）。"""
         return self._msg_id
 
     @property
     def accumulated_content(self) -> str:
-        """已累积的正文内容。"""
         return self._content
 
     @property
     def accumulated_thinking(self) -> str:
-        """已累积的思考内容。"""
         return self._think
 
     @property
     def accumulated_token_usage(self) -> int:
-        """上游 SSE 报告的 accumulated_token_usage（0 表示未收到）。"""
         return self._tok_usage
 
     @property
     def should_continue(self) -> bool:
-        """当前流结束后是否应继续调用 /continue。"""
+
         if self._should_continue:
             return True
         if self._status in ("INCOMPLETE", "TIMEOUT"):
@@ -90,11 +71,7 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
         return False
 
     def begin_stream(self, is_continuation: bool = False) -> None:
-        """标记开始解析一段新的 SSE 流。
 
-        Args:
-            is_continuation: 是否为 /continue 续写流。
-        """
         self._cur_event = None
         self._stream_closed = False
         self._close_click_behavior = None
@@ -107,14 +84,7 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
         self._skip_first_response_frag = is_continuation
 
     def _replace_citations(self, text: str) -> str:
-        """将引用标记替换为 [URL]N 格式。
 
-        Args:
-            text: 含引用标记的文本。
-
-        Returns:
-            替换后的文本。
-        """
         # 统一匹配 [citation:N] 和 [reference:N]
         def _rep(m: Any) -> str:
             i = int(m.group(1))
@@ -125,14 +95,7 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
         return re.sub(r"\[(?:citation|reference):(\d+)\]", _rep, text)
 
     def _proc_cite(self, chunk: str) -> Tuple[str, str]:
-        """处理可能含引用标记的文本块（流式，可能不完整）。
 
-        Args:
-            chunk: 待处理文本块。
-
-        Returns:
-            (处理后内容, 剩余缓冲区) 二元组。
-        """
         self._cite_buf += chunk
         result = ""
         buf = self._cite_buf
@@ -146,7 +109,7 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
                     if i in self._search
                     else m.group(0)
                 )
-                buf = buf[m.end():]
+                buf = buf[m.end() :]
             else:
                 # 检查是否有不完整的引用标记（citation 或 reference 都匹配）
                 inc = re.search(
@@ -157,7 +120,7 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
                 )
                 if inc:
                     result += buf[: inc.start()]
-                    self._cite_buf = buf[inc.start():]
+                    self._cite_buf = buf[inc.start() :]
                     return result, self._cite_buf
                 result += buf
                 buf = ""
@@ -165,14 +128,7 @@ class StreamParser(_FragmentHandlerMixin, _FragmentChunkMixin):
         return result, ""
 
     def parse_line(self, line: str) -> Optional[Dict[str, Any]]:
-        """解析单行 SSE 数据。
 
-        Args:
-            line: 原始行字符串（含 event: 或 data: 前缀）。
-
-        Returns:
-            解析结果字典或 None（无需处理时）。
-        """
         line = line.strip()
         if not line:
             return None
@@ -217,15 +173,7 @@ def parse_sse_line(
     data_str: str,
     parser: Optional[StreamParser] = None,
 ) -> Optional[Dict[str, Any]]:
-    """解析单行 SSE 数据，委托给 ``StreamParser``。
-
-    Args:
-        data_str: 原始行字符串。
-        parser: StreamParser 实例（必填）。
-
-    Returns:
-        解析结果字典或 None。
-    """
+    """解析单行 SSE 数据，委托给 ``StreamParser``。"""
     if parser is None:
         return None
     if not data_str.strip():

@@ -13,6 +13,7 @@ import aiohttp
 from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_waf_challenge
 from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST
 from upstream.deepseek.lib.protocol.headers import build_basic_headers
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -30,11 +31,7 @@ _NON_DIGIT_RE = re.compile(r"\D+")
 
 
 def _make_device_id() -> str:
-    """生成随机设备 ID（UUID v4 格式）。
 
-    Returns:
-        UUID 字符串。
-    """
     return str(uuid.uuid4())
 
 
@@ -46,7 +43,7 @@ def _normalize_area_code(area_code: str) -> str:
 
 
 def _normalize_mobile(raw: str, area_code: str = "") -> Tuple[str, str]:
-    """解析手机号与区号（支持 +86、86 前缀及常见分隔符）。"""
+
     text = raw.strip()
     code = _normalize_area_code(area_code)
     if text.startswith("+"):
@@ -67,7 +64,7 @@ def build_login_payload(
     *,
     area_code: str = "",
 ) -> Dict[str, Any]:
-    """根据用户名（邮箱或手机号）构造 /api/v0/users/login 请求体。"""
+
     identity = username.strip()
     payload: Dict[str, Any] = {
         "password": password,
@@ -86,12 +83,14 @@ def build_login_payload(
     return payload
 
 
-def _build_login_payload(username: str, password: str, device_id: str, *, area_code: str = "") -> Dict[str, Any]:
+def _build_login_payload(
+    username: str, password: str, device_id: str, *, area_code: str = ""
+) -> Dict[str, Any]:
     return build_login_payload(username, password, device_id, area_code=area_code)
 
 
 def ensure_device_id(device_id: str = "") -> str:
-    """返回稳定 device_id（did），用于 settings 与登录。"""
+
     return device_id.strip() or _make_device_id()
 
 
@@ -99,7 +98,7 @@ async def get_current_user(
     session: aiohttp.ClientSession,
     token: str,
 ) -> Dict[str, Any]:
-    """GET /api/v0/users/current。"""
+
     headers = build_basic_headers(token)
     async with session.get(
         "https://{}/api/v0/users/current".format(DEFAULT_HOST),
@@ -118,7 +117,7 @@ async def get_current_user(
 
 
 async def logout(session: aiohttp.ClientSession, token: str) -> bool:
-    """POST /api/v0/users/logout。"""
+
     headers = build_basic_headers(token)
     try:
         async with session.post(
@@ -142,15 +141,7 @@ async def login(
     device_id: str = "",
     area_code: str = "",
 ) -> Tuple[str, str, str]:
-    """邮箱或手机号密码登录。
 
-    Args:
-        username: 邮箱地址，或手机号（可含 +86 / 空格 / 连字符）。
-        area_code: 手机号区号（仅手机登录时使用，默认 +86）。
-
-    Returns:
-        (token, user_id, device_id) 三元组。
-    """
     did = ensure_device_id(device_id)
     payload = build_login_payload(username, password, did, area_code=area_code)
     headers = build_basic_headers()
@@ -183,20 +174,7 @@ async def login_by_sms(
     sms_code: str,
     area_code: str = "+86",
 ) -> Tuple[str, str]:
-    """手机短信验证码登录。
 
-    Args:
-        session: aiohttp ClientSession。
-        mobile_number: 手机号码。
-        sms_code: 短信验证码。
-        area_code: 区号。
-
-    Returns:
-        (token, user_id) 二元组。
-
-    Raises:
-        Exception: 登录失败时抛出。
-    """
     headers = build_basic_headers()
     payload = {
         "mobile_number": mobile_number,
@@ -231,17 +209,7 @@ async def send_sms_code(
     scenario: str = "mobile_login",
     area_code: str = "+86",
 ) -> bool:
-    """发送短信验证码。
 
-    Args:
-        session: aiohttp ClientSession。
-        mobile_number: 手机号码。
-        scenario: 场景（register/mobile_login/reset_password 等）。
-        area_code: 区号。
-
-    Returns:
-        是否发送成功。
-    """
     headers = build_basic_headers()
     payload = {
         "locale": "zh_CN",
@@ -252,9 +220,7 @@ async def send_sms_code(
     }
     try:
         async with session.post(
-            "https://{}/api/v0/users/create_sms_verification_code".format(
-                DEFAULT_HOST
-            ),
+            "https://{}/api/v0/users/create_sms_verification_code".format(DEFAULT_HOST),
             headers=headers,
             json=payload,
             timeout=aiohttp.ClientTimeout(total=30),
@@ -274,16 +240,7 @@ async def send_email_code(
     email: str,
     scenario: str = "register",
 ) -> bool:
-    """发送邮箱验证码。
-
-    Args:
-        session: aiohttp ClientSession。
-        email: 邮箱地址。
-        scenario: 场景（register/reset_password）。
-
-    Returns:
-        是否发送成功。
-    """
+    """发送邮箱验证码。"""
     headers = build_basic_headers()
     payload = {
         "email": email,

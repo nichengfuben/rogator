@@ -19,7 +19,8 @@ from handlers.shared.fncall_inject import (
     reconcile_pending_tool_index,
     resolve_streamed_tool_calls,
 )
-from handlers.anthropic.stream_content import _process_anthropic_content_events, _stream_event_loop
+from handlers.anthropic.stream_content import _process_anthropic_content_events
+from handlers.shared.stream_loop import _stream_event_loop
 from handlers.anthropic.events import (
     AnthropicStreamState,
     _close_block,

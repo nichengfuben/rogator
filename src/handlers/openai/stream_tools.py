@@ -1,11 +1,154 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from aiohttp import web
+from echotools import FncallStreamParser
+
 from handlers.shared.api_errors import safe_write as _safe_write
-from handlers.shared.fncall_inject import STREAM_CHUNK_SIZE, emit_parser_stream_deltas, iter_text_chunks
-from server.formats import build_openai_chunk, build_openai_stream_usage_chunk, _fix_tool_call_id, _gen_tool_id
+from handlers.shared.fncall_inject import (
+    STREAM_CHUNK_SIZE,
+    advance_partial_buffer,
+    emit_parser_stream_deltas,
+    iter_text_chunks,
+)
+from server.formats import (
+    UpstreamUsageTracker,
+    _fix_tool_call_id,
+    _gen_tool_id,
+    build_openai_chunk,
+    build_openai_stream_usage_chunk,
+)
+
+
+@dataclass
+class OpenAIStreamState:
+    """流式 OpenAI 响应的 mutable 状态容器。"""
+
+    model: str
+    chunk_id: str
+    resp: web.StreamResponse
+    disconnected: list
+    include_usage: bool
+    parser: FncallStreamParser
+    req_id: str
+    full_answer: str = ""
+    full_thinking: str = ""
+    last_safe_len: int = 0
+    last_thinking_len: int = 0
+    pending_tc_index: int = 0
+    streamed_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    stream_tool: Optional[Dict[str, Any]] = None
+    stream_tool_blocks_sent: int = 0
+    usage_tracker: UpstreamUsageTracker = field(default_factory=UpstreamUsageTracker)
+
+    def stream_chunk(self, **kwargs: Any) -> Dict[str, Any]:
+        if self.include_usage:
+            usage = self.usage_tracker.openai_stream_usage()
+            if usage is not None:
+                kwargs["usage"] = usage
+            else:
+                kwargs["usage_null"] = True
+        return build_openai_chunk(self.model, chunk_id=self.chunk_id, **kwargs)
+
+
+async def _emit_ready_tool_calls(
+    st: OpenAIStreamState,
+    ready_calls: List[Dict[str, Any]],
+) -> None:
+    fixed = [_fix_tool_call_id(tc) for tc in ready_calls]
+    st.streamed_tool_calls.extend(fixed)
+    if st.stream_tool is not None:
+        st.stream_tool = None
+        st.pending_tc_index += len(fixed)
+        return
+    st.pending_tc_index = await _emit_tool_call_chunks(
+        st.resp,
+        st.model,
+        st.chunk_id,
+        fixed,
+        st.pending_tc_index,
+        st.disconnected,
+        include_usage=st.include_usage,
+    )
+
+
+async def _emit_partial_thinking(st: OpenAIStreamState) -> bool:
+    new_thinking, st.last_thinking_len = advance_partial_buffer(
+        st.last_thinking_len,
+        st.parser.partial_thinking,
+    )
+    if not new_thinking:
+        return True
+    st.full_thinking += new_thinking
+    chunk = st.stream_chunk(reasoning=new_thinking)
+    return await _emit_chunk(st.resp, chunk, st.disconnected)
+
+
+async def _emit_partial_text(st: OpenAIStreamState) -> bool:
+    new_text, st.last_safe_len = advance_partial_buffer(
+        st.last_safe_len,
+        st.parser.partial_text,
+    )
+    if not new_text:
+        return True
+    chunk = st.stream_chunk(content=new_text)
+    return await _emit_chunk(st.resp, chunk, st.disconnected)
+
+
+async def _process_openai_stream_thinking(st: OpenAIStreamState, content: str) -> bool:
+    st.full_thinking += content
+    if not content:
+        return True
+    chunk = st.stream_chunk(reasoning=content)
+    return await _emit_chunk(st.resp, chunk, st.disconnected)
+
+
+async def _process_openai_stream_answer(st: OpenAIStreamState, content: str) -> bool:
+    st.full_answer += content
+    ready_calls = st.parser.feed(content)
+
+    had_stream_tool = st.stream_tool is not None
+    st.stream_tool, st.pending_tc_index, ok = await _emit_openai_streaming_tool_delta(
+        st.resp,
+        st.parser,
+        st.model,
+        st.chunk_id,
+        st.stream_tool,
+        st.pending_tc_index,
+        st.disconnected,
+        include_usage=st.include_usage,
+    )
+    if not had_stream_tool and st.stream_tool is not None:
+        st.stream_tool_blocks_sent += 1
+    if not ok:
+        return False
+
+    if not await _emit_partial_thinking(st):
+        return False
+    if not await _emit_partial_text(st):
+        return False
+
+    if ready_calls:
+        await _emit_ready_tool_calls(st, ready_calls)
+    return True
+
+
+async def _process_openai_stream_event(
+    st: OpenAIStreamState, event: Dict[str, Any]
+) -> bool:
+    """处理单个上游事件；返回 False 表示应中断流。"""
+    etype = st.usage_tracker.ingest_upstream_event(event)
+    if etype in ("prompt_meta", "response_created", "usage"):
+        return True
+    content = event.get("content", "")
+    if etype == "thinking":
+        return await _process_openai_stream_thinking(st, content)
+    if etype != "answer":
+        return True
+    return await _process_openai_stream_answer(st, content)
 
 
 async def _emit_chunk(resp, chunk: Dict[str, Any], disconnected: list) -> bool:
@@ -17,10 +160,19 @@ async def _emit_chunk(resp, chunk: Dict[str, Any], disconnected: list) -> bool:
 
 
 async def _write_openai_stream_error(
-    resp, message: str, disconnected: list, *, error_type: str = "server_error", code: int = 500,
+    resp,
+    message: str,
+    disconnected: list,
+    *,
+    error_type: str = "server_error",
+    code: int = 500,
 ) -> None:
     payload = {"error": {"message": message, "type": error_type, "code": code}}
-    await _safe_write(resp, f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"), disconnected)
+    await _safe_write(
+        resp,
+        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"),
+        disconnected,
+    )
 
 
 def _openai_tool_call_entry(index: int, tc: Dict[str, Any]) -> Dict[str, Any]:
@@ -66,7 +218,9 @@ async def _emit_tool_call_chunks(
     return index
 
 
-def _build_stream_tool_header_entry(tool_index: int, stream_tool: Dict[str, Any], name: str, piece: str) -> Dict[str, Any]:
+def _build_stream_tool_header_entry(
+    tool_index: int, stream_tool: Dict[str, Any], name: str, piece: str
+) -> Dict[str, Any]:
     return {
         "index": tool_index,
         "id": stream_tool["id"],
@@ -75,7 +229,9 @@ def _build_stream_tool_header_entry(tool_index: int, stream_tool: Dict[str, Any]
     }
 
 
-def _build_stream_tool_args_entry(stream_tool: Dict[str, Any], piece: str) -> Dict[str, Any]:
+def _build_stream_tool_args_entry(
+    stream_tool: Dict[str, Any], piece: str
+) -> Dict[str, Any]:
     return {
         "index": stream_tool["index"],
         "function": {"arguments": piece},
@@ -95,7 +251,9 @@ async def _emit_stream_tool_pieces(
 ) -> bool:
     for piece in iter_text_chunks(partial_json, STREAM_CHUNK_SIZE):
         if not stream_tool["header_sent"]:
-            entry = _build_stream_tool_header_entry(stream_tool["index"], stream_tool, name, piece)
+            entry = _build_stream_tool_header_entry(
+                stream_tool["index"], stream_tool, name, piece
+            )
             stream_tool["header_sent"] = True
         else:
             entry = _build_stream_tool_args_entry(stream_tool, piece)
@@ -140,7 +298,13 @@ async def _emit_openai_streaming_tool_delta(
         if stream_tool is None:
             stream_tool = _init_stream_tool(tool_index, name)
         return await _emit_stream_tool_pieces(
-            resp, model, chunk_id, stream_tool, name, partial_json, disconnected,
+            resp,
+            model,
+            chunk_id,
+            stream_tool,
+            name,
+            partial_json,
+            disconnected,
             include_usage=include_usage,
         )
 
@@ -160,7 +324,13 @@ async def _emit_openai_streaming_tool_argument_pieces(
 ) -> bool:
     """向已打开的流式 tool call 追加 arguments 片段。"""
     return await _emit_stream_tool_pieces(
-        resp, model, chunk_id, stream_tool, stream_tool.get("name", ""), partial_json, disconnected,
+        resp,
+        model,
+        chunk_id,
+        stream_tool,
+        stream_tool.get("name", ""),
+        partial_json,
+        disconnected,
         include_usage=include_usage,
     )
 
@@ -180,7 +350,12 @@ async def _send_stream_finish(
     remaining = all_tool_calls[already_sent_tc_count:]
     if remaining:
         await _emit_tool_call_chunks(
-            resp, model, chunk_id, remaining, already_sent_tc_count, disconnected,
+            resp,
+            model,
+            chunk_id,
+            remaining,
+            already_sent_tc_count,
+            disconnected,
             include_usage=include_usage,
         )
     finish_reason = (
@@ -188,7 +363,10 @@ async def _send_stream_finish(
     )
     if include_usage:
         chunk = build_openai_chunk(
-            model, chunk_id=chunk_id, finish_reason=finish_reason, usage_null=True,
+            model,
+            chunk_id=chunk_id,
+            finish_reason=finish_reason,
+            usage_null=True,
         )
         await _emit_chunk(resp, chunk, disconnected)
         if usage is not None:
@@ -196,7 +374,10 @@ async def _send_stream_finish(
             await _emit_chunk(resp, usage_chunk, disconnected)
     else:
         chunk = build_openai_chunk(
-            model, chunk_id=chunk_id, finish_reason=finish_reason, usage=usage,
+            model,
+            chunk_id=chunk_id,
+            finish_reason=finish_reason,
+            usage=usage,
         )
         await _emit_chunk(resp, chunk, disconnected)
     await _safe_write(resp, b"data: [DONE]\n\n", disconnected)

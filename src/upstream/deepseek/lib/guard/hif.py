@@ -1,5 +1,3 @@
-
-
 # src/platforms/deepseek/core/hif.py
 """DeepSeek HIF 服务令牌管理"""
 
@@ -23,15 +21,7 @@ logger = logging.getLogger(__name__)
 async def fetch_hif_tokens(
     session: Any,
 ) -> Tuple[str, str, float]:
-    """并发获取两个 HIF 服务令牌。
 
-    Args:
-        session: aiohttp.ClientSession 实例。
-
-    Returns:
-        (x_hif_leim, x_hif_dliq, expire_at) 三元组。
-        失败时对应字段返回空字符串，expire_at 返回当前时间。
-    """
     headers = build_basic_headers()
 
     async def _get(url: str) -> str:
@@ -49,9 +39,7 @@ async def fetch_hif_tokens(
                 code = data.get("code", data.get("data", {}).get("code", -1))
                 # DeepSeek HIF 有时把 biz_data 包在 data 下，有时平铺在根级
                 biz = (
-                    data.get("data", {}).get("biz_data", {})
-                    if "data" in data
-                    else data
+                    data.get("data", {}).get("biz_data", {}) if "data" in data else data
                 )
                 val = biz.get("value", "")
                 return str(val) if val else ""
@@ -66,37 +54,21 @@ async def fetch_hif_tokens(
 
 
 class HifTokenManager:
-    """HIF 令牌自动刷新管理器（每个账号独立实例）。"""
+    """HIF 令牌自动刷新管理器。"""
 
     def __init__(self) -> None:
-        """初始化管理器。"""
         self._leim: str = ""
         self._dliq: str = ""
         self._expire_at: float = 0.0
         self._session: Optional[Any] = None
 
     def bind_session(self, session: Any) -> None:
-        """绑定 aiohttp Session。
-
-        Args:
-            session: aiohttp.ClientSession 实例。
-        """
         self._session = session
 
     def is_expired(self) -> bool:
-        """判断令牌是否已过期。
-
-        Returns:
-            是否已过期。
-        """
         return time.time() >= self._expire_at - 60
 
     async def ensure_valid(self) -> Tuple[str, str]:
-        """确保令牌有效，过期自动刷新。
-
-        Returns:
-            (x_hif_leim, x_hif_dliq) 二元组。
-        """
         if self.is_expired() and self._session is not None:
             self._leim, self._dliq, self._expire_at = await fetch_hif_tokens(
                 self._session
@@ -105,10 +77,8 @@ class HifTokenManager:
 
     @property
     def leim(self) -> str:
-        """当前 x-hif-leim 令牌。"""
         return self._leim
 
     @property
     def dliq(self) -> str:
-        """当前 x-hif-dliq 令牌。"""
         return self._dliq

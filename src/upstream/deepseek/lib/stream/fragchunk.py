@@ -44,7 +44,9 @@ class _FragmentChunkMixin:
         return None
 
     def _maybe_skip_first_response_frag(
-        self, ft: str, content: Any,
+        self,
+        ft: str,
+        content: Any,
     ) -> Optional[Dict[str, Any]]:
         is_first_frag = not self._first_frag
         if not is_first_frag:

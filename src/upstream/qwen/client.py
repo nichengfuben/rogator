@@ -92,19 +92,31 @@ async def _post_chat_sse(
     headers: Dict[str, str],
     response_id_box: List[str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    http = await client._ensure_http_session()
-    async with http.post(
-        f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}",
-        json=payload,
-        headers=headers,
-        timeout=upstream_timeout(REQUEST_TOTAL_TIMEOUT),
-    ) as resp:
-        if resp.status != 200:
-            await handle_chat_error(client, resp, session)
-        async for event in _iter_qwen_sse_or_reconnect(
-            client, session, chat_id, resp, response_id_box,
-        ):
-            yield event
+    url = f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}"
+    timeout = upstream_timeout(REQUEST_TOTAL_TIMEOUT)
+    for attempt in range(1, 3):
+        try:
+            http = await client._ensure_http_session()
+            async with http.post(
+                url, json=payload, headers=headers, timeout=timeout,
+            ) as resp:
+                if resp.status != 200:
+                    await handle_chat_error(client, resp, session)
+                async for event in _iter_qwen_sse_or_reconnect(
+                    client, session, chat_id, resp, response_id_box,
+                ):
+                    yield event
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            conn_err = map_connection_error(exc)
+            if conn_err is None or attempt >= 2:
+                if conn_err is not None:
+                    raise conn_err from exc
+                raise
+            await client.reset_http_transport()
+            await asyncio.sleep(0.6 * attempt)
 
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):

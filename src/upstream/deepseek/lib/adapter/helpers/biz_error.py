@@ -7,8 +7,6 @@ from typing import Any, Dict, Optional
 
 
 class DeepSeekUserMutedError(Exception):
-    """账号被 DeepSeek 静音（``biz_msg: user is muted``）。"""
-
     def __init__(
         self,
         *,
@@ -21,14 +19,12 @@ class DeepSeekUserMutedError(Exception):
 
 
 class DeepSeekWafChallengeError(DeepSeekUserMutedError):
-    """CloudFront WAF 人机挑战（HTTP 202 + ``x-amzn-waf-action: challenge``）。"""
-
     def __init__(self) -> None:
         super().__init__(biz_msg="waf challenge")
 
 
 def raise_if_waf_challenge(status: int, headers: Any) -> None:
-    """若响应为 WAF challenge，抛出 :class:`DeepSeekWafChallengeError`。"""
+
     action = ""
     if headers is not None:
         get = getattr(headers, "get", None)
@@ -39,11 +35,11 @@ def raise_if_waf_challenge(status: int, headers: Any) -> None:
 
 
 class DeepSeekAccountsExhaustedError(RuntimeError):
-    """所有 DeepSeek 账号均 mute 或不可用。"""
+    pass
 
 
 def parse_biz_error_from_line(line: str) -> Optional[Dict[str, Any]]:
-    """从 SSE 行解析 ``biz_code`` / ``biz_msg``（非标准 event/data 帧）。"""
+
     raw = line.strip()
     if raw.startswith("data:"):
         raw = raw[5:].strip()

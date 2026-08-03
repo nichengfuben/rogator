@@ -8,7 +8,6 @@ Merged from: sse.py, stream.py
 import json
 from typing import Any, Dict, List, Optional, Union
 
-
 # ---------------------------------------------------------------------------
 # SSE Parsers (from sse.py)
 # ---------------------------------------------------------------------------
@@ -159,7 +158,7 @@ def _parse_choice_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def parse_sse_event(data_str: str) -> Optional[Dict[str, Any]]:
-    """Parse one SSE ``data`` payload into a structured event."""
+
     data = _safe_loads(data_str)
     if data is None:
         return None
@@ -170,7 +169,7 @@ def parse_sse_event(data_str: str) -> Optional[Dict[str, Any]]:
 
 
 class SseEventAssembler:
-    """对齐前端 kT/_T（eventsource-parser）：空行 dispatch，多条 data: 用 \\n 合并。"""
+    # 对齐前端 kT/_T（eventsource-parser）：空行 dispatch，多条 data: 用 \n 合并。
 
     __slots__ = ("_data_parts",)
 

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-"""DeepSeek 提示词/账号/chunk 转换工具模块。
-
-从 ``client.py`` 拆分而来，承载与 HTTP 会话生命周期无关的纯函数与数据结构：
-prompt 拼装、chunk 协议转换、模型能力判断、账号凭证 dataclass。
-"""
+"""DeepSeek prompt 拼装与 chunk 协议转换。"""
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
+
 
 def _message_text(content: Any) -> str:
     if not isinstance(content, list):
@@ -32,14 +29,7 @@ def _format_message(role: str, content: str) -> Optional[str]:
 
 
 def build_prompt(messages: List[Dict[str, Any]]) -> str:
-    """将 OpenAI 格式消息列表转为 DeepSeek 单 prompt 字符串。
 
-    Args:
-        messages: OpenAI 格式消息列表。
-
-    Returns:
-        拼接后的提示文本。
-    """
     parts: List[str] = []
     for m in messages:
         role = m.get("role", "user")
@@ -50,14 +40,7 @@ def build_prompt(messages: List[Dict[str, Any]]) -> str:
 
 
 def translate_chunk(chunk: Dict[str, Any]) -> Optional[Union[str, Dict[str, Any]]]:
-    """将内部 chunk 转换为 yield 协议格式。
 
-    Args:
-        chunk: 内部 chunk 字典。
-
-    Returns:
-        str（正文增量）、dict（thinking/usage）或 None。
-    """
     t = chunk.get("type")
     if t == "content":
         content = chunk.get("content", "")

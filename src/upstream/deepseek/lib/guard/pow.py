@@ -31,11 +31,7 @@ def _run_wasm_solve(
     difficulty: int,
     expire_at: int,
 ) -> int:
-    """在已实例化的 WASM 模块上执行求解，从 ``WasmPow.solve`` 抽出。
 
-    Raises:
-        RuntimeError: WASM 求解失败。
-    """
     mem = ex["memory"]
     add_sp = ex["__wbindgen_add_to_stack_pointer"]
     alloc = ex["__wbindgen_export_0"]
@@ -73,12 +69,12 @@ def _run_wasm_solve(
 
 
 class WasmPow:
-    """WASM PoW 求解器（DeepSeekHashV1 算法）。"""
+    """WASM PoW 求解器。"""
 
     ALGO: str = "DeepSeekHashV1"
 
     def __init__(self) -> None:
-        """初始化求解器，检测 wasmtime 可用性。"""
+
         self._bytes: Optional[bytes] = None
         try:
             from wasmtime import Linker, Module, Store  # noqa: F401
@@ -90,20 +86,15 @@ class WasmPow:
 
     @property
     def available(self) -> bool:
-        """WASM 是否可用。"""
         return self._available
 
     def reload(self) -> None:
-        """重新加载 WASM 字节（文件更新后调用）。"""
+
         self._bytes = None
         self._available = os.path.exists(WASM_PATH)
 
     def _load(self) -> bytes:
-        """加载 WASM 字节（懒加载，文件 I/O 副作用）。
 
-        Returns:
-            WASM 二进制字节。
-        """
         if self._bytes is None:
             self._bytes = Path(WASM_PATH).read_bytes()
         return self._bytes
@@ -115,21 +106,7 @@ class WasmPow:
         difficulty: int,
         expire_at: int,
     ) -> int:
-        """求解 PoW 挑战。
 
-        Args:
-            challenge: 64 字符十六进制挑战值。
-            salt: 20 字符十六进制盐值。
-            difficulty: 难度（前导零位数）。
-            expire_at: 过期 Unix 时间戳。
-
-        Returns:
-            满足条件的 nonce 整数。
-
-        Raises:
-            RuntimeError: WASM 求解失败。
-            ImportError: wasmtime 不可用。
-        """
         from wasmtime import Linker, Module, Store
 
         store = Store()
@@ -141,7 +118,7 @@ class WasmPow:
 
 
 def _wasm_needs_refresh() -> bool:
-    """判断本地 WASM 文件是否需要重新下载。"""
+
     need = not os.path.exists(WASM_PATH)
     if not need and os.path.exists(WASM_META):
         try:
@@ -154,7 +131,7 @@ def _wasm_needs_refresh() -> bool:
 
 
 def _save_wasm_content(content: bytes) -> None:
-    """将下载到的 WASM 内容落盘并更新元数据（哈希相同时仅刷新元数据时间戳）。"""
+    # 哈希相同时仅刷新元数据时间戳，避免无谓 IO。
     import hashlib
 
     sha = hashlib.sha256(content).hexdigest()
@@ -185,11 +162,7 @@ def _save_wasm_content(content: bytes) -> None:
 
 
 async def download_wasm(session: Any) -> None:
-    """下载或更新 WASM 文件（网络 + 文件 I/O 副作用）。
 
-    Args:
-        session: aiohttp.ClientSession 实例。
-    """
     Path(WASM_PATH).parent.mkdir(parents=True, exist_ok=True)
     if not _wasm_needs_refresh():
         return
@@ -218,7 +191,7 @@ async def download_wasm(session: Any) -> None:
 
 
 def _extract_challenge_dict(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """从 create_pow_challenge 响应体中提取挑战字典，算法不匹配时返回 None。"""
+
     biz = data["data"]["biz_data"]
     cd = biz.get("challenge") or biz  # PoW 挑战字段在部分响应里嵌套在 challenge 键下
     # 部分版本响应直接在 biz_data 层
@@ -236,7 +209,7 @@ def _build_pow_payload(
     pow_solver: WasmPow,
     target_path: str,
 ) -> str:
-    """根据挑战字典求解 PoW 并编码为 Base64 JSON 字符串。"""
+
     challenge = cd.get("challenge", "")
     salt = cd.get("salt", "")
     difficulty = int(cd.get("difficulty", 144000))
@@ -263,17 +236,7 @@ async def get_pow_response(
     pow_solver: WasmPow,
     target_path: str = "/api/v0/chat/completion",
 ) -> str:
-    """获取并计算 PoW 响应字符串。
-
-    Args:
-        session: aiohttp.ClientSession 实例。
-        token: Bearer 令牌。
-        pow_solver: WasmPow 实例。
-        target_path: 目标 API 路径。
-
-    Returns:
-        Base64 编码的 PoW JSON 字符串，失败时返回空字符串。
-    """
+    """获取并计算 PoW 响应字符串，失败时返回空字符串。"""
     if not pow_solver.available:
         return ""
 

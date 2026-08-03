@@ -1,5 +1,3 @@
-
-
 # src/platforms/deepseek/core/headers.py
 """DeepSeek 请求头构建工具"""
 
@@ -15,18 +13,7 @@ def build_headers(
     hif_dliq: str = "",
     pow_response: str = "",
 ) -> Dict[str, str]:
-    """构建完整请求头。
 
-    Args:
-        token: Bearer 令牌。
-        session_id: 对话会话 ID（可选），用于构建 Referer。
-        hif_leim: x-hif-leim 令牌（可选）。
-        hif_dliq: x-hif-dliq 令牌（可选）。
-        pow_response: x-ds-pow-response（可选）。
-
-    Returns:
-        请求头字典。
-    """
     h: Dict[str, str] = {
         **COMMON_HEADERS,
         "authorization": "Bearer {}".format(token),
@@ -47,14 +34,7 @@ def build_headers(
 
 
 def build_basic_headers(token: str = "") -> Dict[str, str]:
-    """构建最简请求头（无 session / hif / pow）。
-
-    Args:
-        token: Bearer 令牌（可空）。
-
-    Returns:
-        基础请求头字典。
-    """
+    """构建最简请求头（无 session / HIF / PoW）。"""
     h: Dict[str, str] = {
         **COMMON_HEADERS,
         "origin": "https://{}".format(DEFAULT_HOST),
@@ -63,6 +43,7 @@ def build_basic_headers(token: str = "") -> Dict[str, str]:
     if token:
         h["authorization"] = "Bearer {}".format(token)
     return h
+
 
 __all__ = [
     "build_headers",

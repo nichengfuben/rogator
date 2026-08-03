@@ -28,6 +28,7 @@ from server.retry.session_retry import run_with_session_retry, stream_with_sessi
 from upstream.qwen.account import QwenLoginMixin
 from upstream.qwen.chat.chat import create_chat_for_session
 from upstream.qwen.chat.store import QwenSession
+from upstream.qwen.client import _post_chat_sse
 
 
 def _qwen_session() -> QwenSession:
@@ -62,7 +63,9 @@ class PostScript:
             if timeout is not None:
                 self.timeouts_used.append(timeout)
             if not self.outcomes:
-                return _mock_json_response({"success": True, "data": {"id": "fallback"}})
+                return _mock_json_response(
+                    {"success": True, "data": {"id": "fallback"}}
+                )
             outcome = self.outcomes.pop(0)
             if isinstance(outcome, BaseException):
                 raise outcome
@@ -72,8 +75,6 @@ class PostScript:
 
 
 class TransportProbe(HttpTransportMixin):
-    """最小 Qwen 客户端探针：复用 HttpTransportMixin，request 走脚本。"""
-
     def __init__(self, script: PostScript) -> None:
         self._script = script
         self._init_http_transport()
@@ -124,7 +125,9 @@ class TestCreateChatTransportSim(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_chat_succeeds_without_network(self) -> None:
         script = PostScript(
-            outcomes=[_mock_json_response({"success": True, "data": {"id": "chat-xyz"}})],
+            outcomes=[
+                _mock_json_response({"success": True, "data": {"id": "chat-xyz"}})
+            ],
         )
         probe = TransportProbe(script)
         session = _qwen_session()
@@ -178,15 +181,19 @@ class TestLoginTransportSim(unittest.IsolatedAsyncioTestCase):
         )
         probe = LoginProbe(script)
         account = Account(username="ok@test.com", password="secret")
-        with patch(
-            "upstream.qwen.account.fetch_user_id",
-            new_callable=AsyncMock,
-            return_value="uid-1",
-        ), patch(
-            "upstream.qwen.account.regenerate_profile",
-        ), patch(
-            "upstream.qwen.chat.upload.upstream_api.warmup_session",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "upstream.qwen.account.fetch_user_id",
+                new_callable=AsyncMock,
+                return_value="uid-1",
+            ),
+            patch(
+                "upstream.qwen.account.regenerate_profile",
+            ),
+            patch(
+                "upstream.qwen.chat.upload.upstream_api.warmup_session",
+                new_callable=AsyncMock,
+            ),
         ):
             ps = await probe._perform_login(account)
         self.assertIsNotNone(ps)
@@ -264,24 +271,82 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
         from server.formats import as_upstream_connection_error
 
         err = as_upstream_connection_error(
-            RuntimeError("Session is closed"), upstream="deepseek",
+            RuntimeError("Session is closed"),
+            upstream="deepseek",
         )
         self.assertIsNotNone(err)
         assert err is not None
         self.assertEqual(err.upstream, "deepseek")
         self.assertIn("Session is closed", err.message)
 
-    async def test_stale_session_attribute_error_mapped_as_connection_error(self) -> None:
+    async def test_stale_session_attribute_error_mapped_as_connection_error(
+        self,
+    ) -> None:
         from server.formats import as_upstream_connection_error
 
         err = as_upstream_connection_error(
-            AttributeError("'NoneType' object has no attribute '_timeout_ceil_threshold'"),
+            AttributeError(
+                "'NoneType' object has no attribute '_timeout_ceil_threshold'"
+            ),
             upstream="qwen",
         )
         self.assertIsNotNone(err)
         assert err is not None
         self.assertEqual(err.upstream, "qwen")
         self.assertIn("_timeout_ceil_threshold", err.message)
+
+    async def test_aiohttp_connector_assertion_mapped_as_connection_error(self) -> None:
+        from server.formats import as_upstream_connection_error
+        from server.formats.errors import _traceback_touches_aiohttp_client
+
+        self.assertFalse(_traceback_touches_aiohttp_client(AssertionError()))
+        with patch(
+            "server.formats.errors._traceback_touches_aiohttp_client",
+            return_value=True,
+        ):
+            err = as_upstream_connection_error(AssertionError(), upstream="qwen")
+        self.assertIsNotNone(err)
+        assert err is not None
+        self.assertEqual(err.upstream, "qwen")
+
+    async def test_post_chat_sse_retries_on_stale_session(self) -> None:
+        script = PostScript(
+            outcomes=[
+                RuntimeError("Session is closed"),
+                _mock_json_response({"success": True, "data": {"id": "ignored"}}),
+            ],
+        )
+        probe = TransportProbe(script)
+        session = _qwen_session()
+
+        async def _fake_iter(*_args, **_kwargs):
+            yield {"type": "answer", "content": "ok"}
+            return
+
+        with (
+            patch(
+                "upstream.qwen.client._iter_qwen_sse_or_reconnect",
+                side_effect=lambda *_a, **_k: _fake_iter(),
+            ),
+            patch(
+                "upstream.qwen.client.handle_chat_error",
+                new=AsyncMock(),
+            ),
+        ):
+            events = [
+                evt
+                async for evt in _post_chat_sse(
+                    probe,
+                    session,
+                    "chat-1",
+                    {},
+                    {},
+                    [],
+                )
+            ]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(probe.reset_count, 1)
+        self.assertEqual(script.calls, 2)
 
     async def test_closing_one_unowned_session_keeps_peer_alive(self) -> None:
         from server.retry.http_client import client_session
@@ -322,7 +387,10 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
 
         events: List[Dict[str, Any]] = []
         async for event in stream_with_session_retry(
-            "req-stream", state, make_stream, client=probe,
+            "req-stream",
+            state,
+            make_stream,
+            client=probe,
         ):
             events.append(event)
         self.assertEqual(len(events), 1)

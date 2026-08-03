@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""fncall 注入与 entml 流式解析共享辅助。"""
+"""fncall prompt 注入与流式 parser delta 共享辅助。"""
 
 from pathlib import Path
 from typing import (
@@ -15,10 +15,10 @@ from typing import (
     Tuple,
 )
 
+from echotools.base.logger import get_logger
 from echotools.exec.fncall.prompt.inject import inject_fncall as _echotools_inject
 from echotools.exec.fncall.tool_id import fix_tool_call_id
 from echotools.exec.protocol.base import ToolProtocol
-from echotools.base.logger import get_logger
 
 from server.config import CONFIG, LOG_DIR
 

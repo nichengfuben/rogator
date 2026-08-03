@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Anthropic Realtime ASR WebSocket?/anthropic/v1/realtime??"""
+"""Anthropic Realtime ASR WebSocket /anthropic/v1/realtime 端点。"""
 
 import asyncio
 import base64
@@ -29,6 +29,13 @@ async def _send(ws: web.WebSocketResponse, payload: dict) -> None:
     await ws.send_str(json.dumps(payload, ensure_ascii=False))
 
 
+async def _send_invalid_request(ws: web.WebSocketResponse, message: str) -> None:
+    await _send(
+        ws,
+        {"type": "error", "error": {"type": "invalid_request", "message": message}},
+    )
+
+
 class _AntTurn:
     def __init__(self, message_id: str) -> None:
         self.message_id = message_id
@@ -39,7 +46,9 @@ class _AntTurn:
 
 
 class AnthropicRealtimeAsrConnection:
-    def __init__(self, ws: web.WebSocketResponse, qwen: Any, qwen_session: Any, *, model: str) -> None:
+    def __init__(
+        self, ws: web.WebSocketResponse, qwen: Any, qwen_session: Any, *, model: str
+    ) -> None:
         self._ws = ws
         self._qwen = qwen
         self._qwen_session = qwen_session
@@ -56,59 +65,82 @@ class AnthropicRealtimeAsrConnection:
         return self._http
 
     async def send_session_start(self) -> None:
-        await _send(self._ws, {
-            "type": "session.start",
-            "session": {"model": self._model, "modalities": ["text"]},
-        })
+        await _send(
+            self._ws,
+            {
+                "type": "session.start",
+                "session": {"model": self._model, "modalities": ["text"]},
+            },
+        )
 
     async def _begin_message(self, turn: _AntTurn) -> None:
         if turn.started:
             return
         turn.started = True
-        await _send(self._ws, {
-            "type": "message_start",
-            "message": {
-                "id": turn.message_id,
-                "type": "message",
-                "role": "assistant",
-                "model": self._model,
-                "content": [],
+        await _send(
+            self._ws,
+            {
+                "type": "message_start",
+                "message": {
+                    "id": turn.message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": self._model,
+                    "content": [],
+                },
             },
-        })
-        await _send(self._ws, {
-            "type": "content_block_start",
-            "index": turn.block_index,
-            "content_block": {"type": "text", "text": ""},
-        })
+        )
+        await _send(
+            self._ws,
+            {
+                "type": "content_block_start",
+                "index": turn.block_index,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
 
     async def _emit_event(self, turn: _AntTurn, evt: AsrStreamEvent) -> None:
         if evt.kind == "delta" and evt.delta:
             await self._begin_message(turn)
-            await _send(self._ws, {
-                "type": "content_block_delta",
-                "index": turn.block_index,
-                "delta": {"type": "text_delta", "text": evt.delta},
-            })
+            await _send(
+                self._ws,
+                {
+                    "type": "content_block_delta",
+                    "index": turn.block_index,
+                    "delta": {"type": "text_delta", "text": evt.delta},
+                },
+            )
         elif evt.kind == "completed":
             await self._begin_message(turn)
             if evt.text and not turn.started:
-                await _send(self._ws, {
-                    "type": "content_block_delta",
-                    "index": turn.block_index,
-                    "delta": {"type": "text_delta", "text": evt.text},
-                })
-            await _send(self._ws, {"type": "content_block_stop", "index": turn.block_index})
-            await _send(self._ws, {
-                "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-            })
+                await _send(
+                    self._ws,
+                    {
+                        "type": "content_block_delta",
+                        "index": turn.block_index,
+                        "delta": {"type": "text_delta", "text": evt.text},
+                    },
+                )
+            await _send(
+                self._ws, {"type": "content_block_stop", "index": turn.block_index}
+            )
+            await _send(
+                self._ws,
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                },
+            )
             await _send(self._ws, {"type": "message_stop"})
             turn.started = False
         elif evt.kind == "failed":
-            await _send(self._ws, {
-                "type": "error",
-                "error": {"type": "api_error", "message": evt.text or "ASR failed"},
-            })
+            await _send(
+                self._ws,
+                {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": evt.text or "ASR failed"},
+                },
+            )
 
     async def _pump(self, turn: _AntTurn) -> None:
         assert turn.upstream is not None
@@ -119,17 +151,21 @@ class AnthropicRealtimeAsrConnection:
             raise
         except Exception as exc:
             logger.warning("Anthropic realtime pump failed: %s", exc)
-            await _send(self._ws, {
-                "type": "error",
-                "error": {"type": "api_error", "message": str(exc)},
-            })
+            await _send(
+                self._ws,
+                {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": str(exc)},
+                },
+            )
 
     async def _ensure_turn(self) -> _AntTurn:
         if self._turn is None:
             turn = _AntTurn(_msg_id())
             http = await self._http_session()
             turn.upstream = AsrRealtimeSession(
-                http, self._qwen_session.token,
+                http,
+                self._qwen_session.token,
                 username=self._qwen_session.username,
                 language=self._language,
             )
@@ -151,45 +187,45 @@ class AnthropicRealtimeAsrConnection:
             await turn.upstream.close()
         await _send(self._ws, {"type": "input_audio_buffer.committed"})
 
-    async def handle_client_event(self, data: dict) -> None:
-        etype = str(data.get("type") or "")
-        if etype == "session.update":
-            session = data.get("session")
-            if isinstance(session, dict):
-                self._language = parse_transcription_language(session)
-            self._configured = True
-            await _send(self._ws, {
+    async def _handle_session_update(self, data: dict) -> None:
+        session = data.get("session")
+        if isinstance(session, dict):
+            self._language = parse_transcription_language(session)
+        self._configured = True
+        await _send(
+            self._ws,
+            {
                 "type": "session.updated",
                 "session": {
                     "input_audio_transcription": {"language": self._language},
                 },
-            })
+            },
+        )
+
+    async def _handle_audio_append(self, data: dict) -> None:
+        raw = data.get("audio") or ""
+        if not isinstance(raw, str):
+            await _send_invalid_request(self._ws, "audio required")
+            return
+        try:
+            pcm = base64.b64decode(raw)
+        except Exception:
+            await _send_invalid_request(self._ws, "invalid base64")
+            return
+        turn = await self._ensure_turn()
+        assert turn.upstream is not None
+        await turn.upstream.append_pcm(pcm)
+
+    async def handle_client_event(self, data: dict) -> None:
+        etype = str(data.get("type") or "")
+        if etype == "session.update":
+            await self._handle_session_update(data)
             return
         if not self._configured:
-            await _send(self._ws, {
-                "type": "error",
-                "error": {"type": "invalid_request", "message": "send session.update first"},
-            })
+            await _send_invalid_request(self._ws, "send session.update first")
             return
         if etype == "input_audio_buffer.append":
-            raw = data.get("audio") or ""
-            if not isinstance(raw, str):
-                await _send(self._ws, {
-                    "type": "error",
-                    "error": {"type": "invalid_request", "message": "audio required"},
-                })
-                return
-            try:
-                pcm = base64.b64decode(raw)
-            except Exception:
-                await _send(self._ws, {
-                    "type": "error",
-                    "error": {"type": "invalid_request", "message": "invalid base64"},
-                })
-                return
-            turn = await self._ensure_turn()
-            assert turn.upstream is not None
-            await turn.upstream.append_pcm(pcm)
+            await self._handle_audio_append(data)
             return
         if etype == "input_audio_buffer.commit":
             await self._finish_turn()
@@ -202,7 +238,11 @@ class AnthropicRealtimeAsrConnection:
     async def run(self) -> None:
         await self.send_session_start()
         async for msg in self._ws:
-            if msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.CLOSED, web.WSMsgType.ERROR):
+            if msg.type in (
+                web.WSMsgType.CLOSE,
+                web.WSMsgType.CLOSED,
+                web.WSMsgType.ERROR,
+            ):
                 break
             if msg.type != web.WSMsgType.TEXT:
                 continue
@@ -227,19 +267,30 @@ async def anthropic_realtime_ws_handler(request: web.Request) -> web.WebSocketRe
     try:
         resolved = resolve_handler_model(state, model)
     except ModelResolveError as exc:
-        await ws.send_str(json.dumps({
-            "type": "error",
-            "error": {"type": "invalid_request", "message": str(exc)},
-        }))
+        await ws.send_str(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {"type": "invalid_request", "message": str(exc)},
+                }
+            )
+        )
         await ws.close()
         return ws
     qwen = state.client_for(resolved, ("asr",), upstream_name="qwen")
     async with qwen.lease_valid_session() as session:
         if not session:
-            await ws.send_str(json.dumps({
-                "type": "error",
-                "error": {"type": "api_error", "message": "No valid Qwen session"},
-            }))
+            await ws.send_str(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "api_error",
+                            "message": "No valid Qwen session",
+                        },
+                    }
+                )
+            )
             await ws.close()
             return ws
         conn = AnthropicRealtimeAsrConnection(ws, qwen, session, model=resolved)

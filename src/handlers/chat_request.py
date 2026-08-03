@@ -1,25 +1,35 @@
 from __future__ import annotations
 
-"""双协议 chat 入口样板 + 上游 inject/截断准备。"""
+"""双协议 chat 请求解析、模型解析与上游 inject/截断。"""
 
 import json
 import logging
 from contextlib import aclosing
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple, Union
+from typing import (
+    Any,
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from aiohttp import web
 
 from core.dispatch import resolve_upstream
 from handlers import extract_system_for_inject
+from handlers.openai.protocol import _inject_protocol_options
+from handlers.openai.protocol import protocol_thinking_level
+from handlers.openai.tools import convert_tools_to_openai
 from handlers.shared.api_errors import (
     anthropic_error_response,
     model_resolve_error_response,
     resolve_handler_model,
 )
 from handlers.shared.fncall_inject import inject_fncall_for_request
-from handlers.openai.protocol import _inject_protocol_options
-from handlers.openai.thinking import protocol_thinking_level
-from handlers.openai.tools import convert_tools_to_openai
 from server.formats import (
     ClientDisconnectedError,
     _error_response,
@@ -56,7 +66,10 @@ async def read_chat_json(request: web.Request, *, protocol: str) -> ChatJsonResu
 
 
 def resolve_chat_model(
-    state: Any, requested: Any, *, protocol: str = "openai",
+    state: Any,
+    requested: Any,
+    *,
+    protocol: str = "openai",
 ) -> ChatModelResult:
     try:
         return resolve_handler_model(state, str(requested))
@@ -133,7 +146,8 @@ def prepare_injected_messages(
 ) -> PrepareResult:
     """返回 (injected_messages, full_content, thinking_route)。"""
     route = resolve_thinking_route(
-        model, protocol_thinking_level(protocol_options),
+        model,
+        protocol_thinking_level(protocol_options),
     )
     inject_options = _inject_protocol_options(protocol_options, route.use_entml)
     user_system_prompt, messages = extract_system_for_inject(messages)

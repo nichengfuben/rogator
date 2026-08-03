@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-"""HTTP request handlers — shared utilities, helpers and admin endpoints."""
+"""HTTP 请求处理：共享工具、辅助函数与管理端点。"""
 
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from aiohttp import web
-
 from echotools.base.logger import get_logger
 
 from server.formats import (
@@ -27,12 +26,14 @@ logger = get_logger("rogator")
 
 class EmptyResponseError(Exception):
     """模型返回空响应"""
+
     pass
 
 
 # ============================================================
 # 辅助函数
 # ============================================================
+
 
 def replace_last_user_content(
     messages: List[Dict[str, Any]],
@@ -121,7 +122,9 @@ def fold_system_into_user(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             old_text = normalize_message_content(merged[i].get("content"))
             merged[i] = {
                 **merged[i],
-                "content": user_system_prompt + "\n\n" + old_text if old_text else user_system_prompt,
+                "content": user_system_prompt + "\n\n" + old_text
+                if old_text
+                else user_system_prompt,
             }
             return merged
     merged.insert(0, {"role": "user", "content": user_system_prompt})
@@ -145,6 +148,7 @@ def get_state() -> AppState:
 # ============================================================
 # 路由
 # ============================================================
+
 
 def setup_routes(app: web.Application) -> None:
     from handlers.shared.route_table import build_route_specs
