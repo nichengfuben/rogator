@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""跨 Linux 发行版的监听端口占用检测与释放。"""
+"""跨平台（Windows / Linux / macOS）监听端口占用检测与释放。"""
 
 import logging
 import os
@@ -11,9 +11,13 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Sequence, Set
+from typing import Callable, List, Sequence, Set
 
 logger = logging.getLogger("rogator")
+
+_IS_WIN = sys.platform == "win32"
+_IS_DARWIN = sys.platform == "darwin"
+_IS_LINUX = sys.platform.startswith("linux")
 
 _SS_PID_RE = re.compile(r"pid=(\d+)")
 _LISTEN_STATE = "0A"
@@ -109,7 +113,7 @@ def _find_pids_fuser(port: int) -> Set[int]:
 
 
 def _inodes_listening_on_port(port: int) -> Set[str]:
-    if sys.platform not in ("linux", "linux2"):
+    if not _IS_LINUX:
         return set()
     needle = _linux_port_hex(port).upper()
     inodes: Set[str] = set()
@@ -159,20 +163,28 @@ def _find_pids_proc(port: int) -> Set[int]:
     return pids
 
 
+def _unix_pid_finders() -> tuple[Callable[[int], Set[int]], ...]:
+    """按平台选择端口 PID 探测工具链（macOS 无 ss/fuser/proc）。"""
+    if _IS_DARWIN:
+        return (_find_pids_lsof,)
+    return (_find_pids_ss, _find_pids_lsof, _find_pids_fuser, _find_pids_proc)
+
+
 def find_listen_pids(port: int) -> List[int]:
-    """查找监听 port 的进程（多工具 fallback，适配不同 Linux）。"""
-    if sys.platform == "win32":
+    """查找监听 port 的进程（多工具 fallback，适配 Win/Linux/macOS）。"""
+    if _IS_WIN:
         from echotools.exec.process.port import _find_pids_by_port  # noqa: SLF001
 
         return sorted(_find_pids_by_port(port))
 
     found: Set[int] = set()
-    for finder in (_find_pids_ss, _find_pids_lsof, _find_pids_fuser, _find_pids_proc):
+    finders = _unix_pid_finders()
+    for finder in finders:
         found.update(finder(port))
         if found:
             break
     if not found:
-        for finder in (_find_pids_lsof, _find_pids_fuser, _find_pids_proc):
+        for finder in finders:
             found.update(finder(port))
     return sorted(found)
 
@@ -212,8 +224,8 @@ def _try_fuser_kill(port: int) -> None:
 
 
 def force_release_listen_port(port: int) -> PortReleaseOutcome:
-    """强制释放 port；无法解析 PID 时仍尝试 fuser -k。"""
-    if sys.platform == "win32":
+    """强制释放 port；Linux 无 PID 时仍尝试 fuser -k。"""
+    if _IS_WIN:
         from echotools.exec.process.port import ensure_port_available
 
         raw = ensure_port_available(port, True)
@@ -226,7 +238,7 @@ def force_release_listen_port(port: int) -> PortReleaseOutcome:
         )
 
     pids = find_listen_pids(port)
-    if not pids:
+    if not pids and _IS_LINUX:
         _try_fuser_kill(port)
         time.sleep(0.3)
         pids = find_listen_pids(port)
@@ -236,7 +248,7 @@ def force_release_listen_port(port: int) -> PortReleaseOutcome:
         if _kill_pid_unix(pid):
             killed.append(pid)
 
-    if not pids:
+    if not pids and _IS_LINUX:
         _try_fuser_kill(port)
 
     for attempt in range(6):
@@ -249,7 +261,7 @@ def force_release_listen_port(port: int) -> PortReleaseOutcome:
             for pid in remaining:
                 if pid not in killed and _kill_pid_unix(pid):
                     killed.append(pid)
-        else:
+        elif _IS_LINUX:
             _try_fuser_kill(port)
         time.sleep(0.25 * (attempt + 1))
 

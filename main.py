@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Rogator - Qwen 长文本处理服务器 (entry point)"""
+"""Rogator 多上游 AI 适配服务器入口（OpenAI / Anthropic 兼容 API）。"""
 
 from __future__ import annotations
 
@@ -43,13 +43,13 @@ logger = get_logger("rogator")
 warn_if_config_version_mismatch(user_config_path(), logger)
 
 # ============================================================
-# ä»æ¨¡åå¯¼å¥
+# 从模块导入
 # ============================================================
 from handlers import get_state, setup_routes
 from handlers.shared.fncall_inject import prompt_dump_dir
 from server.records.response_record import response_dump_dir
 from server.records.sse_record import sse_dump_dir
-from upstream.qwen.chat.store import CLEANUP_INTERVAL
+from core.session.store import CLEANUP_INTERVAL, valid_session_count
 from core.registry import load_upstreams
 from state import AppState
 
@@ -80,7 +80,7 @@ logger.info(
 
 APP_NAME: str = "Rogator"
 APP_VERSION: str = "2.2.1"
-APP_DESCRIPTION: str = "Qwen 长文本处理适配服务器"
+APP_DESCRIPTION: str = "多上游 AI 适配服务器（Qwen / DeepSeek 等）"
 SHUTDOWN_CANCEL_GRACE: float = 0.3
 
 # 显示参数
@@ -110,15 +110,18 @@ def _install_signal_handlers(state: AppState) -> None:
 def _print_startup_info(state: AppState, host: str, port: int, prelogin_count: int) -> None:
     """打印启动信息横幅。"""
     logger.info("=" * BANNER_WIDTH)
-    logger.info("%s - Qwen Server", APP_NAME)
+    logger.info("%s - %s", APP_NAME, APP_DESCRIPTION)
     logger.info("  Version     : %s", APP_VERSION)
     logger.info("  Listen      : %s:%d", host, port)
     logger.info("  Model       : %s", state.model)
     logger.info("  Protocol    : %s", state.protocol.id)
-    qwen = state._clients.get("qwen")
-    session_count = qwen.session_count if qwen is not None else 0
+    session_parts = []
+    for name, client in state._clients.items():
+        sessions = getattr(client, "_sessions", None)
+        if sessions is not None:
+            session_parts.append(f"{name}={valid_session_count(sessions)}")
     logger.info("  Upstreams   : %s", ", ".join(state._registry.names()))
-    logger.info("  Sessions    : %d (max 12h, qwen)", session_count)
+    logger.info("  Sessions    : %s (max 12h)", ", ".join(session_parts) or "none")
     logger.info("  Models      : %d", len(state._models))
     logger.info("  Max body    : %d bytes (%.1f MiB)", CONFIG.client_max_body_bytes, CONFIG.client_max_body_bytes / (1024 * 1024))
     logger.info("  Send full   : %s (no truncate / no OSS prefix)", CONFIG.send_full_prompt)

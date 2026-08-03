@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 
 from server.config.port_release import (
     PortReleaseOutcome,
+    _find_pids_lsof,
     _find_pids_ss,
     _linux_port_hex,
     _parse_int_tokens,
+    _unix_pid_finders,
 )
 from server.config.startup_port import ensure_listen_port
 
@@ -28,6 +30,22 @@ class TestPortReleaseHelpers(unittest.TestCase):
             return_value=MagicMock(stdout=sample, stderr=""),
         ):
             self.assertEqual(_find_pids_ss(8932), {4242})
+
+    def test_unix_pid_finders_darwin_uses_lsof_only(self) -> None:
+        with patch("server.config.port_release._IS_DARWIN", True), patch(
+            "server.config.port_release._IS_LINUX",
+            False,
+        ):
+            self.assertEqual(_unix_pid_finders(), (_find_pids_lsof,))
+
+    def test_unix_pid_finders_linux_includes_ss(self) -> None:
+        with patch("server.config.port_release._IS_DARWIN", False), patch(
+            "server.config.port_release._IS_LINUX",
+            True,
+        ):
+            finders = _unix_pid_finders()
+            self.assertIn(_find_pids_ss, finders)
+            self.assertIn(_find_pids_lsof, finders)
 
 
 class TestStartupPort(unittest.TestCase):
