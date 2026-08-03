@@ -12,7 +12,6 @@ import aiohttp
 
 from upstream.qwen.account import Account
 
-from .baxia_store import regenerate_profile
 from .crypto import (
     BASE_URL,
     build_headers,
@@ -120,7 +119,7 @@ class AuthMixin:
         async with self._session.post(
             f"{AUTH_BASE_URL}{SIGNIN_PATH}",
             json=payload,
-            headers=build_login_headers(username=account.username),
+            headers=build_login_headers(),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=30),
             proxy=self._get_proxy_kwarg(),
@@ -207,7 +206,6 @@ class AuthMixin:
             logger.debug("Qwen 默认设置下发���败 %s: %s", account.username[:6], exc)
 
     async def _login_and_configure(self, account: Account) -> None:
-        regenerate_profile(account.username)
         await self._login(account)
         await self._configure_account(account)
         await self._save_default_settings(account)

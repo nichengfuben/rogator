@@ -42,24 +42,9 @@ from server.formats import (
     build_qwen_message,
     extract_last_user_content,
 )
-from upstream.qwen.auth.baxia_store import ensure_pool_baxia_profiles
-
-
 from server.config import CONFIG
 
 logger = logging.getLogger("rogator")
-
-
-def _init_qwen_baxia_profiles() -> None:
-    kept, created = ensure_pool_baxia_profiles()
-    total = kept + created
-    if created:
-        logger.info(
-            "Baxia profiles ready: total=%d kept=%d created=%d path=persist/qwen/baxia_profiles.json",
-            total, kept, created,
-        )
-    elif total:
-        logger.debug("Baxia profiles ready: total=%d (all cached)", total)
 
 
 async def _iter_qwen_sse_or_reconnect(
@@ -122,7 +107,6 @@ async def _post_chat_sse(
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
-        _init_qwen_baxia_profiles()
         self._init_session_pool()
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))
@@ -212,7 +196,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
                 audio_bytes, filename=filename, content_type=content_type,
             )
             http = await self._ensure_http_session()
-            asr = AsrTranscriber(http, session.token, username=session.username)
+            asr = AsrTranscriber(http, session.token)
             return await asr.transcribe(pcm, language=language or "zh-CN")
 
         return await run_with_connection_retry(
@@ -256,7 +240,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         )
         payload = build_chat_payload(chat_id, model, qwen_message)
         headers = build_headers(
-            session.token, username=session.username, chat_id=chat_id, include_sse=True,
+            session.token, chat_id=chat_id, include_sse=True,
         )
         response_id_box: List[str] = []
         cancelled = False

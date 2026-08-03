@@ -35,7 +35,6 @@ async def fetch_app_config(client: "QwenClient", session: "QwenSession") -> Dict
             f"{BASE_URL}{CONFIGS_PATH}",
             headers=build_headers(
                 session.token,
-                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             timeout=upstream_timeout(30.0),
@@ -63,7 +62,6 @@ async def fetch_user_settings(client: "QwenClient", session: "QwenSession") -> D
             f"{BASE_URL}{SETTINGS_PATH}",
             headers=build_headers(
                 session.token,
-                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             timeout=upstream_timeout(30.0),
@@ -104,7 +102,6 @@ async def parse_urls(
             f"{BASE_URL}{PARSE_URL_PATH}",
             headers=build_headers(
                 session.token,
-                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             json={"url_list": url_list},
@@ -173,7 +170,6 @@ async def reconnect_sse_events(
         params={"chat_id": chat_id, "response_id": response_id},
         headers=build_headers(
             session.token,
-            username=session.username,
             chat_id=chat_id,
             include_sse=True,
             cookies=merge_session_cookies(session.token),

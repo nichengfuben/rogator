@@ -209,12 +209,9 @@ class AsrTranscriber:
         self,
         session: aiohttp.ClientSession,
         token: str,
-        *,
-        username: str = "",
     ) -> None:
         self._session = session
         self._token = token
-        self._username = username
         self._results: List[str] = []
         self._last_text: str = ""
 
@@ -269,7 +266,7 @@ class AsrTranscriber:
         self._last_text = ""
         started = asyncio.Event()
 
-        ws_headers = build_asr_ws_headers(self._token, username=self._username)
+        ws_headers = build_asr_ws_headers(self._token)
         async with self._session.ws_connect(
             ws_url, ssl=False, heartbeat=30.0, proxy=None,
             headers=ws_headers,

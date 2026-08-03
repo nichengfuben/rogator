@@ -15,7 +15,6 @@ from core.session.accounts import Account
 from core.session.models_cache import ModelsCacheMixin
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
-from upstream.qwen.auth.baxia_store import regenerate_profile
 from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
 from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
 from upstream.qwen.chat.store import fetch_user_id
@@ -53,7 +52,6 @@ async def _qwen_signin_once(
     http: aiohttp.ClientSession,
     account: Account,
 ) -> Optional[PlatformSession]:
-    regenerate_profile(account.username)
     payload = {
         "email": account.username,
         "password": hash_password(account.password),
@@ -62,7 +60,7 @@ async def _qwen_signin_once(
     async with http.post(
         f"{AUTH_BASE_URL}/api/v2/auths/signin",
         json=payload,
-        headers=build_login_headers(username=account.username),
+        headers=build_login_headers(),
         timeout=upstream_timeout(LOGIN_TIMEOUT),
     ) as resp:
         if resp.status != 200:
@@ -120,7 +118,7 @@ class QwenLoginMixin(SessionLoginMixin):
 
 class ModelsFetchMixin(ModelsCacheMixin):
     async def _fetch_models_remote(self, s, session, now: float, keep_cached) -> List[str]:
-        headers = build_headers(session.token, username=session.username)
+        headers = build_headers(session.token)
         headers["Accept"] = "application/json"
         async with s.get(
             f"{BASE_URL}{MODELS_PATH}",

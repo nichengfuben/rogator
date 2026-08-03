@@ -83,7 +83,7 @@ class UploadMixin:
     async def _get_sts_credentials(
         self, session: QwenSession, filename: str, filesize: int, filetype: str
     ) -> Dict[str, Any]:
-        headers = build_headers(session.token, username=session.username)
+        headers = build_headers(session.token)
         headers.update(
             {
                 "Content-Type": "application/json;charset=UTF-8",

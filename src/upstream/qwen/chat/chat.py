@@ -87,7 +87,7 @@ async def _post_create_chat(client: QwenClient, session: QwenSession, model: str
         "timestamp": int(time.time() * 1000),
         "project_id": "",
     }
-    headers = build_headers(session.token, username=session.username, include_version=False)
+    headers = build_headers(session.token, include_version=False)
 
     async def _run() -> Dict[str, Any]:
         http = await client._ensure_http_session()
@@ -147,7 +147,7 @@ async def stop_upstream_generation(
             http,
             "POST",
             f"{BASE_URL}{STOP_CHAT_PATH}?chat_id={chat_id}",
-            headers=build_stop_headers(session.token, username=session.username),
+            headers=build_stop_headers(session.token),
             json=build_stop_payload(chat_id, response_id),
             timeout=upstream_timeout(15.0),
         )
@@ -176,7 +176,7 @@ async def delete_upstream_chat(
             http,
             "DELETE",
             f"{BASE_URL}{DELETE_CHAT_PATH.format(chat_id=chat_id)}",
-            headers=build_headers(session.token, username=session.username),
+            headers=build_headers(session.token),
             timeout=upstream_timeout(15.0),
         )
         return status in (200, 204)

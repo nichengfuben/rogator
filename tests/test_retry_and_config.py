@@ -640,7 +640,7 @@ class TestSessionRetry(unittest.TestCase):
                 asyncio.run(run_with_session_retry("req-2", state, _run))
         self.assertEqual(calls["n"], 1)
 
-    def test_run_with_session_retry_baxia_regenerates_profile(self) -> None:
+    def test_run_with_session_retry_baxia_switches_account(self) -> None:
         import asyncio
 
         state = MagicMock()
@@ -657,11 +657,10 @@ class TestSessionRetry(unittest.TestCase):
             return "ok"
 
         with patch("server.retry.session_retry.CONFIG", replace(get_config(), max_retry_on_error=2)):
-            with patch("server.retry.session_retry.regenerate_profile") as regen:
-                result = asyncio.run(run_with_session_retry("req-baxia", state, _run))
+            result = asyncio.run(run_with_session_retry("req-baxia", state, _run))
         self.assertEqual(result, "ok")
         self.assertEqual(calls["n"], 2)
-        regen.assert_called_once_with("old@test.com")
+        state.client.switch_to_next.assert_called_once()
 
     def test_run_with_session_retry_upstream_timeout(self) -> None:
         state = MagicMock()

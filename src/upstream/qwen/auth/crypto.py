@@ -164,28 +164,15 @@ def custom_encode(data: str, url_safe: bool = True) -> str:
     return encoded
 
 
-def get_baxia_tokens(
-    *,
-    username: str = "",
-    fingerprint_override: str = "",
-) -> Dict[str, str]:
-    # 有 username 时使用持久化 profile，否则随机生成。
-    if username.strip():
-        from upstream.qwen.auth.baxia_store import get_profile
-
-        profile = get_profile(username)
-        fingerprint = profile.fingerprint
-        bx_umid = profile.bx_umidtoken
-    elif fingerprint_override:
+def get_baxia_tokens(*, fingerprint_override: str = "") -> Dict[str, str]:
+    if fingerprint_override:
         fingerprint = fingerprint_override
-        bx_umid = get_bxumidtoken()
     else:
         fingerprint = generate_fingerprint()
-        bx_umid = get_bxumidtoken()
     return {
         "bxV": BAXIA_SDK_VERSION,
         "bxUa": generate_bxua(fingerprint),
-        "bxUmidToken": bx_umid,
+        "bxUmidToken": get_bxumidtoken(),
         "fingerprint": fingerprint,
     }
 
@@ -243,23 +230,16 @@ def _base_headers() -> Dict[str, str]:
     }
 
 
-def build_login_headers(*, username: str = "") -> Dict[str, str]:
-
+def build_login_headers() -> Dict[str, str]:
     headers = _base_headers()
     headers["Version"] = APP_VERSION
     headers["x-request-origin"] = BASE_URL
-    if username.strip():
-        baxia = get_baxia_tokens(username=username)
-        headers["bx-v"] = baxia["bxV"]
-        headers["bx-ua"] = baxia["bxUa"]
-        headers["bx-umidtoken"] = baxia["bxUmidToken"]
     return headers
 
 
 def build_headers(
     token: str,
     *,
-    username: str = "",
     chat_id: str = "",
     include_sse: bool = False,
     include_version: bool = True,
@@ -272,10 +252,7 @@ def build_headers(
     headers = _base_headers()
     if use_bearer and token:
         headers["Authorization"] = f"Bearer {token}"
-    baxia = get_baxia_tokens(
-        username=username,
-        fingerprint_override=fingerprint,
-    )
+    baxia = get_baxia_tokens(fingerprint_override=fingerprint)
     headers["bx-v"] = baxia["bxV"]
     headers["bx-ua"] = baxia["bxUa"]
     headers["bx-umidtoken"] = baxia["bxUmidToken"]
@@ -298,13 +275,13 @@ def build_headers(
     return headers
 
 
-def build_stop_headers(token: str, *, username: str = "") -> Dict[str, str]:
+def build_stop_headers(token: str) -> Dict[str, str]:
 
-    return build_headers(token, username=username, include_version=True)
+    return build_headers(token, include_version=True)
 
 
-def build_asr_ws_headers(token: str, *, username: str = "") -> Dict[str, str]:
+def build_asr_ws_headers(token: str) -> Dict[str, str]:
     # 需 Baxia + Cookie 以绕过 WAF。
-    headers = build_headers(token, username=username, include_version=True)
+    headers = build_headers(token, include_version=True)
     headers.pop("Content-Type", None)
     return headers

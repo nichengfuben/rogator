@@ -166,7 +166,6 @@ class AnthropicRealtimeAsrConnection:
             turn.upstream = AsrRealtimeSession(
                 http,
                 self._qwen_session.token,
-                username=self._qwen_session.username,
                 language=self._language,
             )
             await turn.upstream.start()

@@ -40,7 +40,6 @@ async def trigger_file_parse(
             f"{BASE_URL}{PARSE_FILE_PATH}",
             headers=build_headers(
                 session.token,
-                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             json={"file_id": file_id},
@@ -72,7 +71,6 @@ async def poll_parse_status(
             f"{BASE_URL}{PARSE_STATUS_PATH}",
             headers=build_headers(
                 session.token,
-                username=session.username,
                 cookies=merge_session_cookies(session.token),
             ),
             json={"file_id_list": file_ids},

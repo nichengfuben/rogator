@@ -140,7 +140,6 @@ class OaiRealtimeAsrConnection:
             self._turn.upstream = AsrRealtimeSession(
                 http,
                 self._qwen_session.token,
-                username=self._qwen_session.username,
                 language=self._language,
             )
             await self._turn.upstream.start()
