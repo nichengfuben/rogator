@@ -40,7 +40,7 @@ def watched_config_paths() -> List[Path]:
     if USER_CONFIG_DIR.is_dir():
         paths.extend(sorted(USER_CONFIG_DIR.glob("*.toml")))
     if USER_UPSTREAM_DIR.is_dir():
-        paths.extend(sorted(USER_UPSTREAM_DIR.glob("*.toml")))
+        paths.extend(sorted(USER_UPSTREAM_DIR.glob("**/*.toml")))
     return paths
 
 

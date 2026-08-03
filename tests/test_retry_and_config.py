@@ -137,6 +137,21 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(caps.get("chat"))
         self.assertTrue(caps.get("vision"))
 
+    def test_migrate_upstream_toml_to_nested_config(self) -> None:
+        from server.config.files import migrate_upstream_toml_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            flat = root / "config" / "upstream" / "qwen.toml"
+            flat.parent.mkdir(parents=True)
+            flat.write_text("[limits]\nqwen_send_max_chars = 999\n", encoding="utf-8")
+            migrate_upstream_toml_layout(root)
+            dest = root / "config" / "upstream" / "qwen" / "config.toml"
+            self.assertTrue(dest.is_file())
+            self.assertFalse(flat.is_file())
+            data = _loads_toml(dest.read_text(encoding="utf-8"))
+            self.assertEqual(data["limits"]["qwen_send_max_chars"], 999)
+
     def test_overlay_user_config_keeps_template_sections(self) -> None:
         template = {"server": {"port": 8932, "prelogin": 32}, "limits": {"max_concurrent": 32}}
         user = {"server": {"port": 9000}}

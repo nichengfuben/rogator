@@ -5,7 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.session.accounts import accounts_csv_path, accounts_for_upstream
+from core.session.accounts import (
+    accounts_csv_path,
+    accounts_for_upstream,
+    migrate_accounts_csv_layout,
+)
 
 
 class TestAccountsForUpstream(unittest.TestCase):
@@ -60,6 +64,30 @@ class TestAccountsForUpstream(unittest.TestCase):
             self.assertIn("deepseek-only@example.com", ds_names)
             self.assertNotIn("qwen-only@example.com", ds_names)
             self.assertNotIn("deepseek-only@example.com", qwen_names)
+
+    def test_migrate_accounts_csv_from_persist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = root / "persist" / "qwen" / "accounts.csv"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text(
+                "email,password\nmigrated@example.com,pw\n",
+                encoding="utf-8",
+            )
+            migrate_accounts_csv_layout(root)
+            dest = root / "config" / "upstream" / "qwen" / "accounts.csv"
+            self.assertTrue(dest.is_file())
+            self.assertFalse(legacy.is_file())
+            with patch.dict(
+                "core.session.accounts._UPSTREAM_CSV",
+                {"qwen": dest, "deepseek": root / "config" / "upstream" / "deepseek" / "accounts.csv"},
+                clear=False,
+            ), patch(
+                "core.session.accounts._ROOT_CSV",
+                root / "missing-root.csv",
+            ):
+                pool = accounts_for_upstream("qwen")
+            self.assertEqual([a.username for a in pool], ["migrated@example.com"])
 
 
 if __name__ == "__main__":

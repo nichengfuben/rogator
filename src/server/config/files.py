@@ -36,7 +36,8 @@ LEGACY_DIR_CONFIG = USER_CONFIG_PATH
 LEGACY_MODEL_REGISTRY = PROJECT_ROOT / "persist" / MODEL_REGISTRY_NAME
 LEGACY_UPSTREAM_DEFAULTS_NAME = "defaults.toml"
 
-_UPSTREAM_PER_PLATFORM = frozenset({"deepseek.toml", "qwen.toml"})
+KNOWN_UPSTREAM_NAMES: tuple[str, ...] = ("qwen", "deepseek")
+_UPSTREAM_PER_PLATFORM = frozenset(f"{name}.toml" for name in KNOWN_UPSTREAM_NAMES)
 
 
 def template_config_path() -> Path:
@@ -53,6 +54,14 @@ def upstream_template_dir() -> Path:
 
 def user_config_path() -> Path:
     return USER_CONFIG_PATH
+
+
+def upstream_user_dir(name: str) -> Path:
+    return USER_UPSTREAM_DIR / name.strip().lower()
+
+
+def upstream_user_config_path(name: str) -> Path:
+    return upstream_user_dir(name) / USER_CONFIG_NAME
 
 
 def _loads_toml(text: str) -> Dict[str, Any]:
@@ -93,6 +102,26 @@ def _move_if_missing(src: Path, dest: Path) -> None:
     shutil.move(str(src), str(dest))
 
 
+def _upstream_config_dest(name: str, root: Path) -> Path:
+    key = name.strip().lower()
+    return root / "config" / "upstream" / key / USER_CONFIG_NAME
+
+
+def migrate_upstream_toml_layout(root: Path | None = None) -> None:
+    """一次性迁移：flat/legacy 上游 TOML → config/upstream/<name>/config.toml。"""
+    base = root or PROJECT_ROOT
+    upstream_root = base / "config" / "upstream"
+    for name in KNOWN_UPSTREAM_NAMES:
+        dest = _upstream_config_dest(name, base)
+        for src in (
+            upstream_root / f"{name}.toml",
+            base / "config" / f"{name}.toml",
+            base / "configs" / f"{name}.toml",
+            upstream_root / name / f"{name}.toml",
+        ):
+            _move_if_missing(src, dest)
+
+
 def migrate_config_layout() -> None:
     """一次性迁移：configs/→config/、根 config.toml、persist/model_registry.jsonl。"""
     USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -103,7 +132,7 @@ def migrate_config_layout() -> None:
             if not item.is_file():
                 continue
             if item.name in _UPSTREAM_PER_PLATFORM:
-                _move_if_missing(item, USER_UPSTREAM_DIR / item.name)
+                _move_if_missing(item, _upstream_config_dest(item.stem, PROJECT_ROOT))
             else:
                 _move_if_missing(item, USER_CONFIG_DIR / item.name)
         try:
@@ -120,7 +149,13 @@ def migrate_config_layout() -> None:
 
     # 旧版：上游 TOML 直接在 config/ 根目录
     for name in _UPSTREAM_PER_PLATFORM:
-        _move_if_missing(USER_CONFIG_DIR / name, USER_UPSTREAM_DIR / name)
+        _move_if_missing(USER_CONFIG_DIR / name, _upstream_config_dest(Path(name).stem, PROJECT_ROOT))
+
+    migrate_upstream_toml_layout(PROJECT_ROOT)
+
+    from core.session.accounts import migrate_accounts_csv_layout
+
+    migrate_accounts_csv_layout(PROJECT_ROOT)
 
 
 def ensure_user_config_file() -> Path:

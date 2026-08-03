@@ -18,6 +18,7 @@ from server.config.files import (
     template_config_path,
     upstream_config_template_path,
     upstream_template_dir,
+    upstream_user_config_path,
 )
 
 if sys.version_info >= (3, 11):
@@ -199,7 +200,7 @@ def _overlay_if_exists(
 
 
 def _load_upstream_toml(name: str) -> Dict[str, Any]:
-    """``template/upstream_config.toml`` → ``config/upstream_config.toml`` → ``template/upstream/<name>.toml`` → ``config/upstream/<name>.toml``。"""
+    """template/upstream_config.toml → config/upstream_config.toml → template/upstream/<name>.toml → config/upstream/<name>/config.toml。"""
     raw: Dict[str, Any] = {}
     raw = _overlay_if_exists(raw, upstream_config_template_path())
     raw = _overlay_if_exists(raw, USER_CONFIG_DIR / UPSTREAM_CONFIG_TEMPLATE_NAME)
@@ -207,8 +208,10 @@ def _load_upstream_toml(name: str) -> Dict[str, Any]:
     if legacy_defaults.is_file():
         raw = _overlay_if_exists(raw, legacy_defaults)
     raw = _overlay_if_exists(raw, upstream_template_dir() / f"{name}.toml")
+    raw = _overlay_if_exists(raw, upstream_user_config_path(name))
+    # 兼容旧路径
     raw = _overlay_if_exists(raw, USER_UPSTREAM_DIR / f"{name}.toml")
-    # 兼容旧路径 config/<name>.toml、configs/<name>.toml
+    raw = _overlay_if_exists(raw, USER_UPSTREAM_DIR / name / f"{name}.toml")
     raw = _overlay_if_exists(raw, USER_CONFIG_DIR / f"{name}.toml")
     legacy_configs = PROJECT_ROOT / "configs" / f"{name}.toml"
     raw = _overlay_if_exists(raw, legacy_configs)

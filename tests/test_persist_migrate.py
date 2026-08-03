@@ -28,8 +28,8 @@ class TestSplitLoginHistory(unittest.TestCase):
     def test_flat_logins_split_by_account_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            qwen_csv = root / "persist" / "qwen" / "accounts.csv"
-            ds_csv = root / "persist" / "deepseek" / "accounts.csv"
+            qwen_csv = root / "config" / "upstream" / "qwen" / "accounts.csv"
+            ds_csv = root / "config" / "upstream" / "deepseek" / "accounts.csv"
             qwen_csv.parent.mkdir(parents=True)
             ds_csv.parent.mkdir(parents=True)
             qwen_csv.write_text("email,password\na@test.com,pw\n", encoding="utf-8")
@@ -57,10 +57,14 @@ class TestPersistMigrate(unittest.TestCase):
             persist = root / "persist"
             (persist / "qwen").mkdir(parents=True)
             (persist / "deepseek").mkdir(parents=True)
-            (persist / "qwen" / "accounts.csv").write_text(
+            qwen_csv = root / "config" / "upstream" / "qwen" / "accounts.csv"
+            ds_csv = root / "config" / "upstream" / "deepseek" / "accounts.csv"
+            qwen_csv.parent.mkdir(parents=True)
+            ds_csv.parent.mkdir(parents=True)
+            qwen_csv.write_text(
                 "email,password\nqwen@test.com,pw\n", encoding="utf-8"
             )
-            (persist / "deepseek" / "accounts.csv").write_text(
+            ds_csv.write_text(
                 "email,password\nds@test.com,pw\n", encoding="utf-8"
             )
 
@@ -237,7 +241,9 @@ class TestLoginHistoryMigrationIntegration(unittest.TestCase):
             qwen_path = root / "persist" / "qwen" / "login_history.json"
             qwen_path.parent.mkdir(parents=True)
             (root / "persist" / "deepseek").mkdir(parents=True)
-            (root / "persist" / "qwen" / "accounts.csv").write_text(
+            qwen_accounts = root / "config" / "upstream" / "qwen" / "accounts.csv"
+            qwen_accounts.parent.mkdir(parents=True)
+            qwen_accounts.write_text(
                 "email,password\na@test.com,pw\n", encoding="utf-8"
             )
             unified_login_history_path(root).write_text(

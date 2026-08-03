@@ -21,6 +21,7 @@ from core.persist.paths import (
     unified_models_path,
     unified_sessions_path,
 )
+from core.session.accounts import accounts_csv_path_for_root
 from core.session.io import atomic_write_text
 
 logger = logging.getLogger("rogator")
@@ -66,7 +67,7 @@ def load_upstream_usernames(upstream: str, root: Path) -> Set[str]:
 
 
 def upstream_dir_accounts_csv(upstream: str, root: Path) -> Path:
-    return persist_root(root) / upstream.strip().lower() / "accounts.csv"
+    return accounts_csv_path_for_root(upstream, root)
 
 
 def classify_username(

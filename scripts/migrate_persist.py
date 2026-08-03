@@ -46,6 +46,7 @@ def main() -> int:
             "models.json": (persist / "models.json").is_file(),
         }
         per_upstream = {}
+        config_upstream = args.root / "config" / "upstream"
         for upstream in KNOWN_UPSTREAMS:
             d = persist / upstream
             per_upstream[upstream] = {
@@ -54,9 +55,11 @@ def main() -> int:
                     "login_history.json",
                     "sessions.json",
                     "models.json",
-                    "accounts.csv",
                 )
             }
+            per_upstream[upstream]["accounts.csv"] = (
+                config_upstream / upstream / "accounts.csv"
+            ).is_file()
         print(json.dumps({"unified": unified, "per_upstream": per_upstream}, indent=2))
         return 0
 
