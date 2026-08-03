@@ -77,21 +77,23 @@ class TestSessionExpiry(unittest.TestCase):
 
     def test_prune_expired_on_get_valid_session(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
-            client = QwenClient(MagicMock())
-        client._sessions = [
-            _session(-5, name="old@test.com"),
-            _session(3600, name="ok@test.com"),
-        ]
-        client._current_index = 0
-        client._prelogin_target = 0
-        client.replenish_sessions = AsyncMock()
-        client._ensure_cleanup = AsyncMock()
-
         loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
+            with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+                client = QwenClient(MagicMock())
+            client._sessions = [
+                _session(-5, name="old@test.com"),
+                _session(3600, name="ok@test.com"),
+            ]
+            client._current_index = 0
+            client._prelogin_target = 0
+            client.replenish_sessions = AsyncMock()
+            client._ensure_cleanup = AsyncMock()
+
             session = loop.run_until_complete(client.get_valid_session())
         finally:
+            asyncio.set_event_loop(None)
             loop.close()
 
         self.assertEqual(len(client._sessions), 1)
@@ -101,11 +103,17 @@ class TestSessionExpiry(unittest.TestCase):
 
     def test_current_session_hides_expired(self) -> None:
         empty_meta = SessionStoreMeta()
-        with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
-            client = QwenClient(MagicMock())
-        client._sessions = [_session(-1, name="gone@test.com")]
-        client._current_index = 0
-        self.assertIsNone(client.current_session)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            with patch("core.session.pool.load_upstream_sessions", return_value=([], empty_meta)):
+                client = QwenClient(MagicMock())
+            client._sessions = [_session(-1, name="gone@test.com")]
+            client._current_index = 0
+            self.assertIsNone(client.current_session)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
 
     def test_example_exp_cleanup_target(self) -> None:
         # 设计示例：exp=1785033999 → 清理阈值 1785033969
