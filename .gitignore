@@ -70,3 +70,5 @@ accounts.csv
 achecker.py.lnk
 .backup/
 .repo/
+node_modules/
+

@@ -1,0 +1,9 @@
+{
+  "name": "qwen-fireye-runner",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Node/jsdom runner for vendored AWSC fireyejs (no real browser)",
+  "dependencies": {
+    "jsdom": "^26.1.0"
+  }
+}

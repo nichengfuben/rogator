@@ -17,6 +17,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Final, List, Literal, Optional, Tuple
+import logging
+
+logger = logging.getLogger("rogator")
 
 # ---------------------------------------------------------------------------
 # Constants — 与 routes.py 对齐
@@ -128,7 +131,7 @@ def _encode_payload(text: str) -> str:
 
 
 def generate_bxua(fingerprint: str) -> str:
-    """兼容占位：真值由 fireyejs getFYToken(url) 每请求生成（形如 231!… ~1.5KB）。"""
+    """占位 bx-ua；优先走 fireyejs runner（见 get_baxia_tokens）。"""
     nonce = secrets.token_hex(4)
     payload = f"{fingerprint}|{int(time.time() * 1000)}|{nonce}|{BAXIA_VERSION}"
     return _encode_payload(payload)
@@ -201,6 +204,12 @@ def reset_baxia_runtime() -> None:
     with _runtime_lock:
         _runtime_fp = ""
         _runtime_umid = ""
+    try:
+        from upstream.qwen.auth.fy_bridge import reset_fireye_worker
+
+        reset_fireye_worker()
+    except Exception:
+        pass
 
 
 def path_needs_baxia_ua(path: str) -> bool:
@@ -238,14 +247,34 @@ def custom_encode(data: str, url_safe: bool = True) -> str:
     return encoded
 
 
-def get_baxia_tokens(*, fingerprint_override: str = "") -> Dict[str, str]:
-    # umid/指纹会话级复用；bx-ua 每次请求刷新（对齐 getFYToken）。
+def get_baxia_tokens(
+    *,
+    fingerprint_override: str = "",
+    req_url: str = "",
+) -> Dict[str, str]:
+    # umid/指纹会话级复用；bx-ua 优先 fireyejs（每请求），失败则占位。
     fingerprint, umid = ensure_baxia_runtime(
         fingerprint_override=fingerprint_override,
     )
+    bx_ua = ""
+    try:
+        from upstream.qwen.auth.fy_bridge import fireye_available, request_fireye_tokens
+
+        if fireye_available():
+            data = request_fireye_tokens(req_url)
+            cand = str(data.get("bxUa") or "")
+            if cand.startswith("231!") and len(cand) > 100:
+                bx_ua = cand
+            fy_umid = str(data.get("bxUmidToken") or "").strip()
+            if fy_umid and validate_bxumidtoken(fy_umid):
+                umid = fy_umid
+    except Exception as exc:
+        logger.debug("fireye token fallback: %s", exc)
+    if not bx_ua:
+        bx_ua = generate_bxua(fingerprint)
     return {
         "bxV": BAXIA_SDK_VERSION,
-        "bxUa": generate_bxua(fingerprint),
+        "bxUa": bx_ua,
         "bxUmidToken": umid,
         "fingerprint": fingerprint,
     }
