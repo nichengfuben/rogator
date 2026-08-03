@@ -242,15 +242,12 @@ class SessionReplenishMixin:
             self._replenish_event.clear()
 
     async def _replenish_login_batch(self, need: int, interval: float) -> int:
+        if not self._login_pool_available():
+            return 0
         logged = 0
         for attempt in range(need):
             account = self._pick_account_for_login()
             if account is None:
-                if valid_session_count(self._sessions) == 0:
-                    logger.debug(
-                        "No login-eligible accounts for %s (all blocked/muted/in-use)",
-                        self.UPSTREAM_NAME,
-                    )
                 break
             ps = await self.login_account(account)
             if ps:
@@ -260,20 +257,15 @@ class SessionReplenishMixin:
         return logged
 
     def _log_replenish_result(self, logged: int, target: int) -> None:
-        if logged:
-            logger.info(
-                "Session pool [%s]: +%d new, %d ready (target=%d)",
-                self.UPSTREAM_NAME,
-                logged,
-                valid_session_count(self._sessions),
-                target,
-            )
-        elif valid_session_count(self._sessions) == 0:
-            logger.debug(
-                "Session pool replenish failed [%s] (target=%d)",
-                self.UPSTREAM_NAME,
-                target,
-            )
+        if not logged:
+            return
+        logger.info(
+            "Session pool [%s]: +%d new, %d ready (target=%d)",
+            self.UPSTREAM_NAME,
+            logged,
+            valid_session_count(self._sessions),
+            target,
+        )
 
     async def replenish_sessions(
         self,
@@ -282,11 +274,10 @@ class SessionReplenishMixin:
         scheduler: Optional["RequestScheduler"] = None,
     ) -> None:
         """有效 session 不足目标时补登；空闲仅保 bootstrap，有负载再扩池。"""
+        if not self._login_pool_available():
+            return
         target = self._effective_prelogin_target(count, scheduler=scheduler)
         await self._ensure_cleanup()
-        if not self._pool_accounts():
-            logger.warning("No accounts available for %s", self.UPSTREAM_NAME)
-            return
         valid = valid_session_count(self._sessions)
         need = max(0, target - valid)
         if need <= 0:

@@ -29,6 +29,7 @@ from core.session.store import (
     save_upstream_sessions,
     valid_session_count,
 )
+from server.formats import UpstreamUnavailableError
 from server.records.login_history import LoginHistoryStore
 
 logger = logging.getLogger("rogator")
@@ -235,6 +236,8 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
         except asyncio.TimeoutError:
             logger.warning("Login [%s] %s timed out", self.UPSTREAM_NAME, account.username[:6])
             return None
+        except UpstreamUnavailableError:
+            return None
         except Exception as exc:
             logger.warning(
                 "Login exception [%s] for %s: %s",
@@ -246,6 +249,10 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
 
     def _pool_accounts(self) -> List[Account]:
         return accounts_for_upstream(self.UPSTREAM_NAME)
+
+    def _login_pool_available(self) -> bool:
+        """号池为空时不尝试登录、不刷 replenish 日志。"""
+        return bool(self._pool_accounts())
 
     def _active_usernames(self) -> set[str]:
         return {s.username for s in self._sessions if s.is_valid and not s.is_expired()}

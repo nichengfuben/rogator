@@ -88,6 +88,17 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
         pool = accounts_for_upstream(self.UPSTREAM_NAME)
         return [DsAccount(username=a.username, password=a.password) for a in pool]
 
+    def _login_pool_available(self) -> bool:
+        return bool(self._ds_accounts())
+
+    async def _ensure_ready_for_login(self) -> Optional[DeepseekClient]:
+        if not self._ds_accounts():
+            return None
+        async with self._startup_lock:
+            async with self._transport_lock:
+                await self._init_minimal_unlocked()
+        return self._inner
+
     def _on_http_session_created(self, session: aiohttp.ClientSession) -> None:
         if self._inner is not None:
             self._inner.rebind_http_session(session)
@@ -113,7 +124,6 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
             return
         ds_accounts = self._ds_accounts()
         if not ds_accounts:
-            logger.warning("DeepSeek: 无可用账号")
             self._startup_done = True
             return
         async with self._transport_lock:
@@ -131,7 +141,9 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
         )
 
     async def _login_once(self, account: Account) -> Optional[PlatformSession]:
-        inner = await self._ensure_ready(skip_background=True)
+        inner = await self._ensure_ready_for_login()
+        if inner is None:
+            return None
         http = await self._ensure_http_session()
         try:
             token, user_id, did = await login(
@@ -169,6 +181,8 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
         return ps
 
     async def _perform_login(self, account: Account) -> Optional[PlatformSession]:
+        if not self._login_pool_available():
+            return None
         async def _run() -> Optional[PlatformSession]:
             return await self._login_once(account)
 

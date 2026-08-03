@@ -226,6 +226,10 @@ def start_background_tasks(state: "AppState") -> List[asyncio.Task]:
     for name, client in state._clients.items():
         if not hasattr(client, "replenish_sessions"):
             continue
+        pool_ok = getattr(client, "_login_pool_available", None)
+        if callable(pool_ok):
+            if not pool_ok():
+                continue
         tasks.append(asyncio.create_task(session_maintenance_loop(state, client, name)))
     tasks.append(asyncio.create_task(models_refresh_loop(state)))
     return tasks
