@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import aiohttp
@@ -69,6 +70,74 @@ async def _iter_qwen_sse_or_reconnect(
             yield event
 
 
+def _note_sse_stats(stats: Dict[str, Any], event: Dict[str, Any]) -> None:
+    now_ms = int(time.time() * 1000)
+    if not stats["first_chunk_ms"]:
+        stats["first_chunk_ms"] = now_ms
+    stats["end_chunk_ms"] = now_ms
+    content = event.get("content")
+    if isinstance(content, str):
+        stats["total_chars"] += len(content)
+
+
+async def _stream_one_chat_post(
+    client: "QwenClient",
+    session: QwenSession,
+    chat_id: str,
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout: Any,
+    response_id_box: List[str],
+    stats: Dict[str, Any],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    http = await client._ensure_http_session()
+    async with http.post(url, json=payload, headers=headers, timeout=timeout) as resp:
+        if resp.status != 200:
+            await handle_chat_error(client, resp, session)
+        async for event in _iter_qwen_sse_or_reconnect(
+            client, session, chat_id, resp, response_id_box,
+        ):
+            _note_sse_stats(stats, event)
+            yield event
+
+
+def _reraise_or_prepare_retry(exc: Exception, attempt: int) -> Exception:
+    """不可重试则抛出；可重试则返回待包装异常占位（调用方 reset）。"""
+    conn_err = map_connection_error(exc)
+    if conn_err is None or attempt >= 2:
+        if conn_err is not None:
+            raise conn_err from exc
+        raise
+    return exc
+
+
+async def _iter_post_chat_sse_attempts(
+    client: "QwenClient",
+    session: QwenSession,
+    chat_id: str,
+    url: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout: Any,
+    response_id_box: List[str],
+    stats: Dict[str, Any],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    for attempt in range(1, 3):
+        try:
+            async for event in _stream_one_chat_post(
+                client, session, chat_id, url, payload, headers, timeout, response_id_box, stats,
+            ):
+                yield event
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _reraise_or_prepare_retry(exc, attempt)
+            await client.reset_http_transport()
+            await asyncio.sleep(0.6 * attempt)
+
+
 async def _post_chat_sse(
     client: "QwenClient",
     session: QwenSession,
@@ -77,31 +146,47 @@ async def _post_chat_sse(
     headers: Dict[str, str],
     response_id_box: List[str],
 ) -> AsyncGenerator[Dict[str, Any], None]:
+    from upstream.qwen.auth.report import (
+        report_completions_request_id,
+        report_streaming_statistics,
+    )
+
     url = f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}"
     timeout = upstream_timeout(REQUEST_TOTAL_TIMEOUT)
-    for attempt in range(1, 3):
-        try:
-            http = await client._ensure_http_session()
-            async with http.post(
-                url, json=payload, headers=headers, timeout=timeout,
-            ) as resp:
-                if resp.status != 200:
-                    await handle_chat_error(client, resp, session)
-                async for event in _iter_qwen_sse_or_reconnect(
-                    client, session, chat_id, resp, response_id_box,
-                ):
-                    yield event
-            return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            conn_err = map_connection_error(exc)
-            if conn_err is None or attempt >= 2:
-                if conn_err is not None:
-                    raise conn_err from exc
-                raise
-            await client.reset_http_transport()
-            await asyncio.sleep(0.6 * attempt)
+    request_id = str(headers.get("X-Request-Id") or headers.get("x-request-id") or "")
+    model = str(payload.get("model") or "")
+    await report_completions_request_id(
+        client, session, request_id=request_id, chat_id=chat_id,
+    )
+    stats: Dict[str, Any] = {
+        "api_start_ms": int(time.time() * 1000),
+        "first_chunk_ms": 0,
+        "end_chunk_ms": 0,
+        "total_chars": 0,
+        "is_error": False,
+    }
+    try:
+        async for event in _iter_post_chat_sse_attempts(
+            client, session, chat_id, url, payload, headers, timeout, response_id_box, stats,
+        ):
+            yield event
+    except Exception:
+        stats["is_error"] = True
+        raise
+    finally:
+        await report_streaming_statistics(
+            client,
+            session,
+            chat_id=chat_id,
+            model=model,
+            request_id=request_id,
+            response_id=response_id_box[0] if response_id_box else "",
+            api_start_ms=stats["api_start_ms"],
+            first_chunk_ms=stats["first_chunk_ms"],
+            end_chunk_ms=stats["end_chunk_ms"] or int(time.time() * 1000),
+            total_chars=stats["total_chars"],
+            is_error=stats["is_error"],
+        )
 
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):

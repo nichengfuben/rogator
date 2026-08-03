@@ -61,7 +61,7 @@ def _raise_for_non_json_create_chat(
     snippet = text.strip()[:200]
     raise UpstreamWafBlockedError(
         "Qwen create_chat returned non-JSON (possible Baxia/WAF block). "
-        "Configure per-account Baxia profiles or re-login. "
+        "Configure Baxia headers or re-login. "
         f"Snippet: {snippet}",
         upstream="qwen",
     )
@@ -79,15 +79,10 @@ def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict
 
 
 async def _post_create_chat(client: QwenClient, session: QwenSession, model: str, timeout_s: float) -> Dict[str, Any]:
-    payload = {
-        "title": "New Chat",
-        "models": [model],
-        "chat_mode": "local",
-        "chat_type": "t2t",
-        "timestamp": int(time.time() * 1000),
-        "project_id": "",
-    }
-    headers = build_headers(session.token, include_version=False)
+    from upstream.qwen.chat.upload.payload import build_new_chat_payload
+
+    payload = build_new_chat_payload(model)
+    headers = build_headers(session.token, include_version=True)
 
     async def _run() -> Dict[str, Any]:
         http = await client._ensure_http_session()
@@ -113,6 +108,13 @@ async def create_chat_for_session(
     session: QwenSession,
     model: str,
 ) -> str:
+    from upstream.qwen.auth.report import (
+        report_chat_generation,
+        report_generation_create_return,
+        report_user_status,
+    )
+
+    await report_chat_generation(client, session)
     timeout_s = CONFIG.create_chat_timeout
     try:
         data = await _post_create_chat(client, session, model, timeout_s)
@@ -129,6 +131,8 @@ async def create_chat_for_session(
     chat_id = str((data.get("data") or {}).get("id", ""))
     if not chat_id:
         raise RuntimeError(f"Create chat failed: no chat_id in {data}")
+    await report_generation_create_return(client, session, chat_id)
+    await report_user_status(client, session, page_path=f"/c/{chat_id}")
     return chat_id
 
 

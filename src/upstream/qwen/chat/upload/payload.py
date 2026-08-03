@@ -201,14 +201,13 @@ def build_payload(
 
 
 def build_new_chat_payload(model: str, chat_type: str = "t2t") -> Dict[str, Any]:
-
     return {
-        "title": "新建对话",
+        "chatId": "",
         "models": [model],
-        "chat_mode": "local" if USE_LOCAL_MODE else "normal",
-        "chat_type": chat_type,
-        "timestamp": int(time.time() * 1000),
         "project_id": "",
+        "timestamp": int(time.time() * 1000),
+        "chat_type": chat_type,
+        "chat_mode": "local" if USE_LOCAL_MODE else "normal",
     }
 
 

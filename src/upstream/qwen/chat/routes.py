@@ -16,23 +16,25 @@ AUTH_BASE_URL: Final[str] = "https://auth.qwen.ai"
 CHAT_ORIGIN: Final[str] = "https://chat.qwen.ai"
 AUTH_API_PREFIX: Final[str] = "/api/v2"
 CHAT_API_PREFIX: Final[str] = "/api/v2"
-APP_VERSION: Final[str] = "0.2.71"
+APP_VERSION: Final[str] = "0.2.81"
 WEB_VERSION: Final[str] = APP_VERSION
 API_VERSION: Final[str] = "2.1"
 BAXIA_VERSION: Final[str] = "0.0.3"
 BXUA_VERSION: Final[str] = BAXIA_VERSION
-BAXIA_SDK_VERSION: Final[str] = "2.5.36"
-USE_LOCAL_MODE: Final[bool] = True
+BAXIA_SDK_VERSION: Final[str] = "2.5.37"
+USE_LOCAL_MODE: Final[bool] = False
 USER_AGENT: Final[str] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
 )
 USER_AGENT_MOBILE: Final[str] = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
     "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 )
-SEC_CH_UA: Final[str] = '"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"'
-SEC_CH_UA_PLATFORM: Final[str] = '"macOS"'
+SEC_CH_UA: Final[str] = (
+    '"Google Chrome";v="153", "Not_A Brand";v="8", "Chromium";v="153"'
+)
+SEC_CH_UA_PLATFORM: Final[str] = '"Windows"'
 FRONTEND_VERSION: Final[str] = WEB_VERSION
 CUSTOM_BASE64_CHARS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 
@@ -44,7 +46,10 @@ STOP_CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chat/completions/stop"
 DELETE_CHAT_PATH: Final[str] = f"{CHAT_API_PREFIX}/chats/{{chat_id}}"
 SETTINGS_PATH: Final[str] = f"{CHAT_API_PREFIX}/users/user/settings"
 SETTINGS_UPDATE_PATH: Final[str] = f"{CHAT_API_PREFIX}/users/user/settings/update"
+USERS_STATUS_PATH: Final[str] = f"{CHAT_API_PREFIX}/users/status"
 CONFIGS_PATH: Final[str] = f"{CHAT_API_PREFIX}/configs/"
+SETTING_CONFIG_PATH: Final[str] = f"{CHAT_API_PREFIX}/configs/setting-config"
+APLUS_BASE_URL: Final[str] = "https://aplus.qwen.ai"
 AUTHS_V1_PATH: Final[str] = "/api/v1/auths/"
 MODELS_PATH: Final[str] = f"{CHAT_API_PREFIX}/models"
 TTS_PATH: Final[str] = f"{CHAT_API_PREFIX}/tts/completions"
@@ -210,6 +215,7 @@ DEFAULT_FULL_SETTINGS: Final[Dict[str, Any]] = {
 
 __all__ = [
     "BASE_URL",
+    "APLUS_BASE_URL",
     "USER_AGENT",
     "USER_AGENT_MOBILE",
     "SEC_CH_UA",
@@ -217,6 +223,8 @@ __all__ = [
     "BAXIA_SDK_VERSION",
     "BXUA_VERSION",
     "CUSTOM_BASE64_CHARS",
+    "USERS_STATUS_PATH",
+    "SETTING_CONFIG_PATH",
     "MODELS",
     "CAPS",
     "SMART_PROXY_ENABLED",

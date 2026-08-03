@@ -81,9 +81,13 @@ async def fetch_user_settings(client: "QwenClient", session: "QwenSession") -> D
 
 
 async def warmup_session(client: "QwenClient", session: "QwenSession") -> None:
-    """登录后拉取 configs/settings（对齐 FE 启动序列）。"""
+    """登录后拉取 configs/settings，并补齐 FE 启动上报。"""
+    from upstream.qwen.auth.report import report_compare_log_arrival, report_user_status
+
     await fetch_app_config(client, session)
     await fetch_user_settings(client, session)
+    await report_compare_log_arrival(client)
+    await report_user_status(client, session, page_path="/")
 
 
 async def parse_urls(
