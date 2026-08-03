@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from core.session.accounts import Account
 from core.session.store import SessionStoreMeta
 from core.transport.http import close_shared_connector
 from server.retry.http_client import client_session
@@ -58,14 +59,15 @@ class TestDeepSeekTransport(unittest.IsolatedAsyncioTestCase):
         await client.shutdown()
 
     async def test_login_retries_after_session_closed(self) -> None:
+        account = Account(username="c@test.com", password="pw")
         with patch(
             "core.session.pool.load_upstream_sessions",
             return_value=([], SessionStoreMeta()),
+        ), patch(
+            "core.session.pool.accounts_for_upstream",
+            return_value=[account],
         ):
             client = DeepSeekClient()
-        account = MagicMock()
-        account.username = "c@test.com"
-        account.password = "pw"
         calls = {"n": 0}
 
         async def _fake_login_once(_account):

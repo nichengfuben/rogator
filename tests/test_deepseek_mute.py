@@ -106,7 +106,11 @@ class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
         client.login_account.assert_not_called()
 
     async def test_perform_login_waf_challenge_mutes_account(self) -> None:
-        with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())):
+        waf_account = Account(username="waf@test.com", password="pw")
+        with patch("core.session.pool.load_upstream_sessions", return_value=([], SessionStoreMeta())), patch(
+            "core.session.pool.accounts_for_upstream",
+            return_value=[waf_account],
+        ):
             client = DeepSeekClient(MagicMock())
         client._save_meta = MagicMock(return_value=[])
         mock_http = MagicMock(closed=False)
@@ -118,7 +122,7 @@ class TestSessionPoolMute(unittest.IsolatedAsyncioTestCase):
             "upstream.deepseek.client.login",
             AsyncMock(side_effect=DeepSeekWafChallengeError()),
         ):
-            ps = await client._perform_login(Account(username="waf@test.com", password="pw"))
+            ps = await client._perform_login(waf_account)
 
         self.assertIsNone(ps)
         self.assertIn("waf@test.com", client._muted_accounts)

@@ -29,10 +29,8 @@ LOG_DIR = PROJECT_ROOT / "logs"
 
 
 def _loads_toml(text: str) -> Dict[str, Any]:
-    """解析 TOML 文本；3.11+ 用 stdlib tomllib，否则 tomli。"""
-    if sys.version_info >= (3, 11):
-        return _toml_loader.loads(text)
-    return _toml_loader.loads(text.encode("utf-8"))
+    """解析 TOML 文本；3.11+ 用 stdlib tomllib，否则 tomli（均接受 str）。"""
+    return _toml_loader.loads(text)
 
 
 @dataclass(frozen=True)
