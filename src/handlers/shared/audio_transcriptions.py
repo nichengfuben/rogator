@@ -51,7 +51,7 @@ async def _read_multipart_audio(
         elif field.name == "stream":
             stream = _parse_bool_field((await field.read()).decode("utf-8", errors="replace"))
     if not audio:
-        raise ValueError("?? file ??")
+        raise ValueError("缺少 file 字段")
     return audio, filename, content_type, model, language, stream, response_format
 
 

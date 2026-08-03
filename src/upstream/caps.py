@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-"""?? capabilities?defaults + TOML ?????"""
+"""上游 capabilities：defaults + TOML 覆盖合并。"""
 
 from typing import Dict, FrozenSet, Mapping
 
