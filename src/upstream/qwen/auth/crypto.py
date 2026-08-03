@@ -131,7 +131,7 @@ def _encode_payload(text: str) -> str:
 
 
 def generate_bxua(fingerprint: str) -> str:
-    """占位 bx-ua；优先走 fireyejs runner（见 get_baxia_tokens）。"""
+    """占位 bx-ua；正常路径走 fireye 纯 Python 模块。"""
     nonce = secrets.token_hex(4)
     payload = f"{fingerprint}|{int(time.time() * 1000)}|{nonce}|{BAXIA_VERSION}"
     return _encode_payload(payload)
@@ -205,9 +205,9 @@ def reset_baxia_runtime() -> None:
         _runtime_fp = ""
         _runtime_umid = ""
     try:
-        from upstream.qwen.auth.fy_bridge import reset_fireye_worker
+        from upstream.qwen.auth.fireye import reset_session
 
-        reset_fireye_worker()
+        reset_session()
     except Exception:
         pass
 
@@ -252,22 +252,21 @@ def get_baxia_tokens(
     fingerprint_override: str = "",
     req_url: str = "",
 ) -> Dict[str, str]:
-    # umid/指纹会话级复用；bx-ua 优先 fireyejs（每请求），失败则占位。
+    # umid/指纹会话级复用；bx-ua 每请求由 fireye 纯 Python 生成。
     fingerprint, umid = ensure_baxia_runtime(
         fingerprint_override=fingerprint_override,
     )
     bx_ua = ""
     try:
-        from upstream.qwen.auth.fy_bridge import fireye_available, request_fireye_tokens
+        from upstream.qwen.auth.fireye import bind_fingerprint, get_fy_token, get_uid_token
 
-        if fireye_available():
-            data = request_fireye_tokens(req_url)
-            cand = str(data.get("bxUa") or "")
-            if cand.startswith("231!") and len(cand) > 100:
-                bx_ua = cand
-            fy_umid = str(data.get("bxUmidToken") or "").strip()
-            if fy_umid and validate_bxumidtoken(fy_umid):
-                umid = fy_umid
+        bind_fingerprint(fingerprint, umid=umid)
+        cand = get_fy_token(req_url, fingerprint=fingerprint)
+        if cand.startswith("231!") and len(cand) > 100:
+            bx_ua = cand
+        fy_umid = get_uid_token(fingerprint=fingerprint).strip()
+        if fy_umid and validate_bxumidtoken(fy_umid):
+            umid = fy_umid
     except Exception as exc:
         logger.debug("fireye token fallback: %s", exc)
     if not bx_ua:
