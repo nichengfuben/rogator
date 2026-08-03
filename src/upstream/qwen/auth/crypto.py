@@ -12,10 +12,11 @@ import os
 import re
 import secrets
 import struct
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Dict, Final, List, Literal, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants — 与 routes.py 对齐
@@ -52,8 +53,8 @@ def hash_password(password: str) -> str:
 
 
 def validate_bxumidtoken(token: str) -> bool:
-
-    return bool(token and re.fullmatch(r"(?:T2gA)?[A-Za-z0-9+/=]{20,}", token))
+    # HAR：T2gA… 含 -/=，长度约 68。
+    return bool(token and re.fullmatch(r"(?:T2gA)?[A-Za-z0-9+/=_-]{20,}", token))
 
 
 # ---------------------------------------------------------------------------
@@ -127,20 +128,93 @@ def _encode_payload(text: str) -> str:
 
 
 def generate_bxua(fingerprint: str) -> str:
-
-    payload = f"{fingerprint}|{int(time.time() * 1000)}|{BAXIA_VERSION}"
+    """兼容占位：真值由 fireyejs getFYToken(url) 每请求生成（形如 231!… ~1.5KB）。"""
+    nonce = secrets.token_hex(4)
+    payload = f"{fingerprint}|{int(time.time() * 1000)}|{nonce}|{BAXIA_VERSION}"
     return _encode_payload(payload)
 
 
-def get_bxumidtoken(token: str = "") -> str:
+_UMID_BODY_LEN: Final[int] = 64
+_UMID_ALPHABET: Final[str] = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_"
+)
+# FE main.js checkApiPath：仅这些路径注入 bx-ua / bx-umidtoken。
+BAXIA_UA_PATH_MARKERS: Final[Tuple[str, ...]] = (
+    "/api/chat/completions",
+    "/api/chats/new",
+    "/api/chat/completed",
+    "/api/v1/chats",
+    "/api/v1/chats/all/tags",
+    "/api/task/suggestions/completions",
+    "/api/v1/tasks/status",
+    "/api/v1/files/getstsToken",
+    "/api/task/title/completions",
+    "/api/task/tags/completions",
+    "/api/parse_url",
+    "/api/v2/chats",
+    "/api/v2/chat/completions",
+    "/api/v2/task/suggestions/completions",
+    "/api/v2/files/getstsToken",
+    "/api/v2/community",
+    "/api/v2/tts/completions",
+    "/api/v2/files/getfilelink",
+    "/api/v2/files/parse",
+    "/api/v2/files/parse/status",
+    "/api/v2/evaluations/feedback",
+)
+BaxiaMode = Literal["full", "version", "none"]
+_runtime_lock = threading.Lock()
+_runtime_fp: str = ""
+_runtime_umid: str = ""
 
+
+def _new_random_bx_umidtoken() -> str:
+    body = "".join(secrets.choice(_UMID_ALPHABET) for _ in range(_UMID_BODY_LEN - 1))
+    return "T2gA" + body + "="
+
+
+def get_bxumidtoken(token: str = "") -> str:
     if token:
         return token
     env_value = os.environ.get("QWEN_BX_UMIDTOKEN", "").strip()
     if env_value:
         return env_value
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    return "T2gA" + "".join(secrets.choice(alphabet) for _ in range(40))
+    return _new_random_bx_umidtoken()
+
+
+def ensure_baxia_runtime(*, fingerprint_override: str = "") -> Tuple[str, str]:
+    """对齐 FE：页面会话内 umid/指纹稳定；在 getUidToken 就绪后才发受保护 API。"""
+    global _runtime_fp, _runtime_umid
+    with _runtime_lock:
+        if fingerprint_override.strip():
+            _runtime_fp = fingerprint_override.strip()
+        elif not _runtime_fp:
+            _runtime_fp = generate_fingerprint()
+        if not _runtime_umid:
+            _runtime_umid = get_bxumidtoken()
+        return _runtime_fp, _runtime_umid
+
+
+def reset_baxia_runtime() -> None:
+    """SM/换号时轮换，对应浏览器新会话重新 init fireye。"""
+    global _runtime_fp, _runtime_umid
+    with _runtime_lock:
+        _runtime_fp = ""
+        _runtime_umid = ""
+
+
+def path_needs_baxia_ua(path: str) -> bool:
+    return any(marker in path for marker in BAXIA_UA_PATH_MARKERS)
+
+
+def resolve_baxia_mode(path: str = "", *, explicit: Optional[BaxiaMode] = None) -> BaxiaMode:
+    if explicit is not None:
+        return explicit
+    if not path:
+        return "full"
+    if path_needs_baxia_ua(path):
+        return "full"
+    return "version"
 
 
 def lzw_compress(data: str, bits: int = 6, alphabet: str = CUSTOM_BASE64_CHARS) -> str:
@@ -165,14 +239,14 @@ def custom_encode(data: str, url_safe: bool = True) -> str:
 
 
 def get_baxia_tokens(*, fingerprint_override: str = "") -> Dict[str, str]:
-    if fingerprint_override:
-        fingerprint = fingerprint_override
-    else:
-        fingerprint = generate_fingerprint()
+    # umid/指纹会话级复用；bx-ua 每次请求刷新（对齐 getFYToken）。
+    fingerprint, umid = ensure_baxia_runtime(
+        fingerprint_override=fingerprint_override,
+    )
     return {
         "bxV": BAXIA_SDK_VERSION,
         "bxUa": generate_bxua(fingerprint),
-        "bxUmidToken": get_bxumidtoken(),
+        "bxUmidToken": umid,
         "fingerprint": fingerprint,
     }
 
@@ -247,15 +321,20 @@ def build_headers(
     cookies: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     use_bearer: bool = True,
+    baxia: Optional[BaxiaMode] = None,
+    api_path: str = "",
 ) -> Dict[str, str]:
 
     headers = _base_headers()
     if use_bearer and token:
         headers["Authorization"] = f"Bearer {token}"
-    baxia = get_baxia_tokens(fingerprint_override=fingerprint)
-    headers["bx-v"] = baxia["bxV"]
-    headers["bx-ua"] = baxia["bxUa"]
-    headers["bx-umidtoken"] = baxia["bxUmidToken"]
+    mode = resolve_baxia_mode(api_path, explicit=baxia)
+    if mode != "none":
+        tokens = get_baxia_tokens(fingerprint_override=fingerprint)
+        headers["bx-v"] = tokens["bxV"]
+        if mode == "full":
+            headers["bx-ua"] = tokens["bxUa"]
+            headers["bx-umidtoken"] = tokens["bxUmidToken"]
     if include_version:
         headers["Version"] = APP_VERSION
     if chat_id:

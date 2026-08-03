@@ -183,6 +183,13 @@ async def _dispatch_session_retry(
     _raise_if_shutting_down(state)
     retries += 1
     if isinstance(exc, (TokenExpiredError, BaxiaSmBlockedError, UpstreamWafBlockedError)):
+        if isinstance(exc, BaxiaSmBlockedError):
+            try:
+                from upstream.qwen.auth.crypto import reset_baxia_runtime
+
+                reset_baxia_runtime()
+            except Exception:
+                pass
         await _switch_session_after_account_error(
             req_id, state, exc, retries=retries, limit=limit, client=client,
         )

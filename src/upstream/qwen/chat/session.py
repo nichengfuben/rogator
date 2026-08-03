@@ -41,7 +41,7 @@ class ChatSession:
     async def create(self, token: str, model: str, chat_type: str = "t2t") -> str:
 
         url = f"{BASE_URL}{NEW_CHAT_PATH}"
-        headers = build_headers(token, include_version=False)
+        headers = build_headers(token, include_version=True)
         async with self._session.post(
             url,
             json=build_new_chat_payload(model, chat_type),

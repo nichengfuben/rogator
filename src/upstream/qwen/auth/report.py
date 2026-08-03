@@ -15,6 +15,7 @@ from upstream.qwen.chat.routes import (
     APP_VERSION,
     BASE_URL,
     CHAT_ORIGIN,
+    USER_AGENT,
     USERS_STATUS_PATH,
 )
 
@@ -148,7 +149,7 @@ async def report_user_status(
             "domain": "chat.qwen.ai",
         }
     }
-    headers = build_headers(session.token, include_version=True)
+    headers = build_headers(session.token, include_version=True, baxia="version")
     headers["Content-Type"] = "application/json"
     headers["Referer"] = f"{CHAT_ORIGIN}{page_path if page_path.startswith('/') else '/' + page_path}"
     await _silent_request(
@@ -199,7 +200,7 @@ async def _report_aplus_event(
         params["spm-pre"] = spm_pre
     headers = {
         "Referer": page_url,
-        "User-Agent": build_headers(session.token).get("User-Agent", ""),
+        "User-Agent": USER_AGENT,
     }
     await _silent_request(
         client,

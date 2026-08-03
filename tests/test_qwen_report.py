@@ -84,6 +84,10 @@ class TestReportFireAndForget(unittest.IsolatedAsyncioTestCase):
                 end_chunk_ms=2000,
             )
         self.assertGreaterEqual(silent.await_count, 5)
+        status_headers = silent.await_args_list[0].kwargs.get("headers") or {}
+        self.assertIn("bx-v", status_headers)
+        self.assertNotIn("bx-ua", status_headers)
+        self.assertNotIn("bx-umidtoken", status_headers)
 
 
 if __name__ == "__main__":
