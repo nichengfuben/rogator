@@ -47,13 +47,25 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
     _current_index: int
     _blocked_accounts: Dict[str, float]
     _muted_accounts: Dict[str, float]
-    _lock: asyncio.Lock
+    _lock_holder: Optional[asyncio.Lock]
     _prelogin_target: int
     _login_interval: float
     _login_history: LoginHistoryStore
     _last_cleanup: float
     _inflight: Dict[str, int]
-    _replenish_event: asyncio.Event
+    _replenish_event_holder: Optional[asyncio.Event]
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        if self._lock_holder is None:
+            self._lock_holder = asyncio.Lock()
+        return self._lock_holder
+
+    @property
+    def _replenish_event(self) -> asyncio.Event:
+        if self._replenish_event_holder is None:
+            self._replenish_event_holder = asyncio.Event()
+        return self._replenish_event_holder
 
     def _init_session_pool(self) -> None:
         sessions, meta = load_upstream_sessions(self.UPSTREAM_NAME)
@@ -64,7 +76,8 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
         self._login_history = LoginHistoryStore(self.UPSTREAM_NAME)
         self._last_cleanup = 0.0
         self._inflight = {}
-        self._replenish_event = asyncio.Event()
+        self._lock_holder = None
+        self._replenish_event_holder = None
 
     def _inflight_count(self, username: str) -> int:
         return max(0, self._inflight.get(username, 0))

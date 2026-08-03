@@ -29,15 +29,22 @@ logger = logging.getLogger("rogator")
 class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
     UPSTREAM_NAME = "deepseek"
 
+    _startup_lock_holder: Optional[asyncio.Lock]
+
+    @property
+    def _startup_lock(self) -> asyncio.Lock:
+        if self._startup_lock_holder is None:
+            self._startup_lock_holder = asyncio.Lock()
+        return self._startup_lock_holder
+
     def __init__(self, splitter: Any = None) -> None:
         self._splitter = splitter
         self._init_session_pool()
         self._init_http_transport()
         self._init_models_cache(list(MODELS))
-        self._lock = asyncio.Lock()
         self._inner: Optional[DeepseekClient] = None
         self._startup_done: bool = False
-        self._startup_lock = asyncio.Lock()
+        self._startup_lock_holder = None
         from server.config import CONFIG
 
         self._prelogin_target: int = CONFIG.prelogin

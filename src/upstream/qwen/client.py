@@ -195,7 +195,6 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         self._init_session_pool()
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))
-        self._lock = asyncio.Lock()
         self._prelogin_target: int = CONFIG.prelogin
         self._login_interval: float = CONFIG.login_interval
 
