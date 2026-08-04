@@ -36,6 +36,7 @@ refresh_interval = 3600.0
 
 [upstream]
 # 启用的上游模块（对应 upstream/<name>/）；未列出的不会被加载
+# 例: enabled = ["qwen", "zen", "deepseek"]
 enabled = ["qwen"]
 
 [shutdown]

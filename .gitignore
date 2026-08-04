@@ -41,6 +41,7 @@ htmlcov/
 config/config.toml
 persist/qwen/
 persist/deepseek/
+persist/zen/
 persist/bandit/
 persist/sessions.json
 logs/

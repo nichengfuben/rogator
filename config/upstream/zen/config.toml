@@ -1,0 +1,19 @@
+# Zen（opencode.ai）上游配置
+
+[capabilities]
+chat = true
+vision = true
+search = false
+count_tokens = true
+image_gen = false
+tts = false
+
+[proxy]
+# 静态代理池（优先）；空字符串 / "direct" / "none" 表示直连
+# 例: static = ["", "127.0.0.1:7890"]
+static = [""]
+# 动态代理池 JSON（相对项目根）；不存在则忽略
+# 结构: {"proxies": [{"proxy": "1.2.3.4:8080", "latency": 0.5}, ...]}
+pool_file = "proxy_pool.json"
+# 当前节点索引持久化
+state_file = "persist/zen/proxy_state.json"
