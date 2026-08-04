@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 from upstream.qwen.chat.routes import ASR_SAMPLE_RATE
 
-DEFAULT_TRANSCRIPTION_MODEL: str = "whisper-1"
+DEFAULT_TRANSCRIPTION_MODEL: str = "qwen-asr"
 
 
 def new_event_id() -> str:

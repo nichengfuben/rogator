@@ -132,12 +132,14 @@ def _entry_for_internal(internal_model: str) -> ModelRegistryEntry:
 
 
 def list_external_models(available_internal: Sequence[str]) -> List[str]:
-    """注册表顺序列出、且内键仍在上游模型列表中的外键。"""
+    """注册表顺序列出、且内键仍在上游模型列表中的外键；平台托管模型始终暴露。"""
+    from server.model.platform_models import is_platform_model
+
     available = set(available_internal)
     return [
         entry.external_id
         for entry in _MODEL_REGISTRY.entries_in_order
-        if entry.internal_id in available
+        if entry.internal_id in available or is_platform_model(entry.internal_id)
     ]
 
 
@@ -152,7 +154,9 @@ def resolve_request_model(requested: str, available_internal: Iterable[str]) -> 
 
     if model in registry.by_external:
         entry = registry.by_external[model]
-        if entry.internal_id not in available:
+        from server.model.platform_models import is_platform_model
+
+        if entry.internal_id not in available and not is_platform_model(entry.internal_id):
             raise ModelNotConfiguredError(
                 f"模型 {entry.external_id} 已配置但上游不可用，请检查 model_registry.jsonl 与模型列表"
             )

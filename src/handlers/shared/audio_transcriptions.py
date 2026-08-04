@@ -20,6 +20,7 @@ from server.formats import (
     _json_response,
     client_disconnected_response,
 )
+from server.model.platform_models import QWEN_ASR_EXTERNAL_ID
 from server.model.model_registry import ModelResolveError
 
 logger = logging.getLogger("rogator")
@@ -133,7 +134,7 @@ async def audio_transcriptions_handler(request: web.Request) -> web.Response:
         return _error_response(400, str(exc))
 
     try:
-        resolved = resolve_handler_model(state, model or state.model)
+        resolved = resolve_handler_model(state, model or QWEN_ASR_EXTERNAL_ID)
     except ModelResolveError as exc:
         return model_resolve_error_response(exc)
 
@@ -180,7 +181,7 @@ async def anthropic_audio_transcriptions_handler(request: web.Request) -> web.Re
         return anthropic_error_response(400, str(exc))
 
     try:
-        resolved = resolve_handler_model(state, model or state.model)
+        resolved = resolve_handler_model(state, model or QWEN_ASR_EXTERNAL_ID)
     except ModelResolveError as exc:
         return model_resolve_error_response(exc, protocol="anthropic")
 

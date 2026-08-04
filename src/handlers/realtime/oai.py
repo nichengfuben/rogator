@@ -22,6 +22,7 @@ from handlers.realtime.protocol import (
     parse_transcription_model,
 )
 from handlers.shared.api_errors import resolve_handler_model
+from server.model.platform_models import QWEN_ASR_EXTERNAL_ID
 from server.model.model_registry import ModelResolveError
 from upstream.qwen.media.asr_realtime import AsrRealtimeSession, AsrStreamEvent
 
@@ -236,7 +237,7 @@ async def oai_realtime_ws_handler(request: web.Request) -> web.WebSocketResponse
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
     state = get_state()
-    model = (request.query.get("model") or state.model or "").strip()
+    model = (request.query.get("model") or QWEN_ASR_EXTERNAL_ID).strip()
     try:
         resolved = resolve_handler_model(state, model)
     except ModelResolveError as exc:

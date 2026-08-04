@@ -64,6 +64,24 @@ def build_openai_model_entry(
     owned_by: str = "qwen",
 ) -> Dict[str, Any]:
     internal_id = registry_entry.internal_id
+    from server.model.platform_models import (
+        capabilities_for_service_api,
+        is_transcription_model,
+        platform_model_meta,
+    )
+
+    if is_transcription_model(internal_id):
+        meta = platform_model_meta(internal_id) or _resolve_model_meta(internal_id, meta_by_id)
+        return {
+            "id": external_id,
+            "object": "model",
+            "created": created,
+            "owned_by": owned_by,
+            "context_length": meta.context_length,
+            "capabilities": capabilities_for_service_api(meta.capabilities),
+            "modality": list(meta.modality),
+        }
+
     meta = _resolve_model_meta(internal_id, meta_by_id)
     from server.model.model_meta import capabilities_for_api
 

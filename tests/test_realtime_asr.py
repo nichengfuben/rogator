@@ -27,6 +27,7 @@ def test_build_transcription_session_standard_shape() -> None:
     assert session["type"] == "transcription"
     assert session["audio"]["input"]["format"]["rate"] == 16000
     assert session["audio"]["input"]["transcription"]["language"] == "zh-CN"
+    assert session["audio"]["input"]["transcription"]["model"] == "qwen-asr"
     assert session["audio"]["input"]["turn_detection"] is None
 
 
@@ -69,7 +70,7 @@ async def test_oai_realtime_connection_commit_flow() -> None:
     mock_session = MagicMock(token="tok")
 
     with patch("handlers.realtime.oai.AsrRealtimeSession", FakeUpstream):
-        conn = OaiRealtimeAsrConnection(ws, mock_qwen, mock_session, model="qwen3.7-max")
+        conn = OaiRealtimeAsrConnection(ws, mock_qwen, mock_session, model="qwen-asr")
         await conn.send_created()
         await conn.handle_client_event({
             "type": "session.update",

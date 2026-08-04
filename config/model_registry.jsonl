@@ -22,3 +22,4 @@ qwen3-5-omni-flash:qwen3.5-omni-flash:true:true
 deepseek-v4-flash:deepseek-v4-flash:true:true
 deepseek-v4-pro:deepseek-v4-pro:true:true
 deepseek-v4-vision:deepseek-v4-vision:true:true
+qwen-asr:qwen-asr:false:false
