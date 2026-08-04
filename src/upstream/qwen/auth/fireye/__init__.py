@@ -6,6 +6,7 @@ from upstream.qwen.auth.fireye.engine import (
     get_uid_token,
     request_tokens,
     reset_session,
+    resolve_baxia_req_url,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "get_uid_token",
     "request_tokens",
     "reset_session",
+    "resolve_baxia_req_url",
 ]

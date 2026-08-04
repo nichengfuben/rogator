@@ -13,6 +13,7 @@ from server.formats import (
     UpstreamConnectionError,
     UpstreamTimeoutError,
     UpstreamWafBlockedError,
+    UpstreamChatNotFoundError,
 )
 from upstream.qwen.chat.store import mask_username
 
@@ -41,6 +42,7 @@ def is_retryable_error(exc: BaseException) -> bool:
             UpstreamWafBlockedError,
             UpstreamTimeoutError,
             UpstreamConnectionError,
+            UpstreamChatNotFoundError,
         ),
     )
 
@@ -156,17 +158,35 @@ async def _switch_session_after_account_error(
     )
 
 
-def _shrink_payload_limit_or_raise(state: Any, req_id: str, exc: PayloadTooLargeError, retries: int) -> None:
+def _shrink_payload_limit_or_raise(
+    state: Any,
+    req_id: str,
+    exc: PayloadTooLargeError,
+    retries: int,
+    *,
+    model: str | None = None,
+) -> None:
     if CONFIG.send_full_prompt:
         raise exc
-    if state.splitter.max_chars <= 50000:
+    from server.config.qwen_send_limits import effective_send_max_chars
+
+    current = effective_send_max_chars(state, model)
+    if current <= 50000:
         raise exc
-    state.splitter.max_chars = max(50000, state.splitter.max_chars // 2)
+    new_limit = max(50000, current // 2)
+    if model:
+        overrides = getattr(state, "_send_limit_overrides", None)
+        if overrides is None:
+            state._send_limit_overrides = {}
+            overrides = state._send_limit_overrides
+        overrides[model] = new_limit
+    elif getattr(state, "splitter", None) is not None:
+        state.splitter.max_chars = new_limit
     if retries > 1:
         raise exc
     logger.warning(
         "Payload too large for %s, reducing send limit to %d and retrying: %s",
-        req_id, state.splitter.max_chars, exc,
+        req_id, new_limit, exc,
     )
 
 
@@ -178,6 +198,7 @@ async def _dispatch_session_retry(
     retries: int,
     limit: int,
     client: Any | None,
+    model: str | None = None,
 ) -> int:
     """分派可重试异常；返回更新后的 retries。不可重试则 raise。"""
     _raise_if_shutting_down(state)
@@ -195,7 +216,7 @@ async def _dispatch_session_retry(
         )
         return retries
     if isinstance(exc, PayloadTooLargeError):
-        _shrink_payload_limit_or_raise(state, req_id, exc, retries)
+        _shrink_payload_limit_or_raise(state, req_id, exc, retries, model=model)
         return retries
     if isinstance(exc, UpstreamTimeoutError):
         await _reset_client_transport(client)
@@ -204,6 +225,16 @@ async def _dispatch_session_retry(
     if isinstance(exc, UpstreamConnectionError):
         await _reset_client_transport(client)
         _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
+        return retries
+    if isinstance(exc, UpstreamChatNotFoundError):
+        await _reset_client_transport(client)
+        if retries > limit:
+            _log_retry_exhausted(req_id, retries, limit, exc)
+            raise exc
+        logger.warning(
+            "Upstream CHAT_NOT_FOUND for %s (retry %d/%d): %s",
+            req_id, retries, limit, exc,
+        )
         return retries
     raise exc
 
@@ -226,6 +257,7 @@ async def run_with_session_retry(
         PayloadTooLargeError,
         UpstreamTimeoutError,
         UpstreamConnectionError,
+        UpstreamChatNotFoundError,
     )
 
     while True:
@@ -281,9 +313,11 @@ async def _handle_stream_retry_error(
     retries: int,
     limit: int,
     client: Any | None,
+    *,
+    model: str | None = None,
 ) -> int:
     return await _dispatch_session_retry(
-        req_id, state, exc, retries=retries, limit=limit, client=client,
+        req_id, state, exc, retries=retries, limit=limit, client=client, model=model,
     )
 
 
@@ -294,6 +328,7 @@ async def stream_with_session_retry(
     *,
     max_retry: Optional[int] = None,
     client: Any | None = None,
+    model: str | None = None,
 ) -> AsyncGenerator[dict, None]:
     """流式换号重试：失败则整段重开。"""
     limit = CONFIG.max_retry_on_error if max_retry is None else max_retry
@@ -318,11 +353,12 @@ async def stream_with_session_retry(
                 PayloadTooLargeError,
                 UpstreamTimeoutError,
                 UpstreamConnectionError,
+                UpstreamChatNotFoundError,
             ) as exc:
                 await _reset_stream(inner)
                 inner = None
                 retries = await _handle_stream_retry_error(
-                    req_id, state, exc, retries, limit, client,
+                    req_id, state, exc, retries, limit, client, model=model,
                 )
             except Exception:
                 await _reset_stream(inner)

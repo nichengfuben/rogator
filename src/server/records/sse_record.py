@@ -14,6 +14,7 @@ from server.config import CONFIG, LOG_DIR
 __all__ = [
     "SseStreamRecorder",
     "append_sse_bytes",
+    "append_sse_bytes_async",
     "record_sse_stream",
     "sse_dump_dir",
 ]
@@ -68,10 +69,20 @@ class SseStreamRecorder:
 
 
 def append_sse_bytes(data: bytes) -> None:
-    """iter_sse_events 每收到一块 raw 时调用。"""
+    """iter_sse_events 每收到一块 raw 时调用（同步路径）。"""
     rec = _active_recorder.get(None)
     if rec is not None:
         rec.write(data)
+
+
+async def append_sse_bytes_async(data: bytes) -> None:
+    """async 热路径：磁盘 flush offload 到线程池。"""
+    rec = _active_recorder.get(None)
+    if rec is None or not data:
+        return
+    from core.transport.blocking import io_limiter, run_blocking
+
+    await run_blocking(rec.write, data, limiter=io_limiter())
 
 
 @contextmanager

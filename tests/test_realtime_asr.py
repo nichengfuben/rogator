@@ -8,7 +8,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from handlers.realtime.protocol import parse_transcription_language
+from handlers.realtime.protocol import (
+    build_transcription_session,
+    parse_transcription_language,
+)
 from handlers.realtime.oai import OaiRealtimeAsrConnection
 
 
@@ -17,6 +20,14 @@ def test_parse_transcription_language_nested() -> None:
         "audio": {"input": {"transcription": {"language": "en"}}},
     })
     assert lang == "en"
+
+
+def test_build_transcription_session_standard_shape() -> None:
+    session = build_transcription_session("sess_test", language="zh-CN")
+    assert session["type"] == "transcription"
+    assert session["audio"]["input"]["format"]["rate"] == 16000
+    assert session["audio"]["input"]["transcription"]["language"] == "zh-CN"
+    assert session["audio"]["input"]["turn_detection"] is None
 
 
 @pytest.mark.asyncio
@@ -73,6 +84,8 @@ async def test_oai_realtime_connection_commit_flow() -> None:
 
     types = [m["type"] for m in sent]
     assert "session.created" in types
+    created = next(m for m in sent if m["type"] == "session.created")
+    assert created["session"]["type"] == "transcription"
     assert "session.updated" in types
     assert "conversation.item.input_audio_transcription.delta" in types
     assert "conversation.item.input_audio_transcription.completed" in types

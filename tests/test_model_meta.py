@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from server.formats.constants import PERSISTED_MODEL_CAPABILITIES
+from upstream.qwen.chat.routes import PERSISTED_MODEL_CAPABILITIES
 from server.model.model_catalog import (
     MODEL_CONTEXT_LENGTH,
     build_openai_model_entry,

@@ -14,7 +14,7 @@ from upstream.qwen.account import Account
 
 from .crypto import (
     BASE_URL,
-    build_headers,
+    build_headers_async,
     build_login_headers,
     generate_cookies,
     generate_fingerprint,
@@ -145,7 +145,7 @@ class AuthMixin:
     async def _fetch_user_settings(self, account: Account) -> Dict[str, Any]:
         async with self._session.get(
             f"{BASE_URL}{SETTINGS_PATH}",
-            headers=build_headers(account.token, cookies=self._cookies),
+            headers=await build_headers_async(account.token, cookies=self._cookies),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=30),
             proxy=self._get_proxy_kwarg(),
@@ -157,7 +157,7 @@ class AuthMixin:
     async def _fetch_user_profile(self, account: Account) -> Dict[str, Any]:
         async with self._session.get(
             f"{AUTH_BASE_URL}/api/v2/user",
-            headers=build_headers(account.token, cookies=self._cookies),
+            headers=await build_headers_async(account.token, cookies=self._cookies),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=30),
             proxy=self._get_proxy_kwarg(),
@@ -196,7 +196,7 @@ class AuthMixin:
             async with self._session.put(
                 f"{BASE_URL}{SETTINGS_PATH}",
                 json=DEFAULT_FULL_SETTINGS,
-                headers=build_headers(account.token, cookies=self._cookies),
+                headers=await build_headers_async(account.token, cookies=self._cookies),
                 ssl=False,
                 timeout=aiohttp.ClientTimeout(total=30),
                 proxy=self._get_proxy_kwarg(),

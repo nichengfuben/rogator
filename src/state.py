@@ -10,9 +10,9 @@ from echotools import ToolProtocol, get_protocol
 from echotools.base.logger import get_logger
 
 from server.config import CONFIG
+from upstream.qwen.chat.routes import DEFAULT_MODEL
 from server.formats import (
     SHUTDOWN_CANCEL_GRACE,
-    DEFAULT_MODEL,
 )
 from core.session.store import valid_session_count
 from core.dispatch import select_upstream
@@ -49,12 +49,13 @@ class LongTextSplitter:
         self.max_chars = max_chars
         self.send_full_prompt = send_full_prompt
 
-    def split(self, text: str):
+    def split(self, text: str, *, max_chars: Optional[int] = None):
         """Inject 后整段 prompt 超限：尾部 max_chars → send，剩余前缀 → 附件。"""
-        if self.send_full_prompt or len(text) <= self.max_chars:
+        limit = self.max_chars if max_chars is None else max_chars
+        if self.send_full_prompt or len(text) <= limit:
             return text, None, None
-        send_text = text[-self.max_chars:]
-        remaining_text = text[:-self.max_chars]
+        send_text = text[-limit:]
+        remaining_text = text[:-limit]
         filename = f"remaining_{int(time.time())}_{__import__('uuid').uuid4().hex[:8]}.txt"
         return send_text, filename, remaining_text.encode("utf-8")
 
@@ -67,6 +68,7 @@ class AppState:
             max_chars=CONFIG.qwen_send_max_chars,
             send_full_prompt=CONFIG.send_full_prompt,
         )
+        self._send_limit_overrides: Dict[str, int] = {}
         self._registry = load_upstreams()
         self._clients: Dict[str, Any] = {}
         self._models_inventory: Dict[str, set[str]] = {}

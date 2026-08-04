@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import aiohttp
 
-from upstream.qwen.auth.crypto import build_headers
+from upstream.qwen.auth.crypto import build_headers_async
 from upstream.qwen.chat.session import ChatSession
 from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH
 from upstream.qwen.account import ModelsFetchMixin, QwenLoginMixin
@@ -31,11 +32,16 @@ from upstream.qwen.chat.store import (
     mark_invalid as mark_invalid_in,
 )
 from upstream.qwen.chat.upload.files import UploadMixin
-from upstream.qwen.auth.http import map_connection_error, run_with_connection_retry
+from upstream.qwen.auth.http import (
+    map_connection_error,
+    merge_session_cookies,
+    run_with_connection_retry,
+    sync_cookie_store,
+)
 from core.transport.http import upstream_timeout
 from core.transport.owned import HttpTransportMixin
+from upstream.qwen.chat.routes import DEFAULT_MODELS
 from server.formats import (
-    DEFAULT_MODELS,
     REQUEST_TOTAL_TIMEOUT,
     BaxiaSmBlockedError,
     UpstreamTimeoutError,
@@ -54,6 +60,7 @@ async def _iter_qwen_sse_or_reconnect(
     chat_id: str,
     resp: aiohttp.ClientResponse,
     response_id_box: List[str],
+    cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     try:
         async for event in iter_sse_events(
@@ -65,7 +72,7 @@ async def _iter_qwen_sse_or_reconnect(
         if not rid:
             raise
         async for event in reconnect_sse_events_with_retry(
-            client, session, chat_id, rid,
+            client, session, chat_id, rid, cookies=cookies,
         ):
             yield event
 
@@ -90,13 +97,20 @@ async def _stream_one_chat_post(
     timeout: Any,
     response_id_box: List[str],
     stats: Dict[str, Any],
+    cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     http = await client._ensure_http_session()
     async with http.post(url, json=payload, headers=headers, timeout=timeout) as resp:
+        absorb_fn = getattr(client, "absorb_cookies_for_session", None)
+        if callable(absorb_fn):
+            absorb_fn(session, resp, binding=cookies)
+        elif cookies is not None:
+            from upstream.qwen.auth.crypto import absorb_response_cookies
+            absorb_response_cookies(cookies, resp)
         if resp.status != 200:
             await handle_chat_error(client, resp, session)
         async for event in _iter_qwen_sse_or_reconnect(
-            client, session, chat_id, resp, response_id_box,
+            client, session, chat_id, resp, response_id_box, cookies=cookies,
         ):
             _note_sse_stats(stats, event)
             yield event
@@ -122,11 +136,13 @@ async def _iter_post_chat_sse_attempts(
     timeout: Any,
     response_id_box: List[str],
     stats: Dict[str, Any],
+    cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     for attempt in range(1, 3):
         try:
             async for event in _stream_one_chat_post(
-                client, session, chat_id, url, payload, headers, timeout, response_id_box, stats,
+                client, session, chat_id, url, payload, headers, timeout,
+                response_id_box, stats, cookies=cookies,
             ):
                 yield event
             return
@@ -145,6 +161,7 @@ async def _post_chat_sse(
     payload: Dict[str, Any],
     headers: Dict[str, str],
     response_id_box: List[str],
+    cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     from upstream.qwen.auth.report import (
         report_completions_request_id,
@@ -167,7 +184,8 @@ async def _post_chat_sse(
     }
     try:
         async for event in _iter_post_chat_sse_attempts(
-            client, session, chat_id, url, payload, headers, timeout, response_id_box, stats,
+            client, session, chat_id, url, payload, headers, timeout,
+            response_id_box, stats, cookies=cookies,
         ):
             yield event
     except Exception:
@@ -189,14 +207,112 @@ async def _post_chat_sse(
         )
 
 
+async def _chat_completion_stream(
+    client: "QwenClient",
+    session: QwenSession,
+    chat_id: str,
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    cookies: Optional[Dict[str, str]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    response_id_box: List[str] = []
+    cancelled = False
+    baxia_sm_retry = False
+    try:
+        async for event in _post_chat_sse(
+            client, session, chat_id, payload, headers, response_id_box,
+            cookies=cookies,
+        ):
+            yield event
+    except BaxiaSmBlockedError:
+        baxia_sm_retry = True
+        raise
+    except (asyncio.CancelledError, GeneratorExit):
+        cancelled = True
+        response_id = response_id_box[0] if response_id_box else ""
+        await abort_upstream_on_cancel(client, session, chat_id, response_id)
+        raise
+    except Exception as exc:
+        conn_err = map_connection_error(exc)
+        if conn_err is not None:
+            raise conn_err from exc
+        raise
+    finally:
+        if not cancelled and not baxia_sm_retry:
+            await client.cleanup_chat(session, chat_id)
+
+
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
+        self._cookie_jars: Dict[str, Dict[str, str]] = {}
+        self._cookie_jars_lock = threading.Lock()
         self._init_session_pool()
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))
         self._prelogin_target: int = CONFIG.prelogin
         self._login_interval: float = CONFIG.login_interval
+
+    def _cookie_store_key(self, session: QwenSession) -> str:
+        return session.username or str(session.user_id or "")
+
+    def _account_cookie_store(self, session: QwenSession) -> Dict[str, str]:
+        key = self._cookie_store_key(session)
+        with self._cookie_jars_lock:
+            return self._cookie_jars.setdefault(key, {})
+
+    def begin_chat_cookies(
+        self,
+        session: QwenSession,
+        *,
+        thinking_mode: str = "Fast",
+    ) -> Dict[str, str]:
+        """单次 chat 请求绑定：create/completion 共用同一 cookie 快照。"""
+        store = self._account_cookie_store(session)
+        with self._cookie_jars_lock:
+            merged = merge_session_cookies(
+                session.token,
+                store,
+                user_id=str(session.user_id or ""),
+            )
+            sync_cookie_store(store, merged)
+            binding = dict(merged)
+        if thinking_mode:
+            binding["qwen-thinking_mode"] = thinking_mode
+        return binding
+
+    def cookies_for_session(
+        self,
+        session: QwenSession,
+        *,
+        thinking_mode: str = "Fast",
+    ) -> Dict[str, str]:
+        return self.begin_chat_cookies(session, thinking_mode=thinking_mode)
+
+    def absorb_cookies_for_session(
+        self,
+        session: QwenSession,
+        response: Any,
+        *,
+        binding: Optional[Dict[str, str]] = None,
+    ) -> None:
+        from upstream.qwen.auth.crypto import absorb_response_cookies
+
+        store = self._account_cookie_store(session)
+        with self._cookie_jars_lock:
+            absorb_response_cookies(store, response)
+            if binding is not None:
+                absorb_response_cookies(binding, response)
+
+    def cookie_jar_for_session(self, session: QwenSession) -> Dict[str, str]:
+        return self._account_cookie_store(session)
+
+    @property
+    def cookie_jar(self) -> Dict[str, str]:
+        session = self.current_session
+        if session is None:
+            return {}
+        return self._account_cookie_store(session)
 
     def mark_invalid(self, username: str) -> bool:
         found = mark_invalid_in(self._sessions, username)
@@ -287,8 +403,14 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
             "transcribe_audio", _run, transport_owner=self,
         )
 
-    async def create_chat(self, session: QwenSession, model: str) -> str:
-        return await create_chat_for_session(self, session, model)
+    async def create_chat(
+        self,
+        session: QwenSession,
+        model: str,
+        *,
+        cookies: Optional[Dict[str, str]] = None,
+    ) -> str:
+        return await create_chat_for_session(self, session, model, cookies=cookies)
 
     async def stop_generation(
         self,
@@ -311,6 +433,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         *,
         qwen_thinking_enabled: bool = False,
         qwen_thinking_mode: str = "Fast",
+        cookies: Optional[Dict[str, str]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if not messages:
             raise ValueError("messages cannot be empty")
@@ -323,33 +446,21 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
             thinking_mode=qwen_thinking_mode,
         )
         payload = build_chat_payload(chat_id, model, qwen_message)
-        headers = build_headers(
-            session.token, chat_id=chat_id, include_sse=True,
+        if cookies is None:
+            cookies = self.begin_chat_cookies(
+                session, thinking_mode=qwen_thinking_mode,
+            )
+        headers = await build_headers_async(
+            session.token,
+            chat_id=chat_id,
+            include_sse=True,
+            api_path=CHAT_PATH,
+            cookies=cookies,
         )
-        response_id_box: List[str] = []
-        cancelled = False
-        baxia_sm_retry = False
-        try:
-            async for event in _post_chat_sse(
-                self, session, chat_id, payload, headers, response_id_box,
-            ):
-                yield event
-        except BaxiaSmBlockedError:
-            baxia_sm_retry = True
-            raise
-        except (asyncio.CancelledError, GeneratorExit):
-            cancelled = True
-            response_id = response_id_box[0] if response_id_box else ""
-            await abort_upstream_on_cancel(self, session, chat_id, response_id)
-            raise
-        except Exception as exc:
-            conn_err = map_connection_error(exc)
-            if conn_err is not None:
-                raise conn_err from exc
-            raise
-        finally:
-            if not cancelled and not baxia_sm_retry:
-                await self.cleanup_chat(session, chat_id)
+        async for event in _chat_completion_stream(
+            self, session, chat_id, payload, headers, cookies=cookies,
+        ):
+            yield event
 
     async def shutdown(self) -> None:
         await self.close_http_transport()

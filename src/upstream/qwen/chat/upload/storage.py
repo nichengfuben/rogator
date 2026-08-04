@@ -102,12 +102,41 @@ def get_file_category(content_type: str) -> Tuple[str, str]:
         return file_type, "vision"
     if content_type.startswith("audio/"):
         return file_type, "audio"
+    # text / pdf / generic files: upstream chat payload uses file_class=default
+    if file_type == "file":
+        return file_type, "default"
     return file_type, "document"
 
 
 # ---------------------------------------------------------------------------
 # File builders (from files.py)
 # ---------------------------------------------------------------------------
+
+
+def _nested_upload_file(
+    file_id: str,
+    filename: str,
+    size: int,
+    content_type: str,
+    user_id: str,
+    meta: Dict[str, Any],
+    now_ms: int,
+) -> Dict[str, Any]:
+    return {
+        "created_at": now_ms,
+        "data": {},
+        "filename": filename,
+        "hash": None,
+        "id": file_id,
+        "user_id": user_id,
+        "meta": meta,
+        "update_at": now_ms,
+        "lastModified": now_ms,
+        "name": filename,
+        "webkitRelativePath": "",
+        "size": size,
+        "type": content_type,
+    }
 
 
 def build_file_object(
@@ -117,11 +146,22 @@ def build_file_object(
     size: int,
     content_type: str,
     user_id: str,
+    *,
+    parse_status: str = "",
 ) -> Dict[str, Any]:
 
     file_type, file_class = get_file_category(content_type)
+    now_ms = int(time.time() * 1000)
+    meta: Dict[str, Any] = {
+        "name": filename,
+        "size": size,
+        "content_type": content_type,
+    }
+    if parse_status:
+        meta["parse_meta"] = {"parse_status": parse_status}
     return {
         "id": file_id,
+        "itemId": str(uuid.uuid4()),
         "name": filename,
         "type": file_type,
         "size": size,
@@ -131,7 +171,32 @@ def build_file_object(
         "file_class": file_class,
         "user_id": user_id,
         "isQuote": False,
+        "status": "uploaded",
+        "context": "full",
+        "progress": 0,
+        "error": "",
+        "collection_name": "",
+        "greenNet": "success" if parse_status == "success" else "",
+        "uploadTaskId": str(uuid.uuid4()),
+        "file": _nested_upload_file(
+            file_id, filename, size, content_type, user_id, meta, now_ms,
+        ),
     }
+
+
+def apply_parse_status(file_obj: Dict[str, Any], parse_status: str) -> Dict[str, Any]:
+    """Stamp parse result onto an uploaded file object for chat completions."""
+    if not parse_status:
+        return file_obj
+    file_obj = dict(file_obj)
+    nested = dict(file_obj.get("file") or {})
+    meta = dict(nested.get("meta") or {})
+    meta["parse_meta"] = {"parse_status": parse_status}
+    nested["meta"] = meta
+    file_obj["file"] = nested
+    if parse_status == "success":
+        file_obj["greenNet"] = "success"
+    return file_obj
 
 
 def build_url_file_object(file_url: str, file_type: str) -> Dict[str, Any]:

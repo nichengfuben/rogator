@@ -117,6 +117,17 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
             muted_accounts=self._muted_accounts,
         )
 
+    async def _save_meta_async(self) -> List[str]:
+        from core.session.store import save_upstream_sessions_async
+
+        return await save_upstream_sessions_async(
+            self.UPSTREAM_NAME,
+            self._sessions,
+            current_index=self._current_index,
+            blocked_accounts=self._blocked_accounts,
+            muted_accounts=self._muted_accounts,
+        )
+
     def block_account(self, username: str, block_seconds: float) -> None:
         until = time.time() + max(block_seconds, 60.0)
         self._blocked_accounts[username] = until
@@ -209,7 +220,15 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
         if now - self._last_cleanup < CLEANUP_INTERVAL:
             return
         self._last_cleanup = now
-        self.cleanup_expired_sessions()
+        previous_username = self._session_username_at_current()
+        removed = await self._save_meta_async()
+        if removed:
+            self._fix_current_index(previous_username)
+            logger.info(
+                "Session cleanup [%s]: removed %d expired/invalid session(s)",
+                self.UPSTREAM_NAME,
+                len(removed),
+            )
 
     @property
     def current_session(self) -> Optional[PlatformSession]:

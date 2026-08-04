@@ -45,3 +45,6 @@ jobs:
         env:
           PYTHONPATH: src:.
         run: python -m pytest tests -q --tb=short
+
+      - name: Run achecker
+        run: python achecker.py

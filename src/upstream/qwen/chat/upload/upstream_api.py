@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
-from upstream.qwen.auth.crypto import build_headers, merge_session_cookies
+from upstream.qwen.auth.crypto import build_headers_async, merge_session_cookies
 from upstream.qwen.chat.routes import (
     BASE_URL,
     CHAT_PATH,
@@ -33,9 +33,11 @@ async def fetch_app_config(client: "QwenClient", session: "QwenSession") -> Dict
             http,
             "GET",
             f"{BASE_URL}{CONFIGS_PATH}",
-            headers=build_headers(
+            headers=await build_headers_async(
                 session.token,
-                cookies=merge_session_cookies(session.token),
+                cookies=merge_session_cookies(
+                    session.token, user_id=str(session.user_id or "")
+                ),
             ),
             timeout=upstream_timeout(30.0),
         )
@@ -60,9 +62,11 @@ async def fetch_user_settings(client: "QwenClient", session: "QwenSession") -> D
             http,
             "GET",
             f"{BASE_URL}{SETTINGS_PATH}",
-            headers=build_headers(
+            headers=await build_headers_async(
                 session.token,
-                cookies=merge_session_cookies(session.token),
+                cookies=merge_session_cookies(
+                    session.token, user_id=str(session.user_id or "")
+                ),
             ),
             timeout=upstream_timeout(30.0),
         )
@@ -104,9 +108,11 @@ async def parse_urls(
             http,
             "POST",
             f"{BASE_URL}{PARSE_URL_PATH}",
-            headers=build_headers(
+            headers=await build_headers_async(
                 session.token,
-                cookies=merge_session_cookies(session.token),
+                cookies=merge_session_cookies(
+                    session.token, user_id=str(session.user_id or "")
+                ),
             ),
             json={"url_list": url_list},
             timeout=upstream_timeout(60.0),
@@ -142,11 +148,15 @@ async def reconnect_sse_events_with_retry(
     session: "QwenSession",
     chat_id: str,
     response_id: str,
+    *,
+    cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     last_exc: Exception | None = None
     for attempt in range(SSE_RECONNECT_MAX):
         try:
-            async for event in reconnect_sse_events(client, session, chat_id, response_id):
+            async for event in reconnect_sse_events(
+                client, session, chat_id, response_id, cookies=cookies,
+            ):
                 yield event
             return
         except Exception as exc:
@@ -166,20 +176,33 @@ async def reconnect_sse_events(
     session: "QwenSession",
     chat_id: str,
     response_id: str,
+    *,
+    cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """GET /chat/completions?chat_id=&response_id= 断线续流。"""
+    if cookies is None:
+        cookies_fn = getattr(client, "cookies_for_session", None)
+        if callable(cookies_fn):
+            cookies = cookies_fn(session)
+        else:
+            cookies = merge_session_cookies(
+                session.token, user_id=str(session.user_id or ""),
+            )
     http = await client._ensure_http_session()
     async with http.get(
         f"{BASE_URL}{CHAT_PATH}",
         params={"chat_id": chat_id, "response_id": response_id},
-        headers=build_headers(
+        headers=await build_headers_async(
             session.token,
             chat_id=chat_id,
             include_sse=True,
-            cookies=merge_session_cookies(session.token),
+            cookies=cookies,
         ),
         timeout=upstream_timeout(600.0),
     ) as resp:
+        absorb_fn = getattr(client, "absorb_cookies_for_session", None)
+        if callable(absorb_fn):
+            absorb_fn(session, resp, binding=cookies)
         if resp.status != 200:
             body = await resp.text()
             raise RuntimeError(f"SSE reconnect HTTP {resp.status}: {body[:200]}")

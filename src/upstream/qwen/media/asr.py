@@ -16,7 +16,7 @@ import aiohttp
 
 from core.transport.compat import removeprefix
 
-from upstream.qwen.auth.crypto import build_asr_ws_headers
+from upstream.qwen.auth.crypto import build_asr_ws_headers_async
 from upstream.qwen.chat.routes import (
     ASR_AUDIO_CHUNK_BYTES,
     ASR_MAX_DURATION_SEC,
@@ -266,7 +266,7 @@ class AsrTranscriber:
         self._last_text = ""
         started = asyncio.Event()
 
-        ws_headers = build_asr_ws_headers(self._token)
+        ws_headers = await build_asr_ws_headers_async(self._token)
         async with self._session.ws_connect(
             ws_url, ssl=False, heartbeat=30.0, proxy=None,
             headers=ws_headers,

@@ -5,13 +5,20 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from upstream.qwen.auth.crypto import build_headers
+from upstream.qwen.auth.crypto import build_headers_async
+from upstream.qwen.auth.report import (
+    report_file_parse_success,
+    report_file_upload_finish,
+    report_file_upload_oss_token_time,
+    report_file_upload_start,
+)
 from upstream.qwen.chat.routes import (
     BASE_URL,
     GENERATED_IMAGE_DIR,
@@ -23,6 +30,7 @@ from upstream.qwen.chat.upload.oss import upload_to_oss
 from upstream.qwen.chat.upload.parse import wait_file_parsed
 from upstream.qwen.chat.upload.storage import (
     DATA_URI_EXT_MAP,
+    apply_parse_status,
     build_file_object,
     get_file_category,
     get_mime_type,
@@ -45,18 +53,32 @@ class UploadMixin:
         self,
         session: QwenSession,
         file_obj: Dict[str, Any],
-    ) -> None:
-        if file_obj.get("file_class") != "document":
-            return
+    ) -> Dict[str, Any]:
+        # text/pdf 等 type=file 需 parse；vision/audio 跳过
+        if str(file_obj.get("type") or "") != "file":
+            return file_obj
         file_id = str(file_obj.get("id") or "")
         if not file_id:
-            return
+            return file_obj
         ok = await wait_file_parsed(self, session, file_id)
         if not ok:
             logger.warning(
                 "Document parse failed or timed out: %s",
                 file_obj.get("name", file_id[:8]),
             )
+            return apply_parse_status(file_obj, "failed")
+        file_obj = apply_parse_status(file_obj, "success")
+        await report_file_parse_success(
+            self,
+            session,
+            file_id=file_id,
+            filename=str(file_obj.get("name") or ""),
+            filesize=int(file_obj.get("size") or 0),
+            content_type=str(
+                file_obj.get("file_type") or file_obj.get("content_type") or ""
+            ),
+        )
+        return file_obj
 
     async def _request_sts_token(
         self, path: str, payload: Dict[str, Any], headers: Dict[str, str]
@@ -83,14 +105,14 @@ class UploadMixin:
     async def _get_sts_credentials(
         self, session: QwenSession, filename: str, filesize: int, filetype: str
     ) -> Dict[str, Any]:
-        headers = build_headers(session.token)
+        headers = await build_headers_async(session.token)
         headers.update(
             {
                 "Content-Type": "application/json;charset=UTF-8",
                 "Accept": "application/json",
             }
         )
-        payload = {"filename": filename, "filesize": filesize, "filetype": filetype}
+        payload = {"filename": filename, "filesize": str(filesize), "filetype": filetype}
         for path in ["/api/v1/files/getstsToken", "/api/v2/files/getstsToken"]:
             try:
                 creds = await self._request_sts_token(path, payload, headers)
@@ -99,6 +121,32 @@ class UploadMixin:
             except Exception:
                 continue
         raise RuntimeError("All STS endpoints failed")
+
+    async def _report_upload_timeline(
+        self,
+        session: QwenSession,
+        *,
+        filename: str,
+        file_size: int,
+        content_type: str,
+        t_sts0: float,
+        t_sts1: float,
+        t_up0: float,
+        t_up1: float,
+    ) -> None:
+        await report_file_upload_oss_token_time(
+            self, session, filename=filename, filesize=file_size,
+            content_type=content_type, start_ms=t_sts0, end_ms=t_sts1,
+        )
+        await report_file_upload_start(
+            self, session, filename=filename, filesize=file_size,
+            content_type=content_type, start_ms=t_up0,
+        )
+        await report_file_upload_finish(
+            self, session, filename=filename, filesize=file_size,
+            content_type=content_type, upload_start_ms=t_up0,
+            upload_end_ms=t_up1, all_elapsed_ms=int(t_up1 - t_sts0),
+        )
 
     async def upload_file(
         self, session: QwenSession, file_data: bytes, filename: str
@@ -109,8 +157,27 @@ class UploadMixin:
         limit = _MAX_FILE_SIZES.get(file_type, 20 * 1024 * 1024)
         if file_size > limit:
             raise RuntimeError(f"file too large: {filename} ({file_size} > {limit})")
+        page_t0 = time.perf_counter()
+
+        def _perf_ms() -> float:
+            return 1_000_000.0 + (time.perf_counter() - page_t0) * 1000.0
+
+        t_sts0 = _perf_ms()
         creds = await self._get_sts_credentials(session, filename, file_size, file_type)
+        t_sts1 = _perf_ms()
+        t_up0 = _perf_ms()
         file_url = await upload_to_oss(file_data, content_type, creds)
+        t_up1 = _perf_ms()
+        await self._report_upload_timeline(
+            session,
+            filename=filename,
+            file_size=file_size,
+            content_type=content_type,
+            t_sts0=t_sts0,
+            t_sts1=t_sts1,
+            t_up0=t_up0,
+            t_up1=t_up1,
+        )
         file_obj = build_file_object(
             file_id=str(creds.get("file_id", uuid.uuid4())),
             file_url=file_url,
@@ -119,7 +186,7 @@ class UploadMixin:
             content_type=content_type,
             user_id=session.user_id,
         )
-        await self._maybe_parse_document(session, file_obj)
+        file_obj = await self._maybe_parse_document(session, file_obj)
         return file_url, file_obj
 
     async def upload_file_from_base64(

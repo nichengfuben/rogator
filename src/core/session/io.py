@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Optional
 
 
+async def atomic_write_text_async(path: Path, content: str) -> None:
+    from core.transport.blocking import run_blocking
+
+    await run_blocking(atomic_write_text, path, content)
+
+
 def atomic_write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.tmp")

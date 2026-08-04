@@ -102,7 +102,7 @@ async def _prepare_stream(
     image_uris = client.extract_base64_images(messages)
     media_urls = client.extract_remote_media_urls(messages)
     final_messages, send_text, filename, file_bytes = apply_prompt_budget(
-        state, injected, full_content, use_file_split=True,
+        state, injected, full_content, use_file_split=True, model=model,
     )
     files = await _collect_uploaded_files(
         client, session, messages, image_uris, media_urls, filename, file_bytes, send_text,
@@ -135,12 +135,15 @@ async def stream_openai_chat(
         send_text = final_messages[0].get("content") or ""
         yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
         chat_id = ""
+        thinking_mode = route.qwen_native_mode or "Fast"
+        cookies = client.begin_chat_cookies(session, thinking_mode=thinking_mode)
         try:
-            chat_id = await client.create_chat(session, model)
+            chat_id = await client.create_chat(session, model, cookies=cookies)
             async for event in client.chat_completion(
                 session, chat_id, final_messages, model, uploaded_files,
                 qwen_thinking_enabled=route.qwen_native_enabled,
                 qwen_thinking_mode=route.qwen_native_mode,
+                cookies=cookies,
             ):
                 yield event
         except (asyncio.CancelledError, GeneratorExit):

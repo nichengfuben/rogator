@@ -87,7 +87,7 @@ class SessionSwitchMixin:
         return selected
 
     async def _commit_session(self, session: PlatformSession) -> PlatformSession:
-        self._save_meta()
+        await self._save_meta_async()
         await self._on_session_selected(session)
         return session
 

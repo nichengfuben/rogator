@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from upstream.qwen.account import ModelsFetchMixin, merge_model_lists
-from server.formats import DEFAULT_MODELS
+from upstream.qwen.chat.routes import DEFAULT_MODELS
 from server.model.model_meta import DEFAULT_MODEL_CONTEXT_LENGTH, ModelMeta, default_model_meta
 
 

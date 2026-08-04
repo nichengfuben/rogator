@@ -9,14 +9,14 @@ import secrets
 import struct
 import time
 from typing import Final, List, Pattern, Tuple
-from urllib.parse import urlparse
 
 from upstream.qwen.auth.fireye.codec import expected_magic
-from upstream.qwen.auth.fireye.env import BrowserEnv
+from upstream.qwen.auth.fireye.env import FingerprintEnv
+from upstream.qwen.auth.fireye.session import FireyeSession
 
 _HEADER_LEN: Final[int] = 12
 _BLOCK_LEN: Final[int] = 16
-_MIN_BODY: Final[int] = 1050
+_MIN_BODY: Final[int] = 1100
 _MAX_BODY: Final[int] = 1260
 _CHAT_ID_RE: Final[Pattern[str]] = re.compile(
     r"(?:chat[_-]?id=|/c/)([0-9a-f-]{36})",
@@ -91,31 +91,51 @@ def _target_length(url: str, seed: bytes) -> int:
     bias = seed[0] % span
     base = _MIN_BODY + bias
     if "completions" in url:
-        base += 20
+        base += 80
     if "chats/new" in url:
         base += 50
     return min(base, _MAX_BODY)
 
 
 def _session_scope(url: str) -> str:
+    """HAR：同会话内 session 块稳定；completions 按 chat_id 变。"""
     chat_id = _extract_chat_id(url)
     if chat_id and "completions" in url:
         return f"chat:{chat_id}"
-    path = urlparse(url).path or url
-    return path.split("?")[0]
+    return "session"
+
+
+def _context_scope(url: str) -> str:
+    """HAR：context 块在 session 内稳定；completions 按完整 URL 变。"""
+    if "completions" in url:
+        return url
+    return "session"
 
 
 def build_fy_payload(
     *,
     fingerprint: str,
     req_url: str,
-    env: BrowserEnv,
+    env: FingerprintEnv,
     seq: int,
+    sess: FireyeSession | None = None,
 ) -> bytes:
     ts_ms = int(time.time() * 1000)
     seed = env.digest(fingerprint)
-    session_block = _derive_block(seed, "session", _session_scope(req_url))
-    context_block = _derive_block(seed, "context", req_url)
+    sess_scope = _session_scope(req_url)
+    ctx_scope = _context_scope(req_url)
+    if sess is not None and sess_scope == "session" and sess.session_block:
+        session_block = sess.session_block
+    else:
+        session_block = _derive_block(seed, "session", sess_scope)
+        if sess is not None and sess_scope == "session":
+            sess.session_block = session_block
+    if sess is not None and ctx_scope == "session" and sess.context_block:
+        context_block = sess.context_block
+    else:
+        context_block = _derive_block(seed, "context", ctx_scope)
+        if sess is not None and ctx_scope == "session":
+            sess.context_block = context_block
     body_len = _target_length(req_url, seed)
     plain = bytearray(body_len)
     meta = f"{fingerprint}|{req_url}|{seq}|{ts_ms}".encode()

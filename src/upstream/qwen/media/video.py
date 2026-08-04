@@ -23,7 +23,7 @@ from upstream.qwen.chat.routes import (
     VIDEO_TASK_MAX_POLL_TIME,
     VIDEO_TASK_POLL_INTERVAL,
 )
-from upstream.qwen.auth.crypto import build_headers
+from upstream.qwen.auth.crypto import build_headers_async
 from upstream.qwen.chat.upload.payload import build_i2v_payload
 from upstream.qwen.chat.upload.storage import save_video_file
 
@@ -121,7 +121,7 @@ class VideoService:
         async with self._session.post(
             f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}",
             json=build_i2v_payload(prompt, chat_id, model, image_url, image_name, size),
-            headers=build_headers(token, chat_id=chat_id, cookies=self._cookies()),
+            headers=await build_headers_async(token, chat_id=chat_id, cookies=self._cookies()),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=SSE_TIMEOUT),
             proxy=self._resolve_proxy(),
@@ -144,7 +144,7 @@ class VideoService:
     async def _poll_task_status(self, task_id: str, token: str, chat_id: str) -> Dict[str, Any]:
         start = time.time()
         url = f"{BASE_URL}{TASK_STATUS_PATH.format(task_id=task_id)}"
-        headers = build_headers(token, chat_id=chat_id, cookies=self._cookies())
+        headers = await build_headers_async(token, chat_id=chat_id, cookies=self._cookies())
         while time.time() - start < VIDEO_TASK_MAX_POLL_TIME:
             async with self._session.get(
                 url,
@@ -216,7 +216,7 @@ class VideoGenMixin:
     ) -> Dict[str, Any]:
         """Poll an async media task until completion."""
         url = f"{BASE_URL}{TASK_STATUS_PATH.format(task_id=task_id)}"
-        headers = build_headers(
+        headers = await build_headers_async(
             token,
             chat_id=chat_id,
             include_sse=False,
@@ -245,7 +245,7 @@ class VideoGenMixin:
             prompt=prompt, chat_id=chat_id, model=model,
             image_url=image_url, image_name=image_name, size=size,
         )
-        headers = build_headers(token, chat_id=chat_id, cookies=self._cookies)
+        headers = await build_headers_async(token, chat_id=chat_id, cookies=self._cookies)
         url = f"{BASE_URL}{CHAT_PATH}?chat_id={chat_id}"
         async with self._session.post(
             url, json=payload, headers=headers, ssl=False,

@@ -110,6 +110,7 @@ def _build_user_message(
 ) -> Dict[str, Any]:
 
     return {
+        "id": None,
         "fid": user_fid,
         "parentId": parent_id,
         "childrenIds": [assistant_fid],
@@ -119,10 +120,12 @@ def _build_user_message(
         "files": all_files,
         "timestamp": timestamp,
         "models": [model],
+        "model": "",
         "chat_type": chat_type,
         "feature_config": feature_config,
         "extra": {"meta": {"subChatType": effective_sub_chat_type}},
         "sub_chat_type": effective_sub_chat_type,
+        "parent_id": parent_id,
     }
 
 
@@ -139,6 +142,8 @@ def _wrap_chat_payload(
         "stream": stream,
         "version": API_VERSION,
         "incremental_output": True,
+        "chatId": chat_id,
+        "parentId": "" if parent_id is None else parent_id,
         "chat_id": chat_id,
         "chat_mode": "local" if USE_LOCAL_MODE else "normal",
         "model": model,
@@ -164,13 +169,10 @@ def build_payload(
     auto_search: bool = False,
     stream: bool = True,
 ) -> Dict[str, Any]:
-    effective_sub_chat_type = sub_chat_type or chat_type
     text_parts, extra_files = _collect_user_content(messages)
     content = "\n".join(part for part in text_parts if part)
     all_files = list(files or []) + extra_files
-    user_fid = str(uuid.uuid4())
-    assistant_fid = str(uuid.uuid4())
-    timestamp = int(time.time() * 1000)
+    timestamp = int(time.time())
     feature_config = _build_feature_config(
         thinking_enabled=thinking_enabled,
         auto_thinking=auto_thinking,
@@ -179,8 +181,8 @@ def build_payload(
         auto_search=auto_search,
     )
     user_message = _build_user_message(
-        user_fid=user_fid,
-        assistant_fid=assistant_fid,
+        user_fid=str(uuid.uuid4()),
+        assistant_fid=str(uuid.uuid4()),
         parent_id=parent_id,
         content=content,
         all_files=all_files,
@@ -188,7 +190,7 @@ def build_payload(
         model=model,
         chat_type=chat_type,
         feature_config=feature_config,
-        effective_sub_chat_type=effective_sub_chat_type,
+        effective_sub_chat_type=sub_chat_type or chat_type,
     )
     return _wrap_chat_payload(
         stream=stream,

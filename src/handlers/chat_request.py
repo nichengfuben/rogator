@@ -126,7 +126,9 @@ async def iter_retried_chat_events(
     """带换号重试的上游事件循环；on_event 返回 False 时中止。"""
     retry_client = resolve_retry_client(state, model, messages, tools)
     async with aclosing(
-        stream_with_session_retry(req_id, state, make_stream, client=retry_client),
+        stream_with_session_retry(
+            req_id, state, make_stream, client=retry_client, model=model,
+        ),
     ) as event_stream:
         async for event in event_stream:
             if disconnected[0]:
@@ -172,18 +174,26 @@ def apply_prompt_budget(
     full_content: str,
     *,
     use_file_split: bool = False,
+    model: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], str, Optional[str], Optional[bytes]]:
     """截断 prompt；``use_file_split=True`` 走 splitter.split（Qwen）。"""
     splitter = getattr(state, "splitter", None)
+    max_chars: Optional[int] = None
+    if model:
+        from server.config.qwen_send_limits import effective_send_max_chars
+
+        max_chars = effective_send_max_chars(state, model)
+    elif splitter is not None:
+        max_chars = int(getattr(splitter, "max_chars", 0) or 0) or None
     if use_file_split and splitter is not None and hasattr(splitter, "split"):
-        send_text, filename, file_bytes = splitter.split(full_content)
+        send_text, filename, file_bytes = splitter.split(full_content, max_chars=max_chars)
         messages = list(injected)
         messages[0] = {**messages[0], "content": send_text}
         return messages, send_text, filename, file_bytes
     send_text = full_content
-    max_chars = int(getattr(splitter, "max_chars", 0) or 0) if splitter else 0
     send_full = bool(getattr(splitter, "send_full_prompt", True)) if splitter else True
-    if not send_full and max_chars > 0 and len(send_text) > max_chars:
-        send_text = send_text[-max_chars:]
+    cap = max_chars or 0
+    if not send_full and cap > 0 and len(send_text) > cap:
+        send_text = send_text[-cap:]
         return [{**injected[0], "content": send_text}], send_text, None, None
     return injected, send_text, None, None

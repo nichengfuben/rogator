@@ -13,7 +13,7 @@ import aiohttp
 
 from core.transport.compat import removeprefix
 
-from upstream.qwen.auth.crypto import build_asr_ws_headers
+from upstream.qwen.auth.crypto import build_asr_ws_headers_async
 from upstream.qwen.chat.routes import (
     ASR_AUDIO_CHUNK_BYTES,
     ASR_WS_PATH,
@@ -151,7 +151,7 @@ class AsrRealtimeSession:
             ssl=False,
             heartbeat=30.0,
             proxy=None,
-            headers=build_asr_ws_headers(self._token),
+            headers=await build_asr_ws_headers_async(self._token),
             timeout=aiohttp.ClientTimeout(total=self._timeout),
         )
         await self._ws.send_str(build_start_transcription(self._task_id, self._language))

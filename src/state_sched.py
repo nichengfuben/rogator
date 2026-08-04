@@ -8,6 +8,8 @@ import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
 
+import anyio
+
 from echotools.base.logger import get_logger
 
 from server.config import CONFIG
@@ -223,16 +225,18 @@ async def session_cleanup_loop(state: "AppState", interval: float = 0) -> None:
 
 
 def start_background_tasks(state: "AppState") -> List[asyncio.Task]:
-    tasks: List[asyncio.Task] = [
-        asyncio.create_task(upstream_init_background(state)),
-    ]
-    for name, client in state._clients.items():
-        if not hasattr(client, "replenish_sessions"):
-            continue
-        pool_ok = getattr(client, "_login_pool_available", None)
-        if callable(pool_ok):
-            if not pool_ok():
+    return [asyncio.create_task(_background_tasks_main(state), name="rogator-bg")]
+
+
+async def _background_tasks_main(state: "AppState") -> None:
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(upstream_init_background, state)
+        for name, client in state._clients.items():
+            if not hasattr(client, "replenish_sessions"):
                 continue
-        tasks.append(asyncio.create_task(session_maintenance_loop(state, client, name)))
-    tasks.append(asyncio.create_task(models_refresh_loop(state)))
-    return tasks
+            pool_ok = getattr(client, "_login_pool_available", None)
+            if callable(pool_ok):
+                if not pool_ok():
+                    continue
+            tg.start_soon(session_maintenance_loop, state, client, name)
+        tg.start_soon(models_refresh_loop, state)

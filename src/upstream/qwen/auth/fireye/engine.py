@@ -7,10 +7,12 @@ from typing import Dict, Final
 from urllib.parse import urljoin
 
 from upstream.qwen.auth.fireye.codec import wrap_token
-from upstream.qwen.auth.fireye.env import BrowserEnv, default_env
+from upstream.qwen.auth.fireye.env import FingerprintEnv, default_env
 from upstream.qwen.auth.fireye.payload import build_fy_payload
 from upstream.qwen.auth.fireye.session import FireyeSession, get_session, reset_session
 from upstream.qwen.auth.fireye.umid import get_umid_token
+
+from upstream.qwen.chat.routes import CHAT_ORIGIN, CHAT_PATH
 
 _DEFAULT_ORIGIN: Final[str] = "https://chat.qwen.ai/"
 _lock = threading.Lock()
@@ -27,6 +29,27 @@ def _ensure_fingerprint(fp: str, sess: FireyeSession) -> str:
     return sess.fingerprint
 
 
+def resolve_baxia_req_url(
+    api_path: str = "",
+    *,
+    chat_id: str = "",
+    query: str = "",
+) -> str:
+    """对齐 FE getFYToken({ reqUrl })：完整 URL 含 path/query。"""
+    path = (api_path or "").strip() or CHAT_PATH
+    if not path.startswith("/"):
+        path = "/" + path.lstrip("/")
+    url = f"{CHAT_ORIGIN}{path}"
+    qparts: list[str] = []
+    if query.strip():
+        qparts.append(query.strip().lstrip("?"))
+    if chat_id.strip() and "chat_id=" not in url and "completions" in path:
+        qparts.append(f"chat_id={chat_id.strip()}")
+    if qparts:
+        url = url + "?" + "&".join(qparts)
+    return url
+
+
 def _normalize_url(req_url: str) -> str:
     raw = (req_url or "").strip()
     if not raw:
@@ -40,7 +63,7 @@ def get_fy_token(
     req_url: str = "",
     *,
     fingerprint: str = "",
-    env: BrowserEnv | None = None,
+    env: FingerprintEnv | None = None,
 ) -> str:
     with _lock:
         sess = get_session()
@@ -52,6 +75,7 @@ def get_fy_token(
             req_url=_normalize_url(req_url),
             env=profile,
             seq=seq,
+            sess=sess,
         )
         return wrap_token(raw)
 
@@ -60,13 +84,14 @@ def get_uid_token(
     req_url: str = "",
     *,
     fingerprint: str = "",
+    bx_ua: str = "",
 ) -> str:
     with _lock:
         sess = get_session()
         fp = _ensure_fingerprint(fingerprint, sess)
         if sess.umid:
             return sess.umid
-        sess.umid = get_umid_token(fp)
+        sess.umid = get_umid_token(fp, bx_ua=bx_ua)
         return sess.umid
 
 
@@ -87,7 +112,7 @@ def request_tokens(
     if fp:
         bind_fingerprint(fp)
     bx_ua = get_fy_token(req_url, fingerprint=fp)
-    bx_umid = get_uid_token(req_url, fingerprint=fp)
+    bx_umid = get_uid_token(fingerprint=fp, bx_ua=bx_ua)
     sess = get_session()
     return {
         "bxUa": bx_ua,
@@ -103,4 +128,5 @@ __all__ = [
     "get_uid_token",
     "request_tokens",
     "reset_session",
+    "resolve_baxia_req_url",
 ]

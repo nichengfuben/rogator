@@ -17,12 +17,13 @@ from upstream.deepseek.lib.adapter.helpers.file_upload import (
     resolve_model_type,
     wait_files_ready,
 )
-from upstream.deepseek.lib.protocol.consts import MODEL_PRO, MODEL_VISION
+from upstream.deepseek.lib.protocol.consts import MODEL_FLASH, MODEL_PRO, MODEL_VISION
 
 
 def test_resolve_model_type() -> None:
     assert resolve_model_type(MODEL_VISION) == "vision"
-    assert resolve_model_type(MODEL_PRO) == "default"
+    assert resolve_model_type(MODEL_PRO) == "expert"
+    assert resolve_model_type(MODEL_FLASH) == "default"
 
 
 def test_parse_status_helpers() -> None:

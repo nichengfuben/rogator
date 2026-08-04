@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from upstream.qwen.auth.crypto import build_headers
+from upstream.qwen.auth.crypto import build_headers_async
 from upstream.qwen.chat.routes import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
 from upstream.qwen.chat.upload.payload import (
     build_replace_content_payload,
@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 3
 
 
-def build_tts_headers(
+async def build_tts_headers(
     token: str, chat_id: str, fingerprint: str, cookies: dict
 ) -> dict:
 
-    headers = build_headers(
+    headers = await build_headers_async(
         token,
         chat_id=chat_id,
         include_sse=True,
@@ -140,7 +140,7 @@ class TtsService:
     ) -> bool:
         """Replace an assistant message before TTS synthesis."""
         url = f"{BASE_URL}/api/v2/chats/{chat_id}/messages/{response_id}"
-        headers = build_headers(token, chat_id=chat_id, cookies=self._cookies())
+        headers = await build_headers_async(token, chat_id=chat_id, cookies=self._cookies())
         payload = build_replace_content_payload(new_content, origin_content)
         for attempt in range(MAX_RETRIES):
             if attempt > 0:
@@ -173,7 +173,7 @@ class TtsService:
         save_dir: str = TTS_DIR,
     ) -> Optional[str]:
         """Request TTS audio and persist the decoded WAV file."""
-        headers = build_tts_headers(
+        headers = await build_tts_headers(
             token, chat_id, self._fingerprint(), self._cookies()
         )
         async with self._session.post(
@@ -203,7 +203,7 @@ class MediaMixin:
     ) -> bool:
         """Replace an assistant message content before TTS."""
         url = f"{BASE_URL}/api/v2/chats/{chat_id}/messages/{response_id}"
-        headers = build_headers(token, chat_id=chat_id, cookies=self._cookies)
+        headers = await build_headers_async(token, chat_id=chat_id, cookies=self._cookies)
         payload = build_replace_content_payload(new_content, origin_content)
         for attempt in range(MAX_RETRIES):
             if attempt > 0:
@@ -236,7 +236,7 @@ class MediaMixin:
         save_dir: str = TTS_DIR,
     ) -> Optional[str]:
         """Request TTS audio and persist the decoded WAV file."""
-        headers = build_tts_headers(token, chat_id, self._fp, self._cookies)
+        headers = await build_tts_headers(token, chat_id, self._fp, self._cookies)
         async with self._session.post(
             f"{BASE_URL}{TTS_PATH}?chat_id={chat_id}",
             json=build_tts_payload(chat_id, response_id),

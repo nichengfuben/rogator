@@ -16,6 +16,7 @@ from server.formats import (
     UpstreamTimeoutError,
     UpstreamUnavailableError,
     UpstreamWafBlockedError,
+    UpstreamChatNotFoundError,
     _error_response,
     _json_response,
 )
@@ -48,7 +49,7 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
         return StreamErrorInfo("server_error", f"Baxia SM blocked: {exc}", 503)
     if isinstance(exc, UpstreamTimeoutError):
         return StreamErrorInfo("timeout", str(exc), 504)
-    if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError)):
+    if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError, UpstreamChatNotFoundError)):
         return StreamErrorInfo("server_error", exc.message, exc.status)
     if isinstance(exc, UpstreamConnectionError):
         return StreamErrorInfo("server_error", exc.message, exc.status)

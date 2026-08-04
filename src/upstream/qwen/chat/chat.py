@@ -10,20 +10,21 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 
 import aiohttp
 
-from upstream.qwen.auth.crypto import build_headers, build_stop_headers
+from upstream.qwen.auth.crypto import build_headers_async, build_stop_headers_async
 from upstream.qwen.chat.routes import BASE_URL, DELETE_CHAT_PATH, NEW_CHAT_PATH, STOP_CHAT_PATH
 from upstream.qwen.chat.sse import SseEventAssembler, parse_sse_event
 from upstream.qwen.chat.upload.payload import build_stop_payload
-from upstream.qwen.auth.http import run_with_connection_retry
+from upstream.qwen.auth.http import run_with_connection_retry, absorb_response_cookies
 from core.transport.http import request_json, upstream_timeout
 from server.config import CONFIG
-from server.records.sse_record import append_sse_bytes
+from server.records.sse_record import append_sse_bytes_async
 from server.formats import (
     PayloadTooLargeError,
     BaxiaSmBlockedError,
     TokenExpiredError,
     UpstreamTimeoutError,
     UpstreamWafBlockedError,
+    UpstreamChatNotFoundError,
 )
 from upstream.qwen.chat.store import QwenSession, is_session_fatal_error
 
@@ -78,28 +79,53 @@ def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict
     raise RuntimeError(f"Create chat failed: {data}")
 
 
-async def _post_create_chat(client: QwenClient, session: QwenSession, model: str, timeout_s: float) -> Dict[str, Any]:
+async def _post_create_chat(
+    client: QwenClient,
+    session: QwenSession,
+    model: str,
+    timeout_s: float,
+    cookies: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     from upstream.qwen.chat.upload.payload import build_new_chat_payload
 
     payload = build_new_chat_payload(model)
-    headers = build_headers(session.token, include_version=True)
+    if cookies is None:
+        cookies_fn = getattr(client, "begin_chat_cookies", None) or getattr(
+            client, "cookies_for_session", None,
+        )
+        if callable(cookies_fn):
+            cookies = cookies_fn(session)
+    headers = await build_headers_async(
+        session.token,
+        include_version=True,
+        api_path=NEW_CHAT_PATH,
+        cookies=cookies,
+    )
 
     async def _run() -> Dict[str, Any]:
         http = await client._ensure_http_session()
-        status, body = await request_json(
-            http,
-            "POST",
+        async with http.post(
             f"{BASE_URL}{NEW_CHAT_PATH}",
             headers=headers,
             json=payload,
             timeout=upstream_timeout(timeout_s),
-        )
-        if status != 200:
-            return {"_http_status": status}
-        if isinstance(body, dict):
-            return body
-        _raise_for_non_json_create_chat(client, session, str(body))
-        return {}
+        ) as resp:
+            absorb_fn = getattr(client, "absorb_cookies_for_session", None)
+            if callable(absorb_fn):
+                absorb_fn(session, resp, binding=cookies)
+            elif cookies is not None:
+                absorb_response_cookies(cookies, resp)
+            if resp.status != 200:
+                return {"_http_status": resp.status}
+            try:
+                body = await resp.json(content_type=None)
+            except Exception:
+                body = await resp.text()
+            if isinstance(body, dict):
+                return body
+            _raise_for_non_json_create_chat(client, session, str(body))
+            return {}
+
     return await run_with_connection_retry("create_chat", _run, transport_owner=client)
 
 
@@ -107,17 +133,18 @@ async def create_chat_for_session(
     client: QwenClient,
     session: QwenSession,
     model: str,
+    *,
+    cookies: Optional[Dict[str, str]] = None,
 ) -> str:
     from upstream.qwen.auth.report import (
-        report_chat_generation,
-        report_generation_create_return,
-        report_user_status,
+        report_after_chat_created,
+        report_create_chat_sequence,
     )
 
-    await report_chat_generation(client, session)
+    await report_create_chat_sequence(client, session)
     timeout_s = CONFIG.create_chat_timeout
     try:
-        data = await _post_create_chat(client, session, model, timeout_s)
+        data = await _post_create_chat(client, session, model, timeout_s, cookies=cookies)
     except asyncio.TimeoutError as exc:
         raise UpstreamTimeoutError(f"Create chat timed out after {timeout_s}s") from exc
 
@@ -131,8 +158,7 @@ async def create_chat_for_session(
     chat_id = str((data.get("data") or {}).get("id", ""))
     if not chat_id:
         raise RuntimeError(f"Create chat failed: no chat_id in {data}")
-    await report_generation_create_return(client, session, chat_id)
-    await report_user_status(client, session, page_path=f"/c/{chat_id}")
+    await report_after_chat_created(client, session, chat_id)
     return chat_id
 
 
@@ -151,7 +177,7 @@ async def stop_upstream_generation(
             http,
             "POST",
             f"{BASE_URL}{STOP_CHAT_PATH}?chat_id={chat_id}",
-            headers=build_stop_headers(session.token),
+            headers=await build_stop_headers_async(session.token),
             json=build_stop_payload(chat_id, response_id),
             timeout=upstream_timeout(15.0),
         )
@@ -180,7 +206,7 @@ async def delete_upstream_chat(
             http,
             "DELETE",
             f"{BASE_URL}{DELETE_CHAT_PATH.format(chat_id=chat_id)}",
-            headers=build_headers(session.token),
+            headers=await build_headers_async(session.token),
             timeout=upstream_timeout(15.0),
         )
         return status in (200, 204)
@@ -254,6 +280,8 @@ def _raise_for_success_false(
         client._invalidate_session(session)
         logger.warning("Session %s upstream rate limited (%s)", session.username[:6], code)
         raise TokenExpiredError(f"Rate limited: {msg[:200]}")
+    if code == "CHAT_NOT_FOUND":
+        raise UpstreamChatNotFoundError(f"Qwen chat not found: {msg[:200]}", upstream="qwen")
     raise_qwen_session_error(client, session, msg)
     raise RuntimeError(f"Qwen API error: {msg}")
 
@@ -356,7 +384,7 @@ async def iter_sse_events(
     assembler = SseEventAssembler()
     try:
         async for raw in resp.content:
-            append_sse_bytes(raw)
+            await append_sse_bytes_async(raw)
             pending += raw.decode("utf-8", errors="replace")
             while "\n" in pending:
                 line, pending = pending.split("\n", 1)

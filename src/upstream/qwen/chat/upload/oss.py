@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 
 import aiohttp
 
-from server.formats import DEFAULT_USER_AGENT
+from upstream.qwen.chat.routes import USER_AGENT
 
 logger = logging.getLogger("rogator")
 
@@ -46,12 +46,12 @@ async def get_sts_credentials(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json;charset=UTF-8",
         "Accept": "application/json",
-        "User-Agent": DEFAULT_USER_AGENT,
+        "User-Agent": USER_AGENT,
         "Origin": base_url,
         "Referer": f"{base_url}/",
         "Source": "web",
     }
-    payload = {"filename": filename, "filesize": filesize, "filetype": "file"}
+    payload = {"filename": filename, "filesize": str(filesize), "filetype": "file"}
     for path in STS_TOKEN_PATHS:
         try:
             creds = await _request_sts_credentials(f"{base_url}{path}", payload, headers)
@@ -92,7 +92,7 @@ def build_upload_headers(
         "Content-Length": str(file_size),
         "Authorization": authorization,
         "x-oss-security-token": security_token,
-        "User-Agent": DEFAULT_USER_AGENT,
+        "User-Agent": USER_AGENT,
     }
 
 

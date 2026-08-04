@@ -40,6 +40,12 @@ class UpstreamWafBlockedError(UpstreamUnavailableError):
     error_type: str = "upstream_waf_blocked"
 
 
+class UpstreamChatNotFoundError(UpstreamUnavailableError):
+    """上游 chat_id 不存在（常见为建聊与发消息 Cookie 会话不一致）。"""
+
+    error_type: str = "upstream_chat_not_found"
+
+
 class UpstreamConnectionError(RuntimeError):
     """?????????/??/DNS??"""
 

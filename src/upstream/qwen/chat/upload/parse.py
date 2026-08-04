@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, List
 
-from upstream.qwen.auth.crypto import build_headers, merge_session_cookies
+from upstream.qwen.auth.crypto import build_headers_async, merge_session_cookies
 from upstream.qwen.chat.routes import (
     BASE_URL,
     FILE_PARSE_POLL_INTERVAL,
@@ -38,9 +38,11 @@ async def trigger_file_parse(
             http,
             "POST",
             f"{BASE_URL}{PARSE_FILE_PATH}",
-            headers=build_headers(
+            headers=await build_headers_async(
                 session.token,
-                cookies=merge_session_cookies(session.token),
+                cookies=merge_session_cookies(
+                    session.token, user_id=str(session.user_id or "")
+                ),
             ),
             json={"file_id": file_id},
             timeout=upstream_timeout(30.0),
@@ -69,9 +71,11 @@ async def poll_parse_status(
             http,
             "POST",
             f"{BASE_URL}{PARSE_STATUS_PATH}",
-            headers=build_headers(
+            headers=await build_headers_async(
                 session.token,
-                cookies=merge_session_cookies(session.token),
+                cookies=merge_session_cookies(
+                    session.token, user_id=str(session.user_id or "")
+                ),
             ),
             json={"file_id_list": file_ids},
             timeout=upstream_timeout(30.0),

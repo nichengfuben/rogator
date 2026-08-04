@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from upstream.qwen.auth.crypto import build_headers, build_stop_headers
+from upstream.qwen.auth.crypto import build_headers_async, build_stop_headers_async
 from upstream.qwen.chat.routes import (
     BASE_URL,
     CHAT_PATH,
@@ -41,7 +41,7 @@ class ChatSession:
     async def create(self, token: str, model: str, chat_type: str = "t2t") -> str:
 
         url = f"{BASE_URL}{NEW_CHAT_PATH}"
-        headers = build_headers(token, include_version=True)
+        headers = await build_headers_async(token, include_version=True, api_path=NEW_CHAT_PATH)
         async with self._session.post(
             url,
             json=build_new_chat_payload(model, chat_type),
@@ -69,7 +69,7 @@ class ChatSession:
         async with self._session.post(
             f"{BASE_URL}{STOP_CHAT_PATH}",
             json=build_stop_payload(chat_id, response_id),
-            headers=build_stop_headers(token),
+            headers=await build_stop_headers_async(token),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=15),
             proxy=self._resolve_proxy(),
@@ -82,7 +82,7 @@ class ChatSession:
             return False
         async with self._session.delete(
             f"{BASE_URL}{DELETE_CHAT_PATH.format(chat_id=chat_id)}",
-            headers=build_headers(token, cookies=self._cookies()),
+            headers=await build_headers_async(token, cookies=self._cookies()),
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=15),
             proxy=self._resolve_proxy(),
@@ -135,7 +135,7 @@ class ChatSession:
             thinking_format="raw",
             stream=True,
         )
-        headers = build_headers(
+        headers = await build_headers_async(
             token,
             chat_id=chat_id,
             include_sse=True,

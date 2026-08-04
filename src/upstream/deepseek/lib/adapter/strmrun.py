@@ -9,7 +9,7 @@ from typing import Any, AsyncGenerator, Dict, List, Union
 
 import aiohttp
 
-from server.records.sse_record import append_sse_bytes
+from server.records.sse_record import append_sse_bytes_async
 from upstream.deepseek.lib.adapter.helpers.biz_error import raise_if_user_muted
 from upstream.deepseek.lib.adapter.helpers.pmtutil import translate_chunk
 from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST, MAX_CONTINUE
@@ -142,7 +142,7 @@ class _StreamRunMixin:
         async for raw_chunk in resp.content.iter_chunked(4096):
             if not raw_chunk:
                 continue
-            append_sse_bytes(raw_chunk)
+            await append_sse_bytes_async(raw_chunk)
             buf += raw_chunk.decode("utf-8", errors="ignore")
             lines = buf.split("\n")
             buf = lines[-1]

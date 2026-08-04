@@ -245,6 +245,8 @@ async def get_pow_response(
     from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST
     from upstream.deepseek.lib.protocol.headers import build_basic_headers
 
+    from core.transport.blocking import pow_limiter, run_blocking
+
     headers = build_basic_headers(token)
     try:
         async with session.post(
@@ -262,7 +264,13 @@ async def get_pow_response(
             cd = _extract_challenge_dict(data)
             if cd is None:
                 return ""
-            return _build_pow_payload(cd, pow_solver, target_path)
+            return await run_blocking(
+                _build_pow_payload,
+                cd,
+                pow_solver,
+                target_path,
+                limiter=pow_limiter(),
+            )
     except Exception as exc:
         logger.warning("PoW 失败: %s", exc)
         return ""

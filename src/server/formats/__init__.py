@@ -1,17 +1,13 @@
 from __future__ import annotations
 
+from echotools.base.ids import gen_tool_id
+
 from server.formats.constants import (
-    CAPABILITIES,
-    DATA_DIR,
-    DEFAULT_MODEL,
-    DEFAULT_MODELS,
-    DEFAULT_USER_AGENT,
     KEEPALIVE_INTERVAL,
     LOGIN_TIMEOUT,
     MAX_CONCURRENT,
     MAX_QUEUE_SIZE,
     MAX_REQUEST_RESTARTS,
-    MODELS_CACHE_FILE,
     MODELS_FETCH_TIMEOUT,
     PORT,
     PRELOGIN_ACCOUNT_COUNT,
@@ -21,12 +17,9 @@ from server.formats.constants import (
     SHUTDOWN_CANCEL_GRACE,
     SHUTDOWN_TOTAL_TIMEOUT,
     SHUTDOWN_WAIT_IDLE_TIMEOUT,
-    TOKEN_EXPIRE_HOURS,
-    TOKEN_EXPIRE_SECONDS,
     gen_chatcmpl_id,
     gen_msg_id,
     gen_request_id,
-    gen_tool_id,
 )
 from server.formats.errors import (
     BaxiaSmBlockedError,
@@ -37,6 +30,7 @@ from server.formats.errors import (
     UpstreamTimeoutError,
     UpstreamUnavailableError,
     UpstreamWafBlockedError,
+    UpstreamChatNotFoundError,
     as_upstream_connection_error,
     client_disconnected_response,
     error_response,
@@ -76,18 +70,12 @@ _fix_tool_call_id = fix_tool_call_id
 _build_usage_dict = build_usage_dict
 
 __all__ = [
-    "CAPABILITIES",
     "ClientDisconnectedError",
-    "DATA_DIR",
-    "DEFAULT_MODEL",
-    "DEFAULT_MODELS",
-    "DEFAULT_USER_AGENT",
     "KEEPALIVE_INTERVAL",
     "LOGIN_TIMEOUT",
     "MAX_CONCURRENT",
     "MAX_QUEUE_SIZE",
     "MAX_REQUEST_RESTARTS",
-    "MODELS_CACHE_FILE",
     "MODELS_FETCH_TIMEOUT",
     "PORT",
     "PRELOGIN_ACCOUNT_COUNT",
@@ -98,14 +86,13 @@ __all__ = [
     "SHUTDOWN_CANCEL_GRACE",
     "SHUTDOWN_TOTAL_TIMEOUT",
     "SHUTDOWN_WAIT_IDLE_TIMEOUT",
-    "TOKEN_EXPIRE_HOURS",
-    "TOKEN_EXPIRE_SECONDS",
     "TokenExpiredError",
     "BaxiaSmBlockedError",
     "UpstreamConnectionError",
     "UpstreamTimeoutError",
     "UpstreamUnavailableError",
     "UpstreamWafBlockedError",
+    "UpstreamChatNotFoundError",
     "UpstreamUsageTracker",
     "as_upstream_connection_error",
     "log_qwen_upstream_usage",

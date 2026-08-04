@@ -112,40 +112,7 @@ async def _stream_openai_asr(
 async def _stream_anthropic_asr(
     qwen: Any, session: Any, pcm: bytes, language: str
 ) -> web.StreamResponse:
-    from upstream.qwen.media.asr import AsrTranscriber
-
-    resp = web.StreamResponse(
-        status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
-    )
-    await resp.prepare(None)
-    http = await qwen._ensure_http_session()
-    asr = AsrTranscriber(http, session.token)
-    prev = ""
-    try:
-        async for full in asr.transcribe_stream(pcm, language=language or "zh-CN"):
-            delta = full[len(prev) :]
-            prev = full
-            if not delta:
-                continue
-            evt = {"type": "transcript.text.delta", "delta": {"text": delta}}
-            await resp.write(
-                f"event: content_block_delta\ndata: {json.dumps(evt, ensure_ascii=False)}\n\n".encode(),
-            )
-        done = {"type": "transcript.text.done", "text": prev}
-        await resp.write(
-            f"event: message_stop\ndata: {json.dumps(done, ensure_ascii=False)}\n\n".encode(),
-        )
-    except Exception as exc:
-        err = {"type": "error", "error": {"type": "api_error", "message": str(exc)}}
-        await resp.write(
-            f"event: error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
-        )
-    return resp
+    return await _stream_openai_asr(qwen, session, pcm, language)
 
 
 async def audio_transcriptions_handler(request: web.Request) -> web.Response:

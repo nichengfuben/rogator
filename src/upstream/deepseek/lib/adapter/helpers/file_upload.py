@@ -9,7 +9,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import aiohttp
 
 from upstream.deepseek.lib.guard.pow import get_pow_response
-from upstream.deepseek.lib.protocol.consts import DEFAULT_HOST, MODEL_VISION
+from upstream.deepseek.lib.protocol.consts import (
+    DEFAULT_HOST,
+    MODEL_FLASH,
+    MODEL_PRO,
+    MODEL_VISION,
+)
 from upstream.deepseek.lib.protocol.headers import build_headers
 
 logger = logging.getLogger(__name__)
@@ -33,8 +38,13 @@ _PARSE_ERRORS = frozenset(
 
 
 def resolve_model_type(model: str) -> str:
-
-    return "vision" if model == MODEL_VISION else "default"
+    if model == MODEL_VISION:
+        return "vision"
+    if model == MODEL_PRO:
+        return "expert"
+    if model == MODEL_FLASH:
+        return "default"
+    return "default"
 
 
 def is_parse_success_status(status: str) -> bool:

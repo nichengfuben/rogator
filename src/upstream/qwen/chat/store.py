@@ -24,7 +24,7 @@ from core.session.store import (
     usernames_in_use,
     remove_by_username,
 )
-from server.formats import DEFAULT_USER_AGENT
+from upstream.qwen.chat.routes import USER_AGENT
 
 _UPSTREAM = "qwen"
 SESSIONS_FILE = "persist/qwen/sessions.json"
@@ -57,7 +57,7 @@ async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_ur
     try:
         async with session.get(
             f"{auth_base_url}/api/v2/user",
-            headers={"Authorization": f"Bearer {token}", "User-Agent": DEFAULT_USER_AGENT},
+            headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT},
             ssl=False,
             timeout=aiohttp.ClientTimeout(total=15),
         ) as ur:

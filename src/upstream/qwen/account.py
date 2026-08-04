@@ -15,17 +15,13 @@ from core.session.accounts import Account
 from core.session.models_cache import ModelsCacheMixin
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
-from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
+from upstream.qwen.auth.crypto import build_headers_async, build_login_headers, hash_password
 from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
 from upstream.qwen.chat.store import fetch_user_id
 from upstream.qwen.auth.http import run_with_connection_retry
 from core.transport.http import upstream_timeout
-from server.formats import (
-    DEFAULT_MODELS,
-    LOGIN_TIMEOUT,
-    MODELS_CACHE_FILE,
-    MODELS_FETCH_TIMEOUT,
-)
+from upstream.qwen.chat.routes import DEFAULT_MODELS, MODELS_CACHE_FILE
+from server.formats import LOGIN_TIMEOUT, MODELS_FETCH_TIMEOUT
 from server.model.model_meta import (
     ModelMeta,
     merge_model_meta,
@@ -118,7 +114,7 @@ class QwenLoginMixin(SessionLoginMixin):
 
 class ModelsFetchMixin(ModelsCacheMixin):
     async def _fetch_models_remote(self, s, session, now: float, keep_cached) -> List[str]:
-        headers = build_headers(session.token)
+        headers = await build_headers_async(session.token)
         headers["Accept"] = "application/json"
         async with s.get(
             f"{BASE_URL}{MODELS_PATH}",

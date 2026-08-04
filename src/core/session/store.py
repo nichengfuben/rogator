@@ -173,6 +173,23 @@ def save_upstream_sessions(
     blocked_accounts: Optional[Dict[str, float]] = None,
     muted_accounts: Optional[Dict[str, float]] = None,
 ) -> List[str]:
+    return _save_upstream_sessions_impl(
+        upstream,
+        sessions,
+        current_index=current_index,
+        blocked_accounts=blocked_accounts,
+        muted_accounts=muted_accounts,
+    )
+
+
+def _save_upstream_sessions_impl(
+    upstream: str,
+    sessions: List[PlatformSession],
+    *,
+    current_index: int = 0,
+    blocked_accounts: Optional[Dict[str, float]] = None,
+    muted_accounts: Optional[Dict[str, float]] = None,
+) -> List[str]:
     cleaned, removed = clean_expired(sessions)
     sessions[:] = cleaned
     if removed:
@@ -202,6 +219,26 @@ def save_upstream_sessions(
         except OSError as exc:
             logger.debug("Failed to save sessions [%s]: %s", upstream, exc)
     return removed
+
+
+async def save_upstream_sessions_async(
+    upstream: str,
+    sessions: List[PlatformSession],
+    *,
+    current_index: int = 0,
+    blocked_accounts: Optional[Dict[str, float]] = None,
+    muted_accounts: Optional[Dict[str, float]] = None,
+) -> List[str]:
+    from core.transport.blocking import run_blocking
+
+    return await run_blocking(
+        _save_upstream_sessions_impl,
+        upstream,
+        sessions,
+        current_index=current_index,
+        blocked_accounts=blocked_accounts,
+        muted_accounts=muted_accounts,
+    )
 
 
 def clean_expired(sessions: List[PlatformSession]) -> Tuple[List[PlatformSession], List[str]]:

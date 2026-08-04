@@ -132,7 +132,7 @@ class _ClientLifecycleMixin:
                 logger.warning("首次 HIF 令牌获取失败 %s: %s", account.username, exc)
 
         try:
-            from upstream.deepseek.lib.client.settingsapi import warmup_account_client
+            from upstream.deepseek.lib.user.settingsapi import warmup_account_client
             from upstream.deepseek.lib.session.sessapi import get_session_list
 
             await warmup_account_client(

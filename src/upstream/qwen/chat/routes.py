@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""HTTP endpoints, constants, and settings for the Qwen adapter.
+"""HTTP endpoints, constants, and settings for the Qwen upstream.
 
 Merged from: endpoints.py, constants.py, settings.py
 """
@@ -22,7 +22,7 @@ API_VERSION: Final[str] = "2.1"
 BAXIA_VERSION: Final[str] = "0.0.3"
 BXUA_VERSION: Final[str] = BAXIA_VERSION
 BAXIA_SDK_VERSION: Final[str] = "2.5.37"
-USE_LOCAL_MODE: Final[bool] = False
+USE_LOCAL_MODE: Final[bool] = True
 USER_AGENT: Final[str] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
@@ -101,10 +101,26 @@ VIDEO_TASK_POLL_INTERVAL: Final[int] = 5
 
 
 # ---------------------------------------------------------------------------
-# Constants (from constants.py)
+# Models & persistence (自 server/formats/constants.py 迁入)
 # ---------------------------------------------------------------------------
 
-MODELS: Final[List[str]] = [
+UPSTREAM_NAME: Final[str] = "qwen"
+DEFAULT_MODEL: Final[str] = "qwen3-7-max"
+TOKEN_EXPIRE_HOURS: Final[int] = 12
+TOKEN_EXPIRE_SECONDS: Final[int] = TOKEN_EXPIRE_HOURS * 3600
+DATA_DIR: Final[str] = f"persist/{UPSTREAM_NAME}"
+
+
+def models_cache_path(upstream: str = UPSTREAM_NAME) -> str:
+    return f"persist/{upstream.strip().lower()}/models.json"
+
+
+MODELS_CACHE_FILE: Final[str] = MODELS_PERSIST_PATH
+
+DEFAULT_MODELS: Final[List[str]] = [
+    "qwen3.8-max-preview",
+    "qwen3.8-max",
+    "qwen3.7-max",
     "qwen3.6-plus",
     "qwen3.5-plus",
     "qwen3.5-397b-a17b",
@@ -117,6 +133,33 @@ MODELS: Final[List[str]] = [
     "qwen3-omni-flash-2025-12-01",
     "qwen-plus-2025-07-28",
 ]
+
+MODEL_META_CAPABILITIES: Final[Dict[str, bool]] = {
+    "chat": True,
+    "vision": True,
+    "search": True,
+    "count_tokens": True,
+    "image_gen": True,
+    "tts": True,
+}
+
+DEFAULT_MODEL_CONTEXT_LENGTH: Final[int] = 256 * 1024
+
+DEFAULT_MODEL_CAPABILITIES: Final[Dict[str, bool]] = {
+    **MODEL_META_CAPABILITIES,
+    "document": True,
+    "video": True,
+    "audio": True,
+}
+
+PERSISTED_MODEL_CAPABILITIES: Final[Dict[str, bool]] = dict(DEFAULT_MODEL_CAPABILITIES)
+DEFAULT_MODEL_MODALITY: Final[List[str]] = ["text", "image", "video", "audio"]
+
+# ---------------------------------------------------------------------------
+# Constants (legacy model list)
+# ---------------------------------------------------------------------------
+
+MODELS: Final[List[str]] = list(DEFAULT_MODELS)
 
 CAPS: Final[Dict[str, bool]] = {
     "chat": True,
@@ -227,6 +270,19 @@ __all__ = [
     "SETTING_CONFIG_PATH",
     "MODELS",
     "CAPS",
+    "DATA_DIR",
+    "DEFAULT_MODEL",
+    "DEFAULT_MODELS",
+    "DEFAULT_MODEL_CAPABILITIES",
+    "DEFAULT_MODEL_CONTEXT_LENGTH",
+    "DEFAULT_MODEL_MODALITY",
+    "MODEL_META_CAPABILITIES",
+    "MODELS_CACHE_FILE",
+    "PERSISTED_MODEL_CAPABILITIES",
+    "TOKEN_EXPIRE_HOURS",
+    "TOKEN_EXPIRE_SECONDS",
+    "UPSTREAM_NAME",
+    "models_cache_path",
     "SMART_PROXY_ENABLED",
     "MODELS_PERSIST_PATH",
     "PERSIST_PATH",

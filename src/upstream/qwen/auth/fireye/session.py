@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 
-from upstream.qwen.auth.fireye.env import BrowserEnv, default_env
+from upstream.qwen.auth.fireye.env import FingerprintEnv, default_env
 
 
 @dataclass
@@ -13,7 +13,9 @@ class FireyeSession:
     fingerprint: str = ""
     umid: str = ""
     seq: int = 0
-    env: BrowserEnv = field(default_factory=default_env)
+    env: FingerprintEnv = field(default_factory=default_env)
+    session_block: bytes = b""
+    context_block: bytes = b""
 
     def bump_seq(self) -> int:
         self.seq = (self.seq + 1) & 0xFFFF
@@ -23,6 +25,8 @@ class FireyeSession:
         self.fingerprint = ""
         self.umid = ""
         self.seq = 0
+        self.session_block = b""
+        self.context_block = b""
 
 
 _lock = threading.Lock()

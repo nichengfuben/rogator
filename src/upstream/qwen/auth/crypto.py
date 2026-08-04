@@ -12,11 +12,10 @@ import os
 import re
 import secrets
 import struct
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Final, List, Literal, Optional, Tuple
+from typing import Any, Dict, Final, List, Literal, Optional
 import logging
 
 logger = logging.getLogger("rogator")
@@ -27,7 +26,6 @@ logger = logging.getLogger("rogator")
 from upstream.qwen.chat.routes import (
     APP_VERSION,
     BASE_URL,
-    BAXIA_SDK_VERSION,
     CHAT_ORIGIN,
     SEC_CH_UA,
     SEC_CH_UA_PLATFORM,
@@ -61,24 +59,17 @@ def validate_bxumidtoken(token: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Cookies
+# Cookies — 实现见 auth.http；此处重导出保持旧 import 路径
 # ---------------------------------------------------------------------------
 
-HASH_FIELDS: Final[list] = [
-    "ssxmod_itna",
-    "ssxmod_itna2",
-    "bx-umidtoken",
-    "bx-ua",
-]
-
-
-def generate_cookies(fingerprint: str) -> Dict[str, Any]:
-
-    return {
-        "ssxmod_itna": "",
-        "ssxmod_itna2": "",
-        "fingerprint": fingerprint,
-    }
+from upstream.qwen.auth.http import (  # noqa: E402
+    HASH_FIELDS,
+    absorb_response_cookies,
+    build_cookie_string,
+    generate_cookies,
+    merge_session_cookies,
+    sync_cookie_store,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +78,6 @@ def generate_cookies(fingerprint: str) -> Dict[str, Any]:
 
 
 def generate_device_id() -> str:
-
     return uuid.uuid4().hex
 
 
@@ -106,8 +96,8 @@ def build_fingerprint(*, device_id: str | None = None) -> str:
         "24",
         "Win32",
         "Windows",
-        "Apple GPU",
-        "Apple GPU",
+        "Google Inc. (NVIDIA)",
+        "ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 Direct3D11 vs_5_0 ps_5_0)",
         "desktop",
         "arena",
         "stable",
@@ -141,34 +131,6 @@ _UMID_BODY_LEN: Final[int] = 64
 _UMID_ALPHABET: Final[str] = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_"
 )
-# FE main.js checkApiPath：仅这些路径注入 bx-ua / bx-umidtoken。
-BAXIA_UA_PATH_MARKERS: Final[Tuple[str, ...]] = (
-    "/api/chat/completions",
-    "/api/chats/new",
-    "/api/chat/completed",
-    "/api/v1/chats",
-    "/api/v1/chats/all/tags",
-    "/api/task/suggestions/completions",
-    "/api/v1/tasks/status",
-    "/api/v1/files/getstsToken",
-    "/api/task/title/completions",
-    "/api/task/tags/completions",
-    "/api/parse_url",
-    "/api/v2/chats",
-    "/api/v2/chat/completions",
-    "/api/v2/task/suggestions/completions",
-    "/api/v2/files/getstsToken",
-    "/api/v2/community",
-    "/api/v2/tts/completions",
-    "/api/v2/files/getfilelink",
-    "/api/v2/files/parse",
-    "/api/v2/files/parse/status",
-    "/api/v2/evaluations/feedback",
-)
-BaxiaMode = Literal["full", "version", "none"]
-_runtime_lock = threading.Lock()
-_runtime_fp: str = ""
-_runtime_umid: str = ""
 
 
 def _new_random_bx_umidtoken() -> str:
@@ -185,45 +147,15 @@ def get_bxumidtoken(token: str = "") -> str:
     return _new_random_bx_umidtoken()
 
 
-def ensure_baxia_runtime(*, fingerprint_override: str = "") -> Tuple[str, str]:
-    """对齐 FE：页面会话内 umid/指纹稳定；在 getUidToken 就绪后才发受保护 API。"""
-    global _runtime_fp, _runtime_umid
-    with _runtime_lock:
-        if fingerprint_override.strip():
-            _runtime_fp = fingerprint_override.strip()
-        elif not _runtime_fp:
-            _runtime_fp = generate_fingerprint()
-        if not _runtime_umid:
-            _runtime_umid = get_bxumidtoken()
-        return _runtime_fp, _runtime_umid
-
-
-def reset_baxia_runtime() -> None:
-    """SM/换号时轮换，对应浏览器新会话重新 init fireye。"""
-    global _runtime_fp, _runtime_umid
-    with _runtime_lock:
-        _runtime_fp = ""
-        _runtime_umid = ""
-    try:
-        from upstream.qwen.auth.fireye import reset_session
-
-        reset_session()
-    except Exception:
-        pass
-
-
-def path_needs_baxia_ua(path: str) -> bool:
-    return any(marker in path for marker in BAXIA_UA_PATH_MARKERS)
-
-
-def resolve_baxia_mode(path: str = "", *, explicit: Optional[BaxiaMode] = None) -> BaxiaMode:
-    if explicit is not None:
-        return explicit
-    if not path:
-        return "full"
-    if path_needs_baxia_ua(path):
-        return "full"
-    return "version"
+from upstream.qwen.auth.baxia_runtime import (  # noqa: E402
+    BAXIA_UA_PATH_MARKERS,
+    BaxiaMode,
+    ensure_baxia_runtime,
+    get_baxia_tokens,
+    path_needs_baxia_ua,
+    reset_baxia_runtime,
+    resolve_baxia_mode,
+)
 
 
 def lzw_compress(data: str, bits: int = 6, alphabet: str = CUSTOM_BASE64_CHARS) -> str:
@@ -247,38 +179,6 @@ def custom_encode(data: str, url_safe: bool = True) -> str:
     return encoded
 
 
-def get_baxia_tokens(
-    *,
-    fingerprint_override: str = "",
-    req_url: str = "",
-) -> Dict[str, str]:
-    # umid/指纹会话级复用；bx-ua 每请求由 fireye 纯 Python 生成。
-    fingerprint, umid = ensure_baxia_runtime(
-        fingerprint_override=fingerprint_override,
-    )
-    bx_ua = ""
-    try:
-        from upstream.qwen.auth.fireye import bind_fingerprint, get_fy_token, get_uid_token
-
-        bind_fingerprint(fingerprint, umid=umid)
-        cand = get_fy_token(req_url, fingerprint=fingerprint)
-        if cand.startswith("231!") and len(cand) > 100:
-            bx_ua = cand
-        fy_umid = get_uid_token(fingerprint=fingerprint).strip()
-        if fy_umid and validate_bxumidtoken(fy_umid):
-            umid = fy_umid
-    except Exception as exc:
-        logger.debug("fireye token fallback: %s", exc)
-    if not bx_ua:
-        bx_ua = generate_bxua(fingerprint)
-    return {
-        "bxV": BAXIA_SDK_VERSION,
-        "bxUa": bx_ua,
-        "bxUmidToken": umid,
-        "fingerprint": fingerprint,
-    }
-
-
 # ---------------------------------------------------------------------------
 # HTTP Headers
 # ---------------------------------------------------------------------------
@@ -290,34 +190,14 @@ def make_request_id() -> str:
 
 
 def make_timezone() -> str:
-    """对齐 FE：Date.toString() 去掉括号时区名。"""
+    """Timezone header：Date.toString() 去掉括号时区名。"""
     return datetime.now().astimezone().strftime("%a %b %d %Y %H:%M:%S GMT%z")
-
-
-def merge_session_cookies(
-    token: str, extra: Optional[Dict[str, Any]] = None
-) -> Dict[str, str]:
-    cookies: Dict[str, str] = {"token": token}
-    if extra:
-        for key, value in extra.items():
-            if value not in (None, ""):
-                cookies[str(key)] = str(value)
-    return cookies
-
-
-def build_cookie_string(cookies: Optional[Dict[str, Any]]) -> str:
-
-    if not cookies:
-        return ""
-    return "; ".join(
-        f"{key}={value}" for key, value in cookies.items() if value not in {None, ""}
-    )
 
 
 def _base_headers() -> Dict[str, str]:
     return {
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
         "Connection": "keep-alive",
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
@@ -339,6 +219,43 @@ def build_login_headers() -> Dict[str, str]:
     return headers
 
 
+def _apply_header_options(
+    headers: Dict[str, str],
+    *,
+    token: str,
+    chat_id: str,
+    include_sse: bool,
+    include_version: bool,
+    cookies: Optional[Dict[str, Any]],
+    extra_headers: Optional[Dict[str, str]],
+    baxia_tokens: Optional[Dict[str, str]],
+    baxia_mode: BaxiaMode,
+) -> Dict[str, str]:
+    if baxia_mode != "none" and baxia_tokens is not None:
+        headers["bx-v"] = baxia_tokens["bxV"]
+        if baxia_mode == "full":
+            headers["bx-ua"] = baxia_tokens["bxUa"]
+            headers["bx-umidtoken"] = baxia_tokens["bxUmidToken"]
+    if include_version:
+        headers["Version"] = APP_VERSION
+    # Completions: Accept=application/json, Referer=/c/local; new-chat: /c/new-chat.
+    if include_sse:
+        headers["Accept"] = "application/json"
+        headers["X-Accel-Buffering"] = "no"
+        headers["Referer"] = f"{CHAT_ORIGIN}/c/local"
+    elif chat_id:
+        headers["Referer"] = f"{CHAT_ORIGIN}/c/{chat_id}"
+    else:
+        headers["Referer"] = f"{CHAT_ORIGIN}/c/new-chat"
+    merged = merge_session_cookies(token, cookies) if token or cookies else {}
+    cookie_string = build_cookie_string(merged)
+    if cookie_string:
+        headers["Cookie"] = cookie_string
+    if extra_headers:
+        headers.update(extra_headers)
+    return headers
+
+
 def build_headers(
     token: str,
     *,
@@ -348,37 +265,86 @@ def build_headers(
     fingerprint: str = "",
     cookies: Optional[Dict[str, Any]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
-    use_bearer: bool = True,
+    use_bearer: bool = False,
     baxia: Optional[BaxiaMode] = None,
     api_path: str = "",
 ) -> Dict[str, str]:
+    # 上游 web 以 Cookie token= 鉴权，默认不发 Authorization。
+    headers = _base_headers()
+    if use_bearer and token:
+        headers["Authorization"] = f"Bearer {token}"
+    mode = resolve_baxia_mode(api_path, explicit=baxia)
+    tokens: Optional[Dict[str, str]] = None
+    if mode != "none":
+        from upstream.qwen.auth.fireye import resolve_baxia_req_url
+
+        req_url = resolve_baxia_req_url(api_path, chat_id=chat_id)
+        tokens = get_baxia_tokens(
+            fingerprint_override=fingerprint,
+            req_url=req_url,
+        )
+    return _apply_header_options(
+        headers,
+        token=token,
+        chat_id=chat_id,
+        include_sse=include_sse,
+        include_version=include_version,
+        cookies=cookies,
+        extra_headers=extra_headers,
+        baxia_tokens=tokens,
+        baxia_mode=mode,
+    )
+
+
+async def build_headers_async(
+    token: str,
+    *,
+    chat_id: str = "",
+    include_sse: bool = False,
+    include_version: bool = True,
+    fingerprint: str = "",
+    cookies: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+    use_bearer: bool = False,
+    baxia: Optional[BaxiaMode] = None,
+    api_path: str = "",
+) -> Dict[str, str]:
+    from core.transport.blocking import fireye_limiter, run_blocking
+    from upstream.qwen.auth.fireye import resolve_baxia_req_url
 
     headers = _base_headers()
     if use_bearer and token:
         headers["Authorization"] = f"Bearer {token}"
     mode = resolve_baxia_mode(api_path, explicit=baxia)
+    tokens: Optional[Dict[str, str]] = None
     if mode != "none":
-        tokens = get_baxia_tokens(fingerprint_override=fingerprint)
-        headers["bx-v"] = tokens["bxV"]
-        if mode == "full":
-            headers["bx-ua"] = tokens["bxUa"]
-            headers["bx-umidtoken"] = tokens["bxUmidToken"]
-    if include_version:
-        headers["Version"] = APP_VERSION
-    if chat_id:
-        headers["Referer"] = f"{CHAT_ORIGIN}/c/{chat_id}"
-    if include_sse:
-        headers["X-Accel-Buffering"] = "no"
-    merged = merge_session_cookies(token) if token else {}
-    if cookies:
-        merged.update(
-            {str(k): str(v) for k, v in cookies.items() if v not in (None, "")}
+        req_url = resolve_baxia_req_url(api_path, chat_id=chat_id)
+        tokens = await run_blocking(
+            get_baxia_tokens,
+            fingerprint_override=fingerprint,
+            req_url=req_url,
+            limiter=fireye_limiter(),
         )
-    cookie_string = build_cookie_string(merged)
-    if cookie_string:
-        headers["Cookie"] = cookie_string
-    if extra_headers:
-        headers.update(extra_headers)
+    return _apply_header_options(
+        headers,
+        token=token,
+        chat_id=chat_id,
+        include_sse=include_sse,
+        include_version=include_version,
+        cookies=cookies,
+        extra_headers=extra_headers,
+        baxia_tokens=tokens,
+        baxia_mode=mode,
+    )
+
+
+async def build_stop_headers_async(token: str) -> Dict[str, str]:
+    return await build_headers_async(token, include_version=True)
+
+
+async def build_asr_ws_headers_async(token: str) -> Dict[str, str]:
+    headers = await build_headers_async(token, include_version=True)
+    headers.pop("Content-Type", None)
     return headers
 
 

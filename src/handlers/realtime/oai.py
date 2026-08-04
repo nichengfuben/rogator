@@ -13,10 +13,13 @@ from aiohttp import web
 
 from handlers import get_state
 from handlers.realtime.protocol import (
+    build_transcription_session,
+    extract_session_update_payload,
     new_event_id,
     new_item_id,
     new_session_id,
     parse_transcription_language,
+    parse_transcription_model,
 )
 from handlers.shared.api_errors import resolve_handler_model
 from server.model.model_registry import ModelResolveError
@@ -65,17 +68,27 @@ class OaiRealtimeAsrConnection:
         qwen_session: Any,
         *,
         model: str,
+        intent: str = "",
     ) -> None:
         self._ws = ws
         self._qwen = qwen
         self._qwen_session = qwen_session
         self._model = model
+        self._intent = intent.strip().lower()
         self._session_id = new_session_id()
         self._language = "zh-CN"
-        self._configured = False
+        self._transcription_model = parse_transcription_model({})
+        self._configured = self._intent == "transcription"
         self._closed = False
         self._turn: Optional[_OaiTranscriptionTurn] = None
         self._http: Optional[Any] = None
+
+    def _session_payload(self) -> dict:
+        return build_transcription_session(
+            self._session_id,
+            language=self._language,
+            model=self._transcription_model,
+        )
 
     async def _http_session(self):
         if self._http is None:
@@ -85,17 +98,7 @@ class OaiRealtimeAsrConnection:
     async def send_created(self) -> None:
         await _send_json(
             self._ws,
-            _oai_event(
-                "session.created",
-                session={
-                    "id": self._session_id,
-                    "object": "realtime.session",
-                    "model": self._model,
-                    "modalities": ["text"],
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {"model": "whisper-1"},
-                },
-            ),
+            _oai_event("session.created", session=self._session_payload()),
         )
 
     async def _pump_turn(self, turn: _OaiTranscriptionTurn) -> None:
@@ -162,28 +165,14 @@ class OaiRealtimeAsrConnection:
             await turn.upstream.close()
 
     async def _handle_session_update(self, data: dict) -> None:
-        etype = str(data.get("type") or "")
-        if etype == "session.update":
-            session = data.get("session")
-        else:
-            session = {k: v for k, v in data.items() if k != "type"}
-        if isinstance(session, dict):
+        session = extract_session_update_payload(data)
+        if session:
             self._language = parse_transcription_language(session)
+            self._transcription_model = parse_transcription_model(session)
         self._configured = True
         await _send_json(
             self._ws,
-            _oai_event(
-                "session.updated",
-                session={
-                    "id": self._session_id,
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {
-                        "model": "whisper-1",
-                        "language": self._language,
-                    },
-                    "turn_detection": None,
-                },
-            ),
+            _oai_event("session.updated", session=self._session_payload()),
         )
 
     async def handle_client_event(self, data: dict) -> None:
@@ -277,7 +266,13 @@ async def oai_realtime_ws_handler(request: web.Request) -> web.WebSocketResponse
             )
             await ws.close()
             return ws
-        conn = OaiRealtimeAsrConnection(ws, qwen, session, model=resolved)
+        conn = OaiRealtimeAsrConnection(
+            ws,
+            qwen,
+            session,
+            model=resolved,
+            intent=(request.query.get("intent") or "").strip(),
+        )
         try:
             await conn.run()
         except Exception as exc:

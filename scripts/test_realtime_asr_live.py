@@ -53,7 +53,14 @@ async def _run_oai(base: str, pcm: bytes) -> bool:
                 return False
             await ws.send_str(json.dumps({
                 "type": "session.update",
-                "session": {"input_audio_transcription": {"language": "zh-CN"}},
+                "session": {
+                    "type": "transcription",
+                    "audio": {
+                        "input": {
+                            "transcription": {"language": "zh-CN"},
+                        },
+                    },
+                },
             }))
             await ws.receive()
             chunk = 3200
@@ -84,13 +91,24 @@ async def _run_oai(base: str, pcm: bytes) -> bool:
 
 async def _run_ant(base: str, pcm: bytes) -> bool:
     ws_url = base.replace("http://", "ws://").replace("https://", "wss://") + f"/anthropic/v1/realtime?model={MODEL}"
-    text_parts: list[str] = []
+    deltas: list[str] = []
+    completed = ""
     async with aiohttp.ClientSession() as http:
         async with http.ws_connect(ws_url, heartbeat=30) as ws:
-            await ws.receive()
+            msg = json.loads((await ws.receive()).data)
+            if msg.get("type") != "session.created":
+                print("Anthropic: no session.created", msg, flush=True)
+                return False
             await ws.send_str(json.dumps({
                 "type": "session.update",
-                "session": {"input_audio_transcription": {"language": "zh-CN"}},
+                "session": {
+                    "type": "transcription",
+                    "audio": {
+                        "input": {
+                            "transcription": {"language": "zh-CN"},
+                        },
+                    },
+                },
             }))
             await ws.receive()
             chunk = 3200
@@ -106,15 +124,17 @@ async def _run_ant(base: str, pcm: bytes) -> bool:
                 if m.type != aiohttp.WSMsgType.TEXT:
                     continue
                 evt = json.loads(m.data)
-                if evt.get("type") == "content_block_delta":
-                    delta = evt.get("delta") or {}
-                    if delta.get("type") == "text_delta":
-                        text_parts.append(str(delta.get("text") or ""))
-                elif evt.get("type") == "message_stop":
+                t = evt.get("type")
+                if t == "conversation.item.input_audio_transcription.delta":
+                    deltas.append(str(evt.get("delta") or ""))
+                elif t == "conversation.item.input_audio_transcription.completed":
+                    completed = str(evt.get("transcript") or "")
                     break
-    full = "".join(text_parts)
-    print(f"Anthropic realtime: text={full!r}", flush=True)
-    return bool(full.strip())
+                elif t == "error":
+                    print("Anthropic error", evt, flush=True)
+                    return False
+    print(f"Anthropic realtime: deltas={len(deltas)} completed={completed!r}", flush=True)
+    return bool(completed)
 
 
 async def main() -> int:

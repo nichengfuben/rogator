@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""静态浏览器指纹环境，对齐 dom_polyfill + build_fingerprint 字段。"""
+"""静态指纹环境，对齐 dom_polyfill + build_fingerprint 字段。"""
 
 import hashlib
 import json
@@ -16,7 +16,7 @@ _WEBGL_RENDERER: Final[str] = (
 
 
 @dataclass
-class BrowserEnv:
+class FingerprintEnv:
     user_agent: str = USER_AGENT
     platform: str = "Win32"
     language: str = "zh-CN"
@@ -77,5 +77,5 @@ class BrowserEnv:
         return hashlib.sha256(payload.encode()).digest()
 
 
-def default_env() -> BrowserEnv:
-    return BrowserEnv()
+def default_env() -> FingerprintEnv:
+    return FingerprintEnv()

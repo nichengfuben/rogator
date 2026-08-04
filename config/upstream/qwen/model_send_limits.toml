@@ -1,0 +1,25 @@
+# inject 后 wire 字符上限（prompt_meta.prompt_chars）；未列出的模型用 config.toml [limits] qwen_send_max_chars。
+# [models] 键必须为 model_registry 的 internal_id（如 qwen3.8-max，不可用 qwen3-8-max）。
+
+[models]
+"qwen3.8-max-preview" = 126922
+"qwen3.8-max" = 126922
+"qwen3.7-max" = 126922
+"qwen3.6-plus" = 126297
+"qwen3.5-plus" = 126922
+"qwen3.5-397b-a17b" = 126922
+"qwen3-max-2026-01-23" = 127025
+"qwen3-235b-a22b" = 126922
+"qwen3-vl-30b-a3b" = 126922
+"qwen3-vl-32b" = 127025
+"qwen3-vl-plus" = 126922
+"qwen3-coder-plus" = 126922
+"qwen3-omni-flash-2025-12-01" = 124844
+"qwen-plus-2025-07-28" = 126922
+"qwen3.7-plus" = 126922
+"qwen3.6-max-preview" = 120047
+"qwen3.6-27b" = 125047
+"qwen3.5-omni-plus" = 126922
+"qwen3.6-35b-a3b" = 126922
+"qwen3.5-flash" = 120047
+"qwen3.5-omni-flash" = 125047
