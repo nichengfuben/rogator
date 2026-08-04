@@ -1,227 +1,189 @@
 from __future__ import annotations
 
-"""SSE parsers and stream handler.
+"""SSE 流错误检测与 live 事件迭代。"""
 
-Merged from: sse.py, stream.py
-"""
-
+import asyncio
 import json
-from typing import Any, Dict, List, Optional, Union
+import logging
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 
-# ---------------------------------------------------------------------------
-# SSE Parsers (from sse.py)
-# ---------------------------------------------------------------------------
+import aiohttp
+
+from upstream.qwen.chat.upload.parse import SseEventAssembler, parse_sse_event, parse_sse_line
+from server.formats import (
+    BaxiaSmBlockedError,
+    TokenExpiredError,
+    UpstreamChatNotFoundError,
+    UpstreamTimeoutError,
+    UpstreamWafBlockedError,
+)
+from server.records.sse_record import append_sse_bytes_async
+
+if TYPE_CHECKING:
+    from upstream.qwen.client import QwenClient
+    from upstream.qwen.chat.store import QwenSession
+
+logger = logging.getLogger("rogator")
+
+_BAXIA_SM_MARKERS: frozenset[str] = frozenset(
+    {"RGV587", "FAIL_SYS", "FAIL_SYS_USER_VALIDATE", "RGV587_ERROR::SM"}
+)
+_UPSTREAM_RATE_LIMIT_CODES: frozenset[str] = frozenset(
+    {"RateLimited", "ParallelLimited", "quotaLimited", "Too_Many_Requests"}
+)
 
 
-def _safe_loads(data_str: str) -> Optional[Any]:
+def _is_baxia_sm_block(message: str, *, punish_url: str = "") -> bool:
+    if punish_url and any(marker in message for marker in _BAXIA_SM_MARKERS):
+        return True
+    return "RGV587_ERROR::SM" in message or "FAIL_SYS_USER_VALIDATE" in message
+
+
+def _raise_for_success_false(
+    client: "QwenClient",
+    session: "QwenSession",
+    obj: Dict[str, Any],
+) -> None:
+    from upstream.qwen.chat.chat import raise_qwen_session_error
+
+    msg = json.dumps(obj, ensure_ascii=False)
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+    code = str(data.get("code") or "")
+    if code in _UPSTREAM_RATE_LIMIT_CODES:
+        client._invalidate_session(session)
+        logger.warning("Session %s upstream rate limited (%s)", session.username[:6], code)
+        raise TokenExpiredError(f"Rate limited: {msg[:200]}")
+    if code == "CHAT_NOT_FOUND":
+        raise UpstreamChatNotFoundError(f"Qwen chat not found: {msg[:200]}", upstream="qwen")
+    raise_qwen_session_error(client, session, msg)
+    raise RuntimeError(f"Qwen API error: {msg}")
+
+
+def raise_sse_inline_error(
+    client: "QwenClient",
+    session: "QwenSession",
+    line: str,
+) -> None:
+    """HTTP 200 但 body 为 Baxia/业务错误 JSON 时抛出可重试或 WAF 异常。"""
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        return
+    try:
+        obj = json.loads(stripped)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return
+    if not isinstance(obj, dict):
+        return
+
+    if "success" in obj:
+        if obj.get("success", True):
+            return
+        _raise_for_success_false(client, session, obj)
+
+    ret = obj.get("ret")
+    if not isinstance(ret, list) or not ret:
+        return
+    msg = " ".join(str(part) for part in ret if part)
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+    punish_url = str(data.get("url") or "")
+    if _is_baxia_sm_block(msg, punish_url=punish_url):
+        logger.debug(
+            "Baxia SM blocked [%s]: %s",
+            session.username[:6],
+            msg[:160],
+        )
+        raise BaxiaSmBlockedError(msg[:200])
+    if punish_url or "FAIL_SYS" in msg or "RGV587" in msg:
+        raise UpstreamWafBlockedError(
+            f"Qwen Baxia blocked: {msg[:200]}",
+            upstream="qwen",
+        )
+    raise RuntimeError(f"Qwen upstream error: {msg[:200]}")
+
+
+def _check_sse_error_line(client: "QwenClient", line: str, session: "QwenSession") -> None:
+    raise_sse_inline_error(client, session, line)
+
+
+def _track_response_id(
+    event: Dict[str, Any],
+    response_id_out: Optional[list],
+) -> None:
+    if response_id_out is None:
+        return
+    rid = event.get("response_id")
+    if rid and event.get("type") in (
+        "response_created",
+        "response_stopped",
+        "response_info",
+    ):
+        response_id_out[:] = [str(rid)]
+
+
+def _event_from_sse_data(
+    client: "QwenClient",
+    session: "QwenSession",
+    data_str: str,
+    response_id_out: Optional[list],
+) -> Optional[Dict[str, Any]]:
     if not data_str or data_str == "[DONE]":
         return None
-    try:
-        return json.loads(data_str)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-
-
-def _parse_head_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if "error" in data:
-        return {"type": "error", "message": str(data["error"])}
-    created = data.get("response.created")
-    if isinstance(created, dict):
-        return {
-            "type": "response_created",
-            "response_id": created.get("response_id", ""),
-            "response_index": created.get("response_index"),
-        }
-    stopped = data.get("response.stopped")
-    if isinstance(stopped, dict):
-        return {
-            "type": "response_stopped",
-            "response_id": stopped.get("response_id", ""),
-        }
-    info = data.get("response.info")
-    if isinstance(info, dict) and info.get("response_id"):
-        return {
-            "type": "response_info",
-            "response_id": info.get("response_id", ""),
-        }
-    return None
-
-
-def _build_answer(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    content = delta.get("content")
-    if content and delta.get("status") != "finished":
-        return {"type": "answer", "content": content}
-    return None
-
-
-def _build_thinking(delta: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "type": "thinking_summary",
-        "status": delta.get("status") or "",
-        "extra": delta.get("extra", {}),
-    }
-
-
-def _build_image_tool(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    if delta.get("role") != "function" or delta.get("status") != "finished":
-        return None
-    extra = delta.get("extra", {})
-    imgs = extra.get("image_list", extra.get("tool_result", []))
-    urls = [
-        img.get("image", "")
-        for img in imgs
-        if isinstance(img, dict) and img.get("image")
-    ]
-    if not urls:
-        return None
-    return {"type": "image_gen_tool", "urls": urls}
-
-
-def _build_image_gen(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    content = delta.get("content")
-    if not content:
-        return None
-    return {"type": "image_gen", "content": content, "extra": delta.get("extra", {})}
-
-
-def _build_video_gen(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    content = delta.get("content")
-    if not content:
-        return None
-    return {"type": "video_gen", "content": content}
-
-
-def _build_other(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    phase = delta.get("phase")
-    content = delta.get("content")
-    status = delta.get("status")
-    if phase is not None and phase != "" and content and status != "finished":
-        return {"type": "other", "content": content}
-    return None
-
-
-def _build_web_search(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    content = delta.get("content")
-    if content and delta.get("status") != "finished":
-        return {"type": "thinking", "content": str(content)}
-    extra = delta.get("extra") or {}
-    info = extra.get("web_search_info") or []
-    if isinstance(info, list) and info:
-        parts = []
-        for item in info:
-            if isinstance(item, dict):
-                title = str(item.get("title") or item.get("url") or "")
-                snippet = str(item.get("snippet") or item.get("content") or "")
-                parts.append(f"{title}: {snippet}".strip(": "))
-            else:
-                parts.append(str(item))
-        text = "\n".join(p for p in parts if p)
-        if text:
-            return {"type": "thinking", "content": text}
-    return None
-
-
-def _dispatch_phase(delta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    phase = delta.get("phase")
-    if phase == "KeepAlive":
-        return None
-    if phase == "answer":
-        return _build_answer(delta)
-    if phase == "think":
-        content = delta.get("content")
-        return {"type": "thinking", "content": content} if content else None
-    if phase == "thinking_summary":
-        return _build_thinking(delta)
-    if phase == "web_search":
-        return _build_web_search(delta)
-    if phase == "image_gen_tool":
-        return _build_image_tool(delta)
-    if phase == "image_gen":
-        return _build_image_gen(delta)
-    if phase == "video_gen":
-        return _build_video_gen(delta)
-    return _build_other(delta)
-
-
-def _parse_choice_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    usage = data.get("usage")
-    choices = data.get("choices", [])
-    if not choices:
-        return {"type": "usage", "data": usage} if usage else None
-    delta = choices[0].get("delta", {})
-    result = _dispatch_phase(delta)
-    if usage:
-        if result is None:
-            return {"type": "usage", "data": usage}
-        result["usage"] = usage
-    return result
-
-
-def parse_sse_event(data_str: str) -> Optional[Dict[str, Any]]:
-
-    data = _safe_loads(data_str)
-    if data is None:
-        return None
-    head = _parse_head_event(data)
-    if head is not None:
-        return head
-    return _parse_choice_event(data)
-
-
-class SseEventAssembler:
-    # 对齐前端 kT/_T（eventsource-parser）：空行 dispatch，多条 data: 用 \n 合并。
-
-    __slots__ = ("_data_parts",)
-
-    def __init__(self) -> None:
-        self._data_parts: List[str] = []
-
-    def feed_line(self, line: str) -> Optional[str]:
-        if line == "":
-            return self._flush()
-        if line.startswith(":"):
-            return None
-        if line.startswith("data:"):
-            value = line[5:]
-            if value.startswith(" "):
-                value = value[1:]
-            self._data_parts.append(value)
-            return None
-        return None
-
-    def flush_eof(self) -> Optional[str]:
-        return self._flush()
-
-    def _flush(self) -> Optional[str]:
-        if not self._data_parts:
-            return None
-        payload = "\n".join(self._data_parts)
-        self._data_parts.clear()
-        return payload
-
-
-def parse_sse_line(data_str: str) -> Optional[Union[str, Dict[str, Any]]]:
-    """Map a raw SSE line into the public stream protocol."""
     event = parse_sse_event(data_str)
-    if event is None:
+    if event:
+        _track_response_id(event, response_id_out)
+    return event
+
+
+def _dispatch_assembled_sse_line(
+    client: "QwenClient",
+    session: "QwenSession",
+    line: str,
+    assembler: SseEventAssembler,
+    response_id_out: Optional[list],
+) -> Optional[Dict[str, Any]]:
+    payload = assembler.feed_line(line)
+    if payload is None:
+        if line and not line.startswith("data:") and not line.startswith(":"):
+            _check_sse_error_line(client, line, session)
         return None
-    if event["type"] == "answer":
-        return event.get("content", "")
-    if event["type"] == "thinking":
-        return {"thinking": event.get("content", "")}
-    if event["type"] == "thinking_summary":
-        extra = event.get("extra", {})
-        titles: List[str] = extra.get("summary_title", {}).get("content", [])
-        thoughts: List[str] = extra.get("summary_thought", {}).get("content", [])
-        if not titles and not thoughts:
-            return None
-        parts: List[str] = []
-        for index in range(max(len(titles), len(thoughts))):
-            title = titles[index] if index < len(titles) else ""
-            thought = thoughts[index] if index < len(thoughts) else ""
-            if title or thought:
-                parts.append(f"{title}: {thought}" if title else thought)
-        return {"thinking": "\n".join(parts)} if parts else None
-    if event["type"] == "usage":
-        return {"usage": event.get("data", {})}
-    return None
+    return _event_from_sse_data(client, session, payload, response_id_out)
+
+
+async def iter_sse_events(
+    client: "QwenClient",
+    resp: aiohttp.ClientResponse,
+    session: "QwenSession",
+    *,
+    response_id_out: Optional[list] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """逐行解析 SSE；对齐前端 kT/_T 组帧 + TCP chunk 行缓冲。"""
+    pending = ""
+    assembler = SseEventAssembler()
+    try:
+        async for raw in resp.content:
+            await append_sse_bytes_async(raw)
+            pending += raw.decode("utf-8", errors="replace")
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                line = line.rstrip("\r")
+                event = _dispatch_assembled_sse_line(
+                    client, session, line, assembler, response_id_out,
+                )
+                if event:
+                    yield event
+        tail = pending.rstrip("\r")
+        if tail:
+            event = _dispatch_assembled_sse_line(
+                client, session, tail, assembler, response_id_out,
+            )
+            if event:
+                yield event
+        eof_payload = assembler.flush_eof()
+        if eof_payload:
+            event = _event_from_sse_data(
+                client, session, eof_payload, response_id_out,
+            )
+            if event:
+                yield event
+    except asyncio.TimeoutError as e:
+        raise UpstreamTimeoutError("Upstream SSE read timed out") from e

@@ -28,7 +28,7 @@ from server.retry.session_retry import run_with_session_retry, stream_with_sessi
 from upstream.qwen.account import QwenLoginMixin
 from upstream.qwen.chat.chat import create_chat_for_session
 from upstream.qwen.chat.store import QwenSession
-from upstream.qwen.client import _post_chat_sse
+from upstream.qwen.completion_stream import _post_chat_sse
 
 
 def _qwen_session() -> QwenSession:
@@ -318,10 +318,10 @@ class TestTransportStressSim(unittest.IsolatedAsyncioTestCase):
             return
 
         with patch(
-            "upstream.qwen.client._iter_qwen_sse_or_reconnect",
+            "upstream.qwen.completion_stream._iter_qwen_sse_or_reconnect",
             side_effect=lambda *_a, **_k: _fake_iter(),
         ), patch(
-            "upstream.qwen.client.handle_chat_error",
+            "upstream.qwen.completion_stream.handle_chat_error",
             new=AsyncMock(),
         ):
             events = [

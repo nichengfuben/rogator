@@ -37,7 +37,7 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    from upstream.qwen.openai_stream import stream_openai_chat as _stream
+    from upstream.qwen.completion_stream import stream_openai_chat as _stream
 
     async for event in _stream(
         state,

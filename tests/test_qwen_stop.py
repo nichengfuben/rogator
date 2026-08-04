@@ -69,9 +69,9 @@ class TestChatCompletionCancel(unittest.IsolatedAsyncioTestCase):
             raise asyncio.CancelledError()
 
         with patch.object(client, "_ensure_http_session", AsyncMock()), patch(
-            "upstream.qwen.client.iter_sse_events", _fake_iter,
+            "upstream.qwen.completion_stream.iter_sse_events", _fake_iter,
         ), patch(
-            "upstream.qwen.client.abort_upstream_on_cancel", abort,
+            "upstream.qwen.completion_stream.abort_upstream_on_cancel", abort,
         ), patch.object(client, "cleanup_chat", cleanup):
             resp_cm = MagicMock()
             resp_cm.__aenter__ = AsyncMock(return_value=MagicMock(status=200))

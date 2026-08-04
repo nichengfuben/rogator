@@ -16,7 +16,7 @@ from upstream.qwen.chat.routes import (
     NEW_CHAT_PATH,
     STOP_CHAT_PATH,
 )
-from upstream.qwen.chat.sse import parse_sse_event
+from upstream.qwen.chat.upload.parse import parse_sse_event
 from upstream.qwen.chat.upload.payload import (
     build_new_chat_payload,
     build_payload,
@@ -39,7 +39,6 @@ class ChatSession:
         self._fingerprint = fingerprint_provider
 
     async def create(self, token: str, model: str, chat_type: str = "t2t") -> str:
-
         url = f"{BASE_URL}{NEW_CHAT_PATH}"
         headers = await build_headers_async(token, include_version=True, api_path=NEW_CHAT_PATH)
         async with self._session.post(
@@ -63,7 +62,6 @@ class ChatSession:
             return chat_id
 
     async def stop(self, chat_id: str, token: str, response_id: str = "") -> bool:
-
         if not chat_id or not token:
             return False
         async with self._session.post(
@@ -77,7 +75,6 @@ class ChatSession:
             return response.status in {200, 204}
 
     async def delete(self, chat_id: str, token: str) -> bool:
-
         if not chat_id or not token:
             return False
         async with self._session.delete(
@@ -90,7 +87,6 @@ class ChatSession:
             return response.status in {200, 204}
 
     async def cleanup(self, chat_id: str, token: str) -> None:
-
         try:
             await self.delete(chat_id, token)
         except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -99,7 +95,6 @@ class ChatSession:
     async def download_image(
         self, image_url: str, save_dir: str = GENERATED_IMAGE_DIR
     ) -> Optional[str]:
-
         async with self._session.get(
             image_url,
             headers={
@@ -124,7 +119,6 @@ class ChatSession:
     async def send_placeholder_message(
         self, chat_id: str, token: str, model: str
     ) -> Tuple[Optional[str], str]:
-
         payload = build_payload(
             messages=[{"role": "user", "content": "注意：啥都不要说，直接输出\\即可"}],
             model=model,

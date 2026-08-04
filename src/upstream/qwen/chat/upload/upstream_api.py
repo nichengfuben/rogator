@@ -15,7 +15,7 @@ from upstream.qwen.chat.routes import (
     SETTINGS_PATH,
     SSE_RECONNECT_MAX,
 )
-from upstream.qwen.chat.chat import iter_sse_events
+from upstream.qwen.chat.sse import iter_sse_events
 from upstream.qwen.auth.http import run_with_connection_retry
 from core.transport.http import request_json, upstream_timeout
 
