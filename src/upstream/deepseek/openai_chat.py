@@ -50,7 +50,7 @@ def _prepare_messages(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
     final_messages, send_text, filename, file_bytes = apply_prompt_budget(
-        state, injected, full_content, use_file_split=True,
+        state, injected, full_content, use_file_split=True, model=model,
     )
     return final_messages, send_text, filename, file_bytes
 

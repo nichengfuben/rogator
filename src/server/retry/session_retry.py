@@ -190,6 +190,51 @@ def _shrink_payload_limit_or_raise(
     )
 
 
+async def _handle_chat_not_found_retry(
+    req_id: str,
+    state: Any,
+    exc: UpstreamChatNotFoundError,
+    *,
+    retries: int,
+    limit: int,
+    client: Any | None,
+) -> int:
+    """CHAT_NOT_FOUND 业务层重试：换号或标记无效，不 reset transport。"""
+    retry_client = client if client is not None else state.client
+    switch = getattr(retry_client, "switch_to_next", None)
+    if callable(switch):
+        old_name = getattr(retry_client, "current_session_username", None)
+        new_session = await switch(exclude_username=old_name)
+        if new_session is not None and retries <= limit:
+            logger.warning(
+                "CHAT_NOT_FOUND for %s (retry %d/%d), switched session: "
+                "old=%s new=%s",
+                req_id, retries, limit,
+                mask_username(old_name or ""),
+                mask_username(new_session.username),
+            )
+            return retries
+    invalidate = getattr(retry_client, "mark_invalid_current", None)
+    if callable(invalidate):
+        old_name = getattr(retry_client, "current_session_username", None)
+        invalidate()
+        if retries <= limit:
+            logger.warning(
+                "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated session %s",
+                req_id, retries, limit,
+                mask_username(old_name or ""),
+            )
+            return retries
+    if retries > limit:
+        _log_retry_exhausted(req_id, retries, limit, exc)
+        raise exc
+    logger.warning(
+        "Upstream CHAT_NOT_FOUND for %s (retry %d/%d): %s",
+        req_id, retries, limit, exc,
+    )
+    return retries
+
+
 async def _dispatch_session_retry(
     req_id: str,
     state: Any,
@@ -227,15 +272,9 @@ async def _dispatch_session_retry(
         _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
         return retries
     if isinstance(exc, UpstreamChatNotFoundError):
-        await _reset_client_transport(client)
-        if retries > limit:
-            _log_retry_exhausted(req_id, retries, limit, exc)
-            raise exc
-        logger.warning(
-            "Upstream CHAT_NOT_FOUND for %s (retry %d/%d): %s",
-            req_id, retries, limit, exc,
+        return await _handle_chat_not_found_retry(
+            req_id, state, exc, retries=retries, limit=limit, client=client,
         )
-        return retries
     raise exc
 
 
@@ -271,98 +310,3 @@ async def run_with_session_retry(
             raise
 
 
-async def _close_async_generator(
-    agen: Optional[AsyncGenerator[dict, None]],
-) -> None:
-    """显式关闭嵌套 async generator，避免 shutdown/断连时 aclose 未 await。"""
-    if agen is None:
-        return
-    aclose = getattr(agen, "aclose", None)
-    if aclose is None:
-        return
-    try:
-        await aclose()
-    except (GeneratorExit, asyncio.CancelledError):
-        raise
-    except StopAsyncIteration:
-        return
-    except RuntimeError as exc:
-        msg = str(exc).lower()
-        if "already running" in msg or "cannot reuse" in msg:
-            return
-        raise
-    except Exception:
-        logger.debug("async generator aclose failed", exc_info=True)
-
-
-async def _consume_stream_once(
-    inner: AsyncGenerator[dict, None],
-) -> AsyncGenerator[dict, None]:
-    async for event in inner:
-        yield event
-
-
-async def _reset_stream(inner: Optional[AsyncGenerator[dict, None]]) -> None:
-    await _close_async_generator(inner)
-
-
-async def _handle_stream_retry_error(
-    req_id: str,
-    state: Any,
-    exc: BaseException,
-    retries: int,
-    limit: int,
-    client: Any | None,
-    *,
-    model: str | None = None,
-) -> int:
-    return await _dispatch_session_retry(
-        req_id, state, exc, retries=retries, limit=limit, client=client, model=model,
-    )
-
-
-async def stream_with_session_retry(
-    req_id: str,
-    state: Any,
-    make_stream: Callable[[], AsyncGenerator[dict, None]],
-    *,
-    max_retry: Optional[int] = None,
-    client: Any | None = None,
-    model: str | None = None,
-) -> AsyncGenerator[dict, None]:
-    """流式换号重试：失败则整段重开。"""
-    limit = CONFIG.max_retry_on_error if max_retry is None else max_retry
-    retries = 0
-    inner: Optional[AsyncGenerator[dict, None]] = None
-
-    try:
-        while True:
-            inner = make_stream()
-            try:
-                async for event in _consume_stream_once(inner):
-                    yield event
-                return
-            except asyncio.CancelledError:
-                await _reset_stream(inner)
-                inner = None
-                raise
-            except (
-                TokenExpiredError,
-                BaxiaSmBlockedError,
-                UpstreamWafBlockedError,
-                PayloadTooLargeError,
-                UpstreamTimeoutError,
-                UpstreamConnectionError,
-                UpstreamChatNotFoundError,
-            ) as exc:
-                await _reset_stream(inner)
-                inner = None
-                retries = await _handle_stream_retry_error(
-                    req_id, state, exc, retries, limit, client, model=model,
-                )
-            except Exception:
-                await _reset_stream(inner)
-                inner = None
-                raise
-    finally:
-        await _reset_stream(inner)

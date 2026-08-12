@@ -14,6 +14,7 @@ from handlers.anthropic.stream_tools import (
     _flush_open_stream_tool,
     _send_thinking_delta,
 )
+from handlers.shared.fncall_inject import advance_partial_buffer
 from server.formats import _fix_tool_call_id
 
 

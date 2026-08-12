@@ -144,7 +144,7 @@ async def count_tokens_handler(request: web.Request) -> web.Response:
     except ModelResolveError as exc:
         return model_resolve_error_response(exc, protocol="anthropic")
     try:
-        from handlers.anthro.normalize import _build_anthropic_protocol_options
+        from handlers.anthropic.normalize import _build_anthropic_protocol_options
 
         protocol_options = _build_anthropic_protocol_options(body)
     except ValueError:

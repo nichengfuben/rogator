@@ -176,7 +176,7 @@ def apply_prompt_budget(
     use_file_split: bool = False,
     model: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], str, Optional[str], Optional[bytes]]:
-    """截断 prompt；``use_file_split=True`` 走 splitter.split（Qwen）。"""
+    """截断 prompt；``use_file_split=True`` 走 splitter.split。"""
     splitter = getattr(state, "splitter", None)
     max_chars: Optional[int] = None
     if model:

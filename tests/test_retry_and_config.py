@@ -70,7 +70,7 @@ class TestConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             user_path, tpl_path = _write_user_config(tmp, "[server]\nport = 8932\n")
             cfg = load_config(user_path, template_path=tpl_path)
-            self.assertEqual(cfg.qwen_send_max_chars, 1_024_000)
+            self.assertEqual(cfg.qwen_send_max_chars, 10240)
             self.assertEqual(cfg.model_context_length, 256_000)
             self.assertFalse(cfg.send_full_prompt)
             self.assertEqual(cfg.prelogin, 32)
@@ -132,7 +132,7 @@ class TestConfig(unittest.TestCase):
 
     def test_load_upstream_toml_overlay_chain(self) -> None:
         raw = _load_upstream_toml("qwen")
-        self.assertEqual(raw.get("limits", {}).get("qwen_send_max_chars"), 1_024_000)
+        self.assertEqual(raw.get("limits", {}).get("qwen_send_max_chars"), 10240)
         caps = raw.get("capabilities") or {}
         self.assertTrue(caps.get("chat"))
         self.assertTrue(caps.get("vision"))

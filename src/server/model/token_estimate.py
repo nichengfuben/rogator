@@ -121,7 +121,7 @@ def estimate_anthropic_injected_input_tokens(
 ) -> int:
     """Anthropic count_tokens：按 inject 后实际发给 Qwen 的 prompt 估算。"""
     from handlers import extract_system_for_inject, prepend_anthropic_system
-    from handlers.anthro.normalize import _normalize_anthropic_messages, _normalize_anthropic_tools
+    from handlers.anthropic.normalize import _normalize_anthropic_messages, _normalize_anthropic_tools
     from handlers.openai.tools import convert_tools_to_openai
 
     raw_messages = body.get("messages") or []

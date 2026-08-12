@@ -36,6 +36,7 @@ from server.config.shutdown import (
     cancel_leftover_tasks,
     install_asyncio_exception_handler,
     install_signal_handlers,
+    notify_shutdown_complete,
 )
 from server.config.startup_port import ensure_listen_port
 
@@ -199,6 +200,7 @@ async def _graceful_shutdown(
         with contextlib.suppress(asyncio.CancelledError):
             await watchdog
     logger.info("Server stopped")
+    notify_shutdown_complete()
 
 
 async def _run_server(

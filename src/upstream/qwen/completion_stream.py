@@ -24,6 +24,7 @@ from server.formats import (
     BaxiaSmBlockedError,
     REQUEST_TOTAL_TIMEOUT,
     TokenExpiredError,
+    UpstreamChatNotFoundError,
     UpstreamTimeoutError,
 )
 from server.model.model_thinking import ThinkingRoute
@@ -370,6 +371,11 @@ async def stream_openai_chat(
                 cookies=cookies,
             ):
                 yield event
+        except UpstreamChatNotFoundError:
+            # 上游会话已失效，清理后由重试层重建 chat
+            if chat_id:
+                await client.cleanup_chat(session, chat_id)
+            raise
         except (asyncio.CancelledError, GeneratorExit):
             if chat_id:
                 await abort_upstream_on_cancel(client, session, chat_id, "")

@@ -65,6 +65,14 @@ class DeepSeekClient(HttpTransportMixin, ModelsCacheMixin, SessionLoginMixin):
                 account.token = session.token
                 account.user_id = session.user_id
                 break
+        else:
+            # 运行时新增的账号不在 inner._accounts 中，从最新账号池补建
+            for ds_acc in self._ds_accounts():
+                if ds_acc.username == session.username:
+                    ds_acc.token = session.token
+                    ds_acc.user_id = session.user_id
+                    self._inner._accounts.append(ds_acc)  # noqa: SLF001
+                    break
         self._inner._rebuild_candidates()  # noqa: SLF001
 
     def _apply_restored_sessions(self) -> None:

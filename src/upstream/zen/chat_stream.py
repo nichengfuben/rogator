@@ -61,6 +61,11 @@ def _delta_events(delta: Dict[str, Any]) -> list:
     content = delta.get("content")
     if isinstance(content, str) and content:
         events.append({"type": "answer", "content": content})
+    tool_calls = delta.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            if isinstance(tc, dict):
+                events.append({"type": "tool_call", "tool_call": tc, "native": True})
     return events
 
 

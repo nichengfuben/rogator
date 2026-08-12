@@ -22,10 +22,5 @@ qwen3-5-omni-flash:qwen3.5-omni-flash:true:true
 deepseek-v4-flash:deepseek-v4-flash:true:true
 deepseek-v4-pro:deepseek-v4-pro:true:true
 deepseek-v4-vision:deepseek-v4-vision:true:true
-qwen-asr:qwen-asr:false:false
 deepseek-v4-flash-free:deepseek-v4-flash-free:true:true
-mimo-v2.5-free:mimo-v2.5-free:true:true
-ling-3.0-flash-free:ling-3.0-flash-free:true:true
-nemotron-3-ultra-free:nemotron-3-ultra-free:true:true
-north-mini-code-free:north-mini-code-free:true:true
-laguna-s-2.1-free:laguna-s-2.1-free:true:true
+qwen-asr:qwen-asr:false:false

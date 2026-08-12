@@ -79,13 +79,6 @@ def apply_runtime_config(old: AppConfig, new: AppConfig, state: Optional["AppSta
     """把可热更字段同步到运行时缓存（splitter / clients / 队列 / 日志级别）。"""
     import state as state_mod
 
-    try:
-        from server.config.qwen_send_limits import invalidate_model_send_limits_cache
-
-        invalidate_model_send_limits_cache()
-    except ImportError:
-        pass
-
     state_mod.MAX_QUEUE_SIZE = new.max_queue_size
     state_mod.QWEN_SEND_MAX_CHARS = new.qwen_send_max_chars
     state_mod.MODEL_CONTEXT_LENGTH = new.model_context_length

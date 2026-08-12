@@ -8,7 +8,6 @@ from typing import Optional
 import aiohttp
 
 from core.transport.http import reset_upstream_transport
-from server.retry.http_client import client_session
 
 
 def session_is_usable(session: aiohttp.ClientSession | None) -> bool:
@@ -44,6 +43,7 @@ class HttpTransportMixin:
 
     def _ensure_http_unlocked(self) -> aiohttp.ClientSession:
         if not session_is_usable(self._http):
+            from server.retry.http_client import client_session
             self._http = client_session()
             self._on_http_session_created(self._http)
         return self._http
@@ -67,6 +67,7 @@ class HttpTransportMixin:
             if old is not None and not old.closed:
                 await reset_upstream_transport(old)
             if self._should_recreate_http_on_reset():
+                from server.retry.http_client import client_session
                 self._http = client_session()
                 self._on_http_session_created(self._http)
 

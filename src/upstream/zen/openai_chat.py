@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from server.model.model_thinking import ThinkingRoute
-from upstream.zen.payload import build_chat_payload, normalize_model_name
+from upstream.zen.payload import build_chat_payload, normalize_model_name, normalize_tools
 
 
 def _prepare_stream(
@@ -46,11 +46,11 @@ async def stream_openai_chat(
     final_messages, send_text, route = _prepare_stream(
         state, messages, tools, req_id, model, protocol_options, prompt_api,
     )
-    yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
     payload = build_chat_payload(
         final_messages,
         model,
         stream=True,
+        tools=normalize_tools(tools),
         thinking=bool(route.qwen_native_enabled),
     )
     async for event in client.stream_chat(payload):

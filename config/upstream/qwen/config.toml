@@ -1,7 +1,7 @@
 # Qwen 上游配置（由 template/upstream/qwen.toml 复制；可覆盖 capabilities）
 
 [limits]
-qwen_send_max_chars = 1024000
+qwen_send_max_chars = 10240
 
 [capabilities]
 chat = true

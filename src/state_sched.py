@@ -239,4 +239,8 @@ async def _background_tasks_main(state: "AppState") -> None:
                 if not pool_ok():
                     continue
             tg.start_soon(session_maintenance_loop, state, client, name)
+        for _name, client in state._clients.items():
+            token_maint = getattr(client, "token_maintenance_loop", None)
+            if callable(token_maint):
+                tg.start_soon(token_maint, state.shutdown_event)
         tg.start_soon(models_refresh_loop, state)

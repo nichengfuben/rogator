@@ -99,7 +99,7 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
 
         try:
             models = await run_with_connection_retry(
-                "zen_fetch_models", _run, transport_owner=self,
+                "zen_fetch_models", _run, upstream="zen", transport_owner=self,
             )
         except Exception as exc:
             logger.warning("zen fetch_models failed: %s", exc)

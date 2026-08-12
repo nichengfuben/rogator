@@ -29,14 +29,8 @@ def _format_message(role: str, content: str) -> Optional[str]:
 
 
 def build_prompt(messages: List[Dict[str, Any]]) -> str:
-
-    parts: List[str] = []
-    for m in messages:
-        role = m.get("role", "user")
-        formatted = _format_message(role, _message_text(m.get("content", "")))
-        if formatted is not None:
-            parts.append(formatted)
-    return "\n\n".join(parts)
+    # entml 注入后第一条消息 content 即为完整 prompt
+    return _message_text(messages[0]["content"])
 
 
 def translate_chunk(chunk: Dict[str, Any]) -> Optional[Union[str, Dict[str, Any]]]:

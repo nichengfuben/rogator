@@ -57,6 +57,10 @@ class UploadMixin:
         # text/pdf 等 type=file 需 parse；vision/audio 跳过
         if str(file_obj.get("type") or "") != "file":
             return file_obj
+        # 纯文本文件无需后端文档解析，LLM 可直接读取内容
+        content_type = str(file_obj.get("file_type") or "")
+        if content_type == "text/plain":
+            return apply_parse_status(file_obj, "success")
         file_id = str(file_obj.get("id") or "")
         if not file_id:
             return file_obj
