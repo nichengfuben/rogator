@@ -20,6 +20,7 @@ from server.formats import (
     _json_response,
     client_disconnected_response,
 )
+from server.formats.headers import cloudflare_headers
 from server.model.platform_models import QWEN_ASR_EXTERNAL_ID
 from server.model.model_registry import ModelResolveError
 
@@ -67,8 +68,20 @@ async def _read_multipart_audio(
 
 def _openai_text_response(text: str, response_format: str) -> web.Response:
     if response_format == "text":
-        return web.Response(text=text, content_type="text/plain")
+        return web.Response(
+            text=text,
+            content_type="text/plain",
+            headers=cloudflare_headers(),
+        )
     return _json_response({"text": text})
+
+
+def _anthropic_text_response(text: str) -> web.Response:
+    return web.Response(
+        text=text,
+        content_type="text/plain",
+        headers=cloudflare_headers(),
+    )
 
 
 def _oai_sse_delta(text: str) -> bytes:
@@ -86,11 +99,9 @@ async def _stream_openai_asr(
 
     resp = web.StreamResponse(
         status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        },
+        headers={**cloudflare_headers(), "Content-Type": "text/event-stream",
+                 "Cache-Control": "no-cache",
+                 "Connection": "keep-alive"},
     )
     await resp.prepare(None)
     http = await qwen._ensure_http_session()
@@ -208,5 +219,5 @@ async def anthropic_audio_transcriptions_handler(request: web.Request) -> web.Re
             logger.warning("ASR failed: %s", exc)
             return anthropic_error_response(502, str(exc))
     if fmt == "text":
-        return web.Response(text=text, content_type="text/plain")
+        return _anthropic_text_response(text)
     return _json_response({"text": text})

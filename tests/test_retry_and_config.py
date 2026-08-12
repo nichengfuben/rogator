@@ -24,7 +24,12 @@ from server.config.files import (
 )
 from server.model.model_registry import get_model_registry, load_model_registry, reload_model_registry
 from server.model.model_thinking import resolve_thinking_route, uses_entml_thinking
-from server.formats import BaxiaSmBlockedError, TokenExpiredError, UpstreamTimeoutError
+from server.formats import (
+    BaxiaSmBlockedError,
+    TokenExpiredError,
+    UpstreamChatNotFoundError,
+    UpstreamTimeoutError,
+)
 from server.retry import parse_rate_limit_block_seconds, run_with_session_retry, stream_with_session_retry
 from upstream.qwen.chat.store import QwenSession, save_sessions, load_session_store
 
@@ -661,6 +666,29 @@ class TestSessionRetry(unittest.TestCase):
         self.assertEqual(result, "ok")
         self.assertEqual(calls["n"], 2)
         state.client.switch_to_next.assert_called_once()
+
+    def test_run_with_session_retry_chat_not_found_invalidates_then_switches(self) -> None:
+        import asyncio
+
+        state = MagicMock()
+        state.client.current_session_username = "old@test.com"
+        state.client.mark_invalid_current = MagicMock()
+        state.client.switch_to_next = AsyncMock(return_value=MagicMock(username="new@test.com"))
+        calls = {"n": 0}
+
+        async def _run():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise UpstreamChatNotFoundError("chat missing")
+            return "ok"
+
+        with patch("server.retry.session_retry.CONFIG", replace(get_config(), max_retry_on_error=2)):
+            result = asyncio.run(run_with_session_retry("req-cnf", state, _run))
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls["n"], 2)
+        # 旧号必须先作废，避免重试租回同一会话
+        state.client.mark_invalid_current.assert_called_once()
+        state.client.switch_to_next.assert_awaited_once_with(exclude_username="old@test.com")
 
     def test_run_with_session_retry_upstream_timeout(self) -> None:
         state = MagicMock()

@@ -102,9 +102,14 @@ def client_disconnected_response() -> web.Response:
 
 
 def json_response(data: Any, status: int = 200) -> web.Response:
-    return web.json_response(
-        data, status=status,
-        dumps=lambda x: json.dumps(x, ensure_ascii=False),
+    # body 而非 text：避免 aiohttp 追加 "; charset=utf-8"（官方为纯 application/json）；
+    # 统一带伪造的 Cloudflare 边缘头，掩盖 aiohttp 特征
+    from server.formats.headers import cloudflare_headers
+
+    return web.Response(
+        status=status,
+        body=json.dumps(data, ensure_ascii=False).encode("utf-8"),
+        headers={**cloudflare_headers(), "Content-Type": "application/json"},
     )
 
 

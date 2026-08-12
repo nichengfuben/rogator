@@ -19,8 +19,21 @@ class TestApiHello(AioHTTPTestCase):
     async def test_get_hello(self) -> None:
         resp = await self.client.get("/api/hello")
         self.assertEqual(resp.status, 200)
-        self.assertTrue(resp.headers.get("Content-Type", "").startswith("text/plain"))
-        self.assertEqual(await resp.text(), "hello")
+        self.assertEqual(resp.headers.get("Content-Type"), "application/json")
+        self.assertEqual(await resp.json(), {"message": "hello"})
+
+    async def test_get_hello_headers_aligned(self) -> None:
+        resp = await self.client.get("/api/hello")
+        headers = resp.headers
+        self.assertEqual(headers.get("Server"), "cloudflare")
+        self.assertEqual(headers.get("server-timing"), "x-originResponse;dur=")
+        self.assertEqual(headers.get("X-Robots-Tag"), "none")
+        self.assertEqual(
+            headers.get("Content-Security-Policy"),
+            "default-src 'none'; frame-ancestors 'none'",
+        )
+        self.assertEqual(headers.get("cf-cache-status"), "DYNAMIC")
+        self.assertRegex(headers.get("CF-RAY", ""), r"^[0-9a-f]{16}-LAX$")
 
     async def test_head_hello(self) -> None:
         resp = await self.client.head("/api/hello")

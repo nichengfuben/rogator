@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from aiohttp import web
 
@@ -16,6 +16,7 @@ from handlers.shared.api_errors import (
     resolve_handler_model,
 )
 from core.registry import get_registry
+from server.formats.headers import cloudflare_headers
 from server.formats import (
     ClientDisconnectedError,
     _error_response,
@@ -42,11 +43,87 @@ async def health_handler(request: web.Request) -> web.Response:
 
 
 async def api_hello_handler(request: web.Request) -> web.Response:
-    """轻量存活探针（HEAD/GET /api/hello）。"""
-    return web.Response(text="hello", content_type="text/plain")
+    """轻量存活探针（HEAD/GET /api/hello），响应与 Anthropic 官方 /api/hello 对齐。"""
+    return web.Response(
+        status=200,
+        # 用 body 而非 text：text 会让 aiohttp 追加 "; charset=utf-8"，
+        # 官方响应为纯 "Content-Type: application/json"。
+        body=json.dumps({"message": "hello"}).encode("utf-8"),
+        headers={**cloudflare_headers(), "Content-Type": "application/json"},
+    )
+
+
+# Claude Code 官方 /v1/models 的 max_tokens：本地无输出上限元数据，取固定值（Qwen 系常见输出上限）
+_CLAUDE_CODE_MAX_TOKENS = 65536
+
+
+def _parse_models_limit(request: web.Request) -> Optional[int]:
+    """/v1/models 的 limit 查询参数；缺省或非正整数（含 0/负数/非法串）忽略，返回全部。"""
+    raw = request.query.get("limit")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _claude_code_models_response(limit: Optional[int]) -> web.Response:
+    """Claude Code 模型列表（Anthropic 官方格式）：data/has_more/first_id/last_id。
+
+    字段与官方一致但不含 capabilities/modality；display_name 本地无人读名，回退为模型 id。
+    limit 截断时 has_more=True，Claude Code 可据此分页。
+    """
+    from server.model.model_meta import DEFAULT_MODEL_CONTEXT_LENGTH
+    from server.model.model_registry import get_model_registry, list_external_models
+
+    state = get_state()
+    registry = get_model_registry()
+    external_ids = list_external_models(state._models)
+    fetch_ts = int(state.models_fetch_timestamp()) if state.models_fetch_timestamp() > 0 else 0
+    created_unix = fetch_ts or int(__import__("time").time())
+    created_at = datetime.fromtimestamp(created_unix, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+    )
+    meta = state.merged_model_meta()
+    data = []
+    for eid in external_ids:
+        entry = registry.by_external[eid]
+        raw = meta.get(entry.internal_id)
+        if isinstance(raw, dict):
+            ctx = raw.get("context_length") or DEFAULT_MODEL_CONTEXT_LENGTH
+        else:
+            ctx = raw.context_length if raw is not None else DEFAULT_MODEL_CONTEXT_LENGTH
+        data.append({
+            "id": eid,
+            "max_input_tokens": ctx,
+            "max_tokens": _CLAUDE_CODE_MAX_TOKENS,
+            "created_at": created_at,
+            "display_name": eid,
+            "type": "model",
+        })
+    has_more = False
+    if limit is not None and len(data) > limit:
+        data = data[:limit]
+        has_more = True
+    payload: Dict[str, Any] = {
+        "data": data,
+        "has_more": has_more,
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
+    }
+    if fetch_ts > 0:
+        payload["updated_at"] = fetch_ts
+    return _json_response(payload)
 
 
 async def list_models_handler(request: web.Request) -> web.Response:
+    """OpenAI /v1/models；UA 为 claude-code/ 时按 Anthropic 官方模型列表格式返回。"""
+    limit = _parse_models_limit(request)
+    ua = request.headers.get("User-Agent", "")
+    if ua.startswith("claude-code/"):
+        return _claude_code_models_response(limit)
     from server.model.model_catalog import build_openai_models_list
     from server.model.model_registry import get_model_registry, list_external_models
 
@@ -54,6 +131,8 @@ async def list_models_handler(request: web.Request) -> web.Response:
     registry = get_model_registry()
     external_ids = list_external_models(state._models)
     entries = [registry.by_external[eid] for eid in external_ids]
+    if limit is not None:
+        entries = entries[:limit]
     fetch_ts = int(state.models_fetch_timestamp()) if state.models_fetch_timestamp() > 0 else 0
     meta = state.merged_model_meta()
     payload: Dict[str, Any] = {
@@ -117,6 +196,7 @@ async def anthropic_root_handler(request: web.Request) -> web.Response:
     return web.Response(
         status=200,
         headers={
+            **cloudflare_headers(),
             "Content-Type": "application/json",
             "Anthropic-Version": "2023-06-01",
         },
@@ -159,7 +239,13 @@ async def count_tokens_handler(request: web.Request) -> web.Response:
     except Exception:
         logger.debug("count_tokens inject estimate failed, falling back to raw body", exc_info=True)
         tokens = estimate_anthropic_request_input_tokens(body)
-    return _json_response({"input_tokens": tokens})
+    # body 而非 text：避免 aiohttp 追加 "; charset=utf-8"（官方为纯 application/json）；
+    # 客户端（Claude Code tokenEstimation.ts）只读 input_tokens，须为 number
+    return web.Response(
+        status=200,
+        body=json.dumps({"input_tokens": tokens}).encode("utf-8"),
+        headers={**cloudflare_headers(), "Content-Type": "application/json"},
+    )
 
 
 async def audio_speech_handler(request: web.Request) -> web.Response:
@@ -189,7 +275,11 @@ async def audio_speech_handler(request: web.Request) -> web.Response:
             return _error_response(502, "TTS synthesis failed")
         from pathlib import Path
         audio_bytes = Path(local_path).read_bytes()
-        return web.Response(body=audio_bytes, content_type="audio/wav")
+        return web.Response(
+            body=audio_bytes,
+            content_type="audio/wav",
+            headers=cloudflare_headers(),
+        )
 
 
 async def images_generations_handler(request: web.Request) -> web.Response:

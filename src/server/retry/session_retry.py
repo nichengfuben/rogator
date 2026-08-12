@@ -199,40 +199,37 @@ async def _handle_chat_not_found_retry(
     limit: int,
     client: Any | None,
 ) -> int:
-    """CHAT_NOT_FOUND 业务层重试：换号或标记无效，不 reset transport。"""
+    """CHAT_NOT_FOUND 业务层重试：旧号作废后换号，不 reset transport。
+
+    必须先 mark_invalid 再 switch：池选号按"最少在途+随机"，若旧号仍有效，
+    重试可能又租回同一会话，导致 create_chat 重建后依旧 CHAT_NOT_FOUND。
+    """
     retry_client = client if client is not None else state.client
+    old_name = getattr(retry_client, "current_session_username", None)
+    invalidate = getattr(retry_client, "mark_invalid_current", None)
+    if callable(invalidate):
+        invalidate()
     switch = getattr(retry_client, "switch_to_next", None)
     if callable(switch):
-        old_name = getattr(retry_client, "current_session_username", None)
         new_session = await switch(exclude_username=old_name)
         if new_session is not None and retries <= limit:
             logger.warning(
-                "CHAT_NOT_FOUND for %s (retry %d/%d), switched session: "
-                "old=%s new=%s",
+                "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated old and switched "
+                "session: old=%s new=%s",
                 req_id, retries, limit,
                 mask_username(old_name or ""),
                 mask_username(new_session.username),
             )
             return retries
-    invalidate = getattr(retry_client, "mark_invalid_current", None)
-    if callable(invalidate):
-        old_name = getattr(retry_client, "current_session_username", None)
-        invalidate()
-        if retries <= limit:
-            logger.warning(
-                "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated session %s",
-                req_id, retries, limit,
-                mask_username(old_name or ""),
-            )
-            return retries
-    if retries > limit:
-        _log_retry_exhausted(req_id, retries, limit, exc)
-        raise exc
-    logger.warning(
-        "Upstream CHAT_NOT_FOUND for %s (retry %d/%d): %s",
-        req_id, retries, limit, exc,
-    )
-    return retries
+    if retries <= limit:
+        logger.warning(
+            "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated session %s",
+            req_id, retries, limit,
+            mask_username(old_name or ""),
+        )
+        return retries
+    _log_retry_exhausted(req_id, retries, limit, exc)
+    raise exc
 
 
 async def _dispatch_session_retry(

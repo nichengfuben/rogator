@@ -12,6 +12,7 @@ from server.formats import (
     _json_response,
     convert_to_anthropic,
 )
+from server.formats.headers import cloudflare_headers
 from handlers import get_state, prepend_anthropic_system
 from handlers.shared.api_errors import (
     anthropic_error_event,
@@ -90,7 +91,8 @@ async def _handle_stream(request, state, messages, model, req_id, tools, protoco
         async with tracked_request(state, req_id):
             resp = web.StreamResponse(
                 status=200,
-                headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache",
+                headers={**cloudflare_headers(), "Content-Type": "text/event-stream",
+                         "Cache-Control": "no-cache",
                          "Connection": "keep-alive", "X-Accel-Buffering": "no"},
             )
             await resp.prepare(request)

@@ -19,6 +19,7 @@ from handlers.openai.stream_tools import (
     _send_stream_finish,
     _write_openai_stream_error,
 )
+from server.formats.headers import cloudflare_headers
 from handlers.shared.api_errors import handler_error_response, log_classified_stream_error
 from handlers.shared.fncall_inject import (
     advance_partial_buffer,
@@ -229,12 +230,10 @@ def _new_openai_stream_state(
 async def _prepare_openai_stream_response(request) -> web.StreamResponse:
     resp = web.StreamResponse(
         status=200,
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={**cloudflare_headers(), "Content-Type": "text/event-stream",
+                 "Cache-Control": "no-cache",
+                 "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
     )
     await resp.prepare(request)
     return resp

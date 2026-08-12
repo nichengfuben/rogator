@@ -1,0 +1,16 @@
+{
+  "tokens": [
+    {
+      "reqUrl": "https://chat.qwen.ai/api/v2/chats/new",
+      "ua": "",
+      "len": 0
+    },
+    {
+      "reqUrl": "https://chat.qwen.ai/api/v2/chat/completions?chat_id=f07fc0a2-f718-4076-8f7d-56834a8013bb",
+      "ua": "",
+      "len": 0
+    }
+  ],
+  "umid": "",
+  "cryptoCaptures": []
+}

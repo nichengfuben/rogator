@@ -70,4 +70,8 @@ achecker.py.lnk
 .backup/
 .repo/
 node_modules/
+# Secrets & credentials
+.env
+*.csv.bak
+ext_accounts.toml
 
