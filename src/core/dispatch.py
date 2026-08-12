@@ -116,6 +116,9 @@ async def stream_openai_chat(
     stream_fn = getattr(mod.module, "stream_openai_chat", None)
     if not callable(stream_fn):
         raise RuntimeError(f"upstream {mod.name} missing stream_openai_chat()")
+    # 将 upstream 名称注入 protocol_options，供 handler/records 层判断是否跳过落盘
+    opts = dict(protocol_options or {})
+    opts["_upstream_name"] = mod.name
     async for event in stream_fn(
         state,
         client,
@@ -123,7 +126,7 @@ async def stream_openai_chat(
         model,
         tools,
         req_id,
-        protocol_options=protocol_options,
+        protocol_options=opts,
         prompt_api=prompt_api,
         files=files,
     ):

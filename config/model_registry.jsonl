@@ -24,3 +24,9 @@ deepseek-v4-pro:deepseek-v4-pro:true:true
 deepseek-v4-vision:deepseek-v4-vision:true:true
 deepseek-v4-flash-free:deepseek-v4-flash-free:true:true
 qwen-asr:qwen-asr:false:false
+mimo-v2.5-free:mimo-v2.5-free:true:true
+hy3-free:hy3-free:true:true
+ling-3.0-tiny-free:ling-3.0-tiny-free:true:true
+nemotron-3-ultra-free:nemotron-3-ultra-free:true:true
+nemotron-3.5-lightning-free:nemotron-3.5-lightning-free:true:true
+laguna-s-2.1-free:laguna-s-2.1-free:true:true

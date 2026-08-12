@@ -11,9 +11,11 @@ tts = false
 [proxy]
 # 静态代理池（优先）；空字符串 / "direct" / "none" 表示直连
 # 例: static = ["", "127.0.0.1:7890"]
-static = [""]
+static = ["http://127.0.0.1:7890", ""]
 # 动态代理池 JSON（相对项目根）；不存在则忽略
 # 结构: {"proxies": [{"proxy": "1.2.3.4:8080", "latency": 0.5}, ...]}
-pool_file = "proxy_pool.json"
+pool_file = "persist/zen/proxy_pool.json"
 # 当前节点索引持久化
 state_file = "persist/zen/proxy_state.json"
+# 动态代理池后台刷新间隔（秒）；0 表示禁用，默认 86400（24小时）
+# refresh_interval_seconds = 86400

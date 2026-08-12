@@ -122,10 +122,15 @@ async def _run_openai_event_stream(
         ):
             yield event
 
-    with record_sse_stream(st.req_id), record_raw_response(st.req_id) as raw_recorder:
+    # zen 等不使用 entml 的上游无需落盘 SSE/response
+    _skip_record = (protocol_options or {}).get("_upstream_name") in {"zen", "cursor"}
+    sse_ctx = nullcontext() if _skip_record else record_sse_stream(st.req_id)
+    resp_ctx = nullcontext() if _skip_record else record_raw_response(st.req_id)
+    with sse_ctx, resp_ctx as raw_recorder:
 
         async def _on_event(event: Dict[str, Any]) -> bool:
-            raw_recorder.ingest_event(event)
+            if raw_recorder is not None:
+                raw_recorder.ingest_event(event)
             return await _process_openai_stream_event(st, event)
 
         await iter_retried_chat_events(
@@ -276,12 +281,6 @@ async def _handle_stream(
                 logger.info("OpenAI stream cancelled during shutdown %s", req_id)
                 raise
             except Exception as e:
-                logger.error(
-                    "OpenAI stream error (uncaught path) %s: %s",
-                    req_id,
-                    e,
-                    exc_info=True,
-                )
                 await _write_classified_openai_stream_error(resp, e, st.disconnected)
                 return resp
             finally:

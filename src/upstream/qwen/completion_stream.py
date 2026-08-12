@@ -370,6 +370,10 @@ async def stream_openai_chat(
                 qwen_thinking_mode=route.qwen_native_mode,
                 cookies=cookies,
             ):
+                # role 校验：非 assistant role 视为异常，发送 Retrying... 后中断
+                if isinstance(event, dict) and event.get("type") == "_qwen_function_role":
+                    yield {"type": "thinking", "content": "Retrying..."}
+                    raise asyncio.CancelledError("qwen function role detected")
                 yield event
         except UpstreamChatNotFoundError:
             # 上游会话已失效，清理后由重试层重建 chat

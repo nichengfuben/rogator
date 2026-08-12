@@ -60,7 +60,12 @@ async def _collect_non_stream_response(
     think_parts: List[str] = []
     event_count = 0
     usage_tracker = UpstreamUsageTracker()
-    with record_sse_stream(req_id), record_raw_response(req_id) as raw_recorder:
+    # zen 等不使用 entml 的上游无需落盘 response/sse
+    from contextlib import nullcontext
+    _skip_record = (protocol_options or {}).get("_upstream_name") in {"zen", "cursor"}
+    sse_ctx = nullcontext() if _skip_record else record_sse_stream(req_id)
+    resp_ctx = nullcontext() if _skip_record else record_raw_response(req_id)
+    with sse_ctx, resp_ctx as raw_recorder:
         async for event in _chat_once(
             state, messages, model, tools, req_id, protocol_options=protocol_options,
             prompt_api=prompt_api,
@@ -68,7 +73,8 @@ async def _collect_non_stream_response(
             event_count += 1
             # 非流式仅累积上游 usage 快照，不用流式 //4 估算（避免改变响应 usage）
             usage_tracker.ingest_event(event)
-            raw_recorder.ingest_event(event)
+            if raw_recorder is not None:
+                raw_recorder.ingest_event(event)
             etype = event.get("type")
             if etype in ("response_created", "usage", "prompt_meta"):
                 continue

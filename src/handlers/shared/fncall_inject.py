@@ -83,7 +83,9 @@ def inject_fncall_for_request(
         protocol_options=protocol_options,
     )
     prompt = injected[0]["content"]
-    if _should_dump_prompt():
+    # zen 等不使用 entml 的上游无需落盘 prompt
+    _is_zen = (protocol_options or {}).get("_upstream_name") in {"zen", "cursor"}
+    if not _is_zen and _should_dump_prompt():
         _dump_prompt(prompt, req_id)
     logger.info(
         "inject prompt api=%s req_id=%s model=%s chars=%d tools=%d dump_dir=%s",

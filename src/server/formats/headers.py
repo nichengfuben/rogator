@@ -22,13 +22,15 @@ def _cf_ray() -> str:
 
 
 def cloudflare_headers() -> Dict[str, str]:
+    # 对齐真实 Cloudflare 边缘响应顺序和字段
     return {
-        "server-timing": "x-originResponse;dur=",
-        "X-Robots-Tag": "none",
         "Server": "cloudflare",
         "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "X-Robots-Tag": "none",
+        "server-timing": "x-originResponse;dur=",
         "cf-cache-status": "DYNAMIC",
         "CF-RAY": _cf_ray(),
+        "Connection": "keep-alive",
     }
 
 

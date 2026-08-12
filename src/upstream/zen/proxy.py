@@ -111,7 +111,7 @@ def build_proxy_pool_from_toml(raw: Dict[str, Any]) -> tuple[List[Optional[str]]
     ).strip()
     dynamic = load_dynamic_proxy_pool(pool_file)
     merged = merge_proxy_pools(static, dynamic)
-    logger.info(
+    logger.debug(
         "zen proxy pool: static=%d dynamic=%d merged=%d file=%s",
         len(static), len(dynamic), len(merged), pool_file,
     )
@@ -131,13 +131,18 @@ def is_proxy_error(exc: BaseException) -> bool:
 
 
 class NodeManager:
-    """按索引轮换代理节点，状态落盘。"""
+    """按索引轮换代理节点，状态落盘；支持节点级 mute。"""
+
+    # 429 节点静音时长（秒）
+    MUTE_DURATION: float = 3600.0
 
     def __init__(self, pool: List[Optional[str]], state_file: str) -> None:
         self._pool: List[Optional[str]] = pool if pool else [None]
         self._state_file = state_file
         self._current_index = 0
         self._lock = asyncio.Lock()
+        # 节点级 mute：{节点描述: 解除静音的 Unix 时间戳}
+        self._muted: Dict[str, float] = {}
         self._load()
 
     def _describe(self, index: int) -> str:
@@ -156,6 +161,27 @@ class NodeManager:
     def pool_size(self) -> int:
         return len(self._pool)
 
+    def _is_muted(self, desc: str) -> bool:
+        """检查节点是否处于静音期（调用方须持有 _lock）。"""
+        until = self._muted.get(desc)
+        if until is None:
+            return False
+        if time.time() >= until:
+            del self._muted[desc]
+            return False
+        return True
+
+    async def mute_current(self, duration: float = MUTE_DURATION) -> None:
+        """将当前节点静音指定秒数；后续 switch_next 会跳过该节点。"""
+        async with self._lock:
+            desc = self._describe(self._current_index)
+            self._muted[desc] = time.time() + duration
+            logger.debug(
+                "zen node muted: %s for %.0fs (until %s)",
+                desc, duration,
+                time.strftime("%H:%M:%S", time.localtime(self._muted[desc])),
+            )
+
     def _load(self) -> None:
         path = Path(self._state_file)
         try:
@@ -163,7 +189,7 @@ class NodeManager:
             idx = int(data.get("current_node_index", 0))
             if 0 <= idx < len(self._pool):
                 self._current_index = idx
-                logger.info(
+                logger.debug(
                     "zen NodeManager restored index=%d (%s)",
                     idx, self._describe(idx),
                 )
@@ -204,12 +230,52 @@ class NodeManager:
 
     async def switch_next(self) -> str:
         async with self._lock:
-            self._current_index = (self._current_index + 1) % len(self._pool)
-            desc = self._describe(self._current_index)
-            logger.info("zen NodeManager switched -> %d (%s)", self._current_index, desc)
+            pool_len = len(self._pool)
+            # 尝试找到下一个非 mute 节点，最多遍历整个池
+            for _ in range(pool_len):
+                self._current_index = (self._current_index + 1) % pool_len
+                desc = self._describe(self._current_index)
+                if not self._is_muted(desc):
+                    break
+            else:
+                # 所有节点都被 mute，保持当前位置
+                desc = self._describe(self._current_index)
+                logger.debug(
+                    "zen all %d nodes muted, staying at %s",
+                    pool_len, desc,
+                )
+                return desc
+            logger.debug("zen NodeManager switched -> %d (%s)", self._current_index, desc)
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, self._save_sync)
         except Exception as exc:
             logger.error("zen NodeManager persist failed: %s", exc)
         return desc
+
+    async def reload_pool(self, new_pool: List[Optional[str]]) -> None:
+        """原子替换代理池并重置索引为 0（新池顺序已变，旧索引无意义）。"""
+        if not new_pool:
+            new_pool = [None]
+        async with self._lock:
+            old_size = len(self._pool)
+            self._pool = new_pool
+            self._current_index = 0
+            # 清理不再存在于新池中的 mute 记录
+            new_descs = set()
+            for i in range(len(new_pool)):
+                new_descs.add(self._describe(i))
+            stale = [k for k in self._muted if k not in new_descs]
+            for k in stale:
+                del self._muted[k]
+            logger.debug(
+                "zen NodeManager pool reloaded: %d -> %d nodes, index=%d (%s), stale_mutes=%d",
+                old_size, len(new_pool),
+                self._current_index, self._describe(self._current_index),
+                len(stale),
+            )
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._save_sync)
+        except Exception as exc:
+            logger.error("zen NodeManager persist after reload failed: %s", exc)

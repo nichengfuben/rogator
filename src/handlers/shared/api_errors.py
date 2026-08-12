@@ -49,6 +49,8 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
         return StreamErrorInfo("server_error", f"Baxia SM blocked: {exc}", 503)
     if isinstance(exc, UpstreamTimeoutError):
         return StreamErrorInfo("timeout", str(exc), 504)
+    if isinstance(exc, UpstreamUnavailableError) and "429" in str(exc):
+        return StreamErrorInfo("rate_limited", exc.message, 429)
     if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError, UpstreamChatNotFoundError)):
         return StreamErrorInfo("server_error", exc.message, exc.status)
     if isinstance(exc, UpstreamConnectionError):
@@ -62,9 +64,11 @@ def log_classified_stream_error(exc: BaseException, *, label: str) -> StreamErro
     if isinstance(exc, BaxiaSmBlockedError):
         logger.debug("%s Baxia SM blocked: %s", label, exc)
     elif info.kind == "rate_limited":
-        logger.warning("%s token expired: %s", label, exc)
+        logger.debug("%s rate limited: %s", label, exc)
     elif info.kind == "timeout":
         logger.warning("%s upstream timeout: %s", label, exc)
+    elif isinstance(exc, UpstreamUnavailableError) and getattr(exc, "upstream", None) == "zen":
+        logger.debug("%s zen upstream error: %s", label, exc.message)
     else:
         logger.error("%s error: %s", label, exc, exc_info=True)
     return info

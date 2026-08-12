@@ -15,7 +15,10 @@ MODELS_FETCH_TIMEOUT: Final[float] = 60.0
 MODELS_CACHE_TTL: Final[float] = 300.0
 
 RETRY_COUNT: Final[int] = 2
-USER_AGENT: Final[str] = "curl/8.5.0"
+USER_AGENT: Final[str] = "opencode/latest"
+
+# 动态代理池后台刷新间隔（秒）；0 表示禁用
+PROXY_REFRESH_INTERVAL: Final[float] = 86400.0
 
 FALLBACK_MODEL: Final[str] = "mimo-v2.5-free"
 FALLBACK_MODEL_ENABLED: Final[bool] = True

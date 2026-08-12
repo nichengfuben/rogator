@@ -20,6 +20,11 @@ from upstream.zen.proxy import (
     build_proxy_pool_from_toml,
     is_proxy_error,
 )
+from upstream.zen.proxy import (
+    load_dynamic_proxy_pool,
+    load_static_pool_from_config,
+    merge_proxy_pools,
+)
 from upstream.zen.routes import (
     AUTO_REFRESH_MODELS,
     BASE_URL,
@@ -29,6 +34,7 @@ from upstream.zen.routes import (
     MODELS_CACHE_TTL,
     MODELS_FETCH_TIMEOUT,
     MODELS_PATH,
+    PROXY_REFRESH_INTERVAL,
     RETRY_COUNT,
 )
 
@@ -58,17 +64,61 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
         self._splitter = splitter
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))
-        pool, _pool_file, state_file = build_proxy_pool_from_toml(_load_zen_toml())
+        raw = _load_zen_toml()
+        pool, pool_file, state_file = build_proxy_pool_from_toml(raw)
         self.node_manager = NodeManager(pool, state_file)
+        # 后台刷新所需状态
+        section = raw.get("proxy") if isinstance(raw.get("proxy"), dict) else {}
+        self._pool_file: str = pool_file
+        self._static_pool = load_static_pool_from_config(section.get("static"))
+        interval_raw = section.get("refresh_interval_seconds")
+        try:
+            self._refresh_interval: float = float(interval_raw) if interval_raw is not None else PROXY_REFRESH_INTERVAL
+        except (TypeError, ValueError):
+            self._refresh_interval = PROXY_REFRESH_INTERVAL
+        self._refresh_task: Optional[asyncio.Task] = None
 
     def load_models_cache(self) -> List[str]:
         return list(self._models)
 
     async def startup(self) -> None:
-        return None
+        if self._refresh_interval > 0:
+            self._refresh_task = asyncio.create_task(
+                self._proxy_refresh_loop(), name="zen_proxy_refresh",
+            )
 
     async def shutdown(self) -> None:
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_task.cancel()
+            try:
+                await self._refresh_task
+            except (asyncio.CancelledError, Exception):
+                pass
         await self.close_http_transport()
+
+    async def _proxy_refresh_loop(self) -> None:
+        """后台定时重载动态代理池；异常仅记录日志，不影响服务。"""
+        logger.debug(
+            "zen proxy refresh loop started: interval=%.0fs file=%s",
+            self._refresh_interval, self._pool_file,
+        )
+        while True:
+            try:
+                await asyncio.sleep(self._refresh_interval)
+            except asyncio.CancelledError:
+                return
+            try:
+                dynamic = load_dynamic_proxy_pool(self._pool_file)
+                merged = merge_proxy_pools(self._static_pool, dynamic)
+                await self.node_manager.reload_pool(merged)
+                logger.debug(
+                    "zen proxy pool refreshed: dynamic=%d merged=%d",
+                    len(dynamic), len(merged),
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning("zen proxy refresh failed: %s", exc)
 
     async def fetch_models(self, *, use_cache: bool = True) -> List[str]:
         now = time.time()
@@ -106,6 +156,12 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             return list(DEFAULT_MODELS)
         self._models = list(models)
         self._models_fetch_time = time.time()
+        # 同步新模型到注册表和 kimi-code config.toml
+        try:
+            from upstream.zen.models.registry_sync import sync_zen_registry
+            sync_zen_registry(self._models)
+        except Exception as exc:
+            logger.debug("zen registry sync skipped: %s", exc)
         return list(self._models)
 
     def _parse_models_payload(self, data: Any) -> List[str]:
@@ -136,7 +192,7 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
         base = model.replace("-local", "")
         if base in available:
             return None
-        logger.info("zen model %s not in list, fallback -> %s", model, FALLBACK_MODEL)
+        logger.debug("zen model %s not in list, fallback -> %s", model, FALLBACK_MODEL)
         return FALLBACK_MODEL
 
     async def stream_chat(
@@ -168,7 +224,7 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             desc = self.node_manager.current_description
             try:
                 if attempt > 0:
-                    logger.info("zen retry %d/%d via %s", attempt, RETRY_COUNT, desc)
+                    logger.debug("zen retry %d/%d via %s", attempt, RETRY_COUNT, desc)
                 async for event in post_chat_stream(self, payload, proxy=proxy):
                     yield event
                 return
@@ -181,18 +237,24 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             except ZenValidationError:
                 raise
             except UpstreamUnavailableError as exc:
+                # 上游不可用（429/502/503等）：静音当前节点 1h，切换到下一个
+                await self.node_manager.mute_current()
+                new_node = await self.node_manager.switch_next()
                 if "429" in str(exc):
-                    raise
+                    logger.debug("zen 429 rate limited via %s, switch -> %s", desc, new_node)
+                else:
+                    logger.debug("zen upstream unavailable via %s, switch -> %s", desc, new_node)
+                await self.reset_http_transport()
                 last_error = exc
-                logger.debug("zen upstream error via %s: %s", desc, exc)
                 continue
             except (asyncio.CancelledError, GeneratorExit):
                 raise
             except Exception as exc:
                 last_error = exc
                 if isinstance(exc, ZenProxyError) or is_proxy_error(exc):
+                    await self.node_manager.mute_current()
                     new_node = await self.node_manager.switch_next()
-                    logger.info("zen proxy error via %s, switch -> %s", desc, new_node)
+                    logger.debug("zen proxy error via %s, switch -> %s", desc, new_node)
                     await self.reset_http_transport()
                     continue
                 logger.debug(
@@ -201,8 +263,13 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
                 )
                 await self.reset_http_transport()
         new_node = await self.node_manager.switch_next()
+        if last_error is not None and "429" in str(last_error):
+            raise UpstreamUnavailableError(
+                "HTTP 429 - Rate limit exceeded",
+                upstream="zen",
+            )
         raise UpstreamUnavailableError(
-            f"zen request failed (last: {last_error}). switched to {new_node}",
+            "zen request failed: all retries exhausted",
             upstream="zen",
         )
 
@@ -217,7 +284,7 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             and not fallback_applied
             and payload.get("model") != FALLBACK_MODEL
         ):
-            logger.warning("zen model unsupported, fallback: %s", exc)
+            logger.debug("zen model unsupported, fallback: %s", exc)
             alt = dict(payload)
             alt["model"] = FALLBACK_MODEL
             async for event in self.stream_chat(alt, _fallback_applied=True):

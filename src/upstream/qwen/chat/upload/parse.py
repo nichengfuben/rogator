@@ -252,6 +252,10 @@ def _parse_choice_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not choices:
         return {"type": "usage", "data": usage} if usage else None
     delta = choices[0].get("delta", {})
+    # role 校验：非 assistant role 视为异常信号
+    role = delta.get("role")
+    if role and role != "assistant":
+        return {"type": "_qwen_function_role", "role": role}
     result = _dispatch_phase(delta)
     if usage:
         if result is None:
