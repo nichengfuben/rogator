@@ -1,0 +1,63 @@
+# Backups & archives
+.backup/
+.repo/
+*.rar
+*.zip
+*.7z
+
+# Git internals
+.git/
+
+# Python caches & artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Persist data (accounts, sessions, WASM binaries)
+persist/
+
+# Node
+node_modules/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+
+# Logs & dumps
+logs/
+*.log
+abnormis.txt
+full_prompt_dump.txt
+upload.txt
+
+# Test caches & dumps
+tests/.cache/
+mvp/.cache/
+scripts/prompt_case_dumps/
+
+# Credentials & secrets
+.env
+accounts.csv
+*.csv.bak
+ext_accounts.toml
+config/config.toml
+
+# Misc
+.claude/
+CLAUDE.local.md
+achecker.py.lnk

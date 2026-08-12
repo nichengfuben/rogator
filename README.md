@@ -1,6 +1,6 @@
 # Rogator
 
-多上游 AI 适配服务器 — 将 **Qwen** / **DeepSeek** 等通过 OpenAI 与 Anthropic 兼容 API 暴露给客户端。
+多上游 AI 适配服务器 — 将 **Qwen** / **DeepSeek** / **Zen** / **Cursor** 等通过 OpenAI 与 Anthropic 兼容 API 暴露给客户端。
 
 默认端口 **8932**，工具调用协议 **entml**，依赖 [echotools](https://pypi.org/project/echotools/) `>=2.4.5`（排除有缺陷的 `2.4.2`）。
 
@@ -11,7 +11,7 @@
 
 - **OpenAI 兼容**：`/v1/chat/completions`、模型列表、TTS、图片/视频生成（视上游能力）
 - **Anthropic 兼容**：`/v1/messages` 及 `/anthropic/v1/*` 别名路径
-- **多上游**：`config.toml` 的 `[upstream].enabled` 选择加载 `upstream/<name>/`（如 `qwen`、`deepseek`）
+- **多上游**：`config.toml` 的 `[upstream].enabled` 选择加载 `upstream/<name>/`（如 `qwen`、`deepseek`、`zen`、`cursor`）
 - **工具调用 (Function Calling)**：由 echotools `inject_fncall` 注入 entml 协议（按模型注册表开关）
 - **思考模式**：支持 `thinking` / `reasoning_effort`；entml 模型与原生思考模型分流
 - **历史 reasoning**：通过 `protocol_options.include_thinking_in_history` 由 echotools 渲染 `<entml:thinking>` 块
@@ -90,8 +90,8 @@ client_max_body_bytes = 33554432
 [upstream]
 # 启用的上游模块（对应 upstream/<name>/）
 enabled = ["qwen"]
-# 同时启用 DeepSeek 示例：
-# enabled = ["qwen", "deepseek"]
+# 同时启用多个上游示例：
+# enabled = ["qwen", "deepseek", "zen", "cursor"]
 
 [fncall]
 # record_prompt / print_prompt 任一为 true 时写入 logs/prompts/{req_id}.txt
@@ -190,7 +190,7 @@ curl -X POST http://localhost:8932/v1/messages \
 
 ## 模型注册表
 
-`persist/model_registry.jsonl`（可提交 git）每行：
+`config/model_registry.jsonl`（可提交 git）每行：
 
 ```text
 外键:内键:uses_entml_thinking:uses_entml_tools
@@ -213,7 +213,7 @@ deepseek-v4-flash:deepseek-v4-flash:false:true
 
 ## 支持的模型（摘录）
 
-运行时以 `/v1/models` 与各上游 `persist/<name>/models.json` 缓存为准。注册表中常见 Qwen 外键见 `persist/model_registry.jsonl`；DeepSeek 如 `deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-vision`。
+运行时以 `/v1/models` 与各上游 `persist/<name>/models.json` 缓存为准。注册表中常见 Qwen 外键见 `config/model_registry.jsonl`；DeepSeek 如 `deepseek-v4-flash` / `deepseek-v4-pro` / `deepseek-v4-vision`；Zen 免费模型如 `deepseek-v4-flash-free` / `mimo-v2.5-free` 等（由 zen upstream 自动同步）。
 
 | 外键 | 默认 | entml 思考 | 说明 |
 |------|:----:|:----------:|------|
@@ -250,7 +250,7 @@ python scripts/build_prompt_preview.py
 | `persist/<upstream>/login_history.json` | 各账号最近一次成功登录时间（UTC+8） |
 | `persist/<upstream>/accounts.csv` | 账号（gitignore，勿提交） |
 | `persist/<upstream>/models.json` | 上游模型列表与能力 meta 缓存 |
-| `persist/model_registry.jsonl` | API 外键 → 上游内键 → entml 开关（可提交 git） |
+| `config/model_registry.jsonl` | API 外键 → 上游内键 → entml 开关（可提交 git，支持热重载） |
 
 换号重试逻辑见 `server/retry/session_retry.py`：捕获可恢复错误 → 封禁当前账号 → 切换下一可用 session → 最多重试 `max_retry_on_error` 次。
 
@@ -276,13 +276,15 @@ python scripts/build_prompt_preview.py
 │   ├── path_setup.py
 │   ├── state.py            # AppState、调度器；经 core 选上游客户端
 │   ├── core/               # registry / dispatch / session 池
-│   ├── upstream/           # qwen / deepseek 等
+│   ├── upstream/           # qwen / deepseek / zen / cursor
 │   ├── handlers/           # OpenAI / Anthropic 协议适配
 │   └── server/             # 配置、格式、模型 registry、retry
+├── config/
+│   └── model_registry.jsonl
 ├── persist/
-│   ├── model_registry.jsonl
 │   ├── qwen/
-│   └── deepseek/
+│   ├── deepseek/
+│   └── zen/
 ├── scripts/
 └── tests/
 ```
@@ -299,7 +301,10 @@ python -m pytest tests/ -q
 - Qwen 不支持独立 system role；system 消息会在发送前折叠进最后一条 user 消息
 - 出站 HTTP 请求对部分上游使用 `ssl=False`
 - Qwen 请求需携带阿里巴巴 Baxia 指纹头（`bx-ua`、`bx-umidtoken`）
-- 默认模型以外键为准（见 `persist/model_registry.jsonl` / `server/formats.py`）
+- 默认模型以外键为准（见 `config/model_registry.jsonl` / `server/formats.py`）
+- Zen / Cursor upstream 不记录 prompt / response / SSE 到 logs 目录
+- Zen 节点遇到 429 / 502 / 连接失败时自动 mute 1 小时，错误日志脱敏不暴露代理 IP
+- Qwen SSE 流中若出现非 assistant role（如 function），立即中断并触发客户端重试
 
 ## 许可证
 

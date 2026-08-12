@@ -235,10 +235,18 @@ async def abort_upstream_on_cancel(
 
 
 async def handle_chat_error(client: QwenClient, resp: aiohttp.ClientResponse, session: QwenSession) -> None:
+    from server.formats import UpstreamConnectionError
     raise_qwen_session_error(client, session, "", http_status=resp.status)
     body = await resp.text()
     if resp.status == 413:
         raise PayloadTooLargeError(f"Payload too large: {body[:200]}")
     raise_qwen_session_error(client, session, body)
+    snippet = body[:200].strip() or f"HTTP {resp.status}"
     logger.error("Chat HTTP %d: %s", resp.status, body[:500])
-    raise RuntimeError(f"Chat HTTP {resp.status}: {body[:200]}")
+    # 502/503/504 等网关错误保留原始状态码，避免降级为 500
+    if resp.status in (502, 503, 504):
+        raise UpstreamConnectionError(
+            f"Qwen upstream returned {resp.status}: {snippet}",
+            upstream="qwen",
+        )
+    raise RuntimeError(f"Chat HTTP {resp.status}: {snippet}")

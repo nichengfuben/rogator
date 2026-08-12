@@ -206,12 +206,31 @@ async def _handle_chat_not_found_retry(
     """
     retry_client = client if client is not None else state.client
     old_name = getattr(retry_client, "current_session_username", None)
+    logger.debug(
+        "CHAT_NOT_FOUND retry %d/%d for %s: starting session switch, old=%s client=%s",
+        retries, limit, req_id,
+        mask_username(old_name or ""), type(retry_client).__name__,
+    )
     invalidate = getattr(retry_client, "mark_invalid_current", None)
     if callable(invalidate):
         invalidate()
+        logger.debug(
+            "CHAT_NOT_FOUND retry %d/%d for %s: mark_invalid_current called for old=%s",
+            retries, limit, req_id, mask_username(old_name or ""),
+        )
     switch = getattr(retry_client, "switch_to_next", None)
     if callable(switch):
+        logger.debug(
+            "CHAT_NOT_FOUND retry %d/%d for %s: calling switch_to_next(exclude=%s)",
+            retries, limit, req_id, mask_username(old_name or ""),
+        )
         new_session = await switch(exclude_username=old_name)
+        logger.debug(
+            "CHAT_NOT_FOUND retry %d/%d for %s: switch_to_next returned %s (username=%s)",
+            retries, limit, req_id,
+            "session" if new_session is not None else "None",
+            mask_username(getattr(new_session, "username", "") or "") if new_session else "N/A",
+        )
         if new_session is not None and retries <= limit:
             logger.warning(
                 "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated old and switched "

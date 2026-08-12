@@ -182,5 +182,9 @@ def as_upstream_connection_error(
             upstream=upstream,
         )
     if isinstance(exc, ClientError) and not isinstance(exc, ClientConnectorError):
-        return UpstreamConnectionError(str(exc), upstream=upstream)
+        hint = str(exc).strip() or exc.__class__.__name__
+        return UpstreamConnectionError(
+            _connection_error_message(hint, upstream=upstream),
+            upstream=upstream,
+        )
     return None
