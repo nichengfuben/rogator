@@ -190,6 +190,27 @@ def _shrink_payload_limit_or_raise(
     )
 
 
+def _log_chat_not_found_switch(
+    req_id: str, retries: int, limit: int,
+    old_name: str | None, new_session: Any | None,
+) -> None:
+    """记录 CHAT_NOT_FOUND 换号结果。"""
+    if new_session is not None:
+        logger.warning(
+            "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated old and switched "
+            "session: old=%s new=%s",
+            req_id, retries, limit,
+            mask_username(old_name or ""),
+            mask_username(new_session.username),
+        )
+    else:
+        logger.warning(
+            "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated session %s",
+            req_id, retries, limit,
+            mask_username(old_name or ""),
+        )
+
+
 async def _handle_chat_not_found_retry(
     req_id: str,
     state: Any,
@@ -218,6 +239,7 @@ async def _handle_chat_not_found_retry(
             "CHAT_NOT_FOUND retry %d/%d for %s: mark_invalid_current called for old=%s",
             retries, limit, req_id, mask_username(old_name or ""),
         )
+    new_session = None
     switch = getattr(retry_client, "switch_to_next", None)
     if callable(switch):
         logger.debug(
@@ -231,21 +253,8 @@ async def _handle_chat_not_found_retry(
             "session" if new_session is not None else "None",
             mask_username(getattr(new_session, "username", "") or "") if new_session else "N/A",
         )
-        if new_session is not None and retries <= limit:
-            logger.warning(
-                "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated old and switched "
-                "session: old=%s new=%s",
-                req_id, retries, limit,
-                mask_username(old_name or ""),
-                mask_username(new_session.username),
-            )
-            return retries
     if retries <= limit:
-        logger.warning(
-            "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated session %s",
-            req_id, retries, limit,
-            mask_username(old_name or ""),
-        )
+        _log_chat_not_found_switch(req_id, retries, limit, old_name, new_session)
         return retries
     _log_retry_exhausted(req_id, retries, limit, exc)
     raise exc

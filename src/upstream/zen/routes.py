@@ -11,7 +11,7 @@ MODELS_PATH: Final[str] = "/models"
 CONNECT_TIMEOUT: Final[float] = 60.0
 STREAM_TOTAL_TIMEOUT: Final[float] = 600.0
 STREAM_READ_TIMEOUT: Final[float] = 600.0
-MODELS_FETCH_TIMEOUT: Final[float] = 60.0
+MODELS_FETCH_TIMEOUT: Final[float] = 120.0
 MODELS_CACHE_TTL: Final[float] = 300.0
 
 RETRY_COUNT: Final[int] = 2

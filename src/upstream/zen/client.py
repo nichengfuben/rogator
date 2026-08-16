@@ -13,7 +13,7 @@ from core.transport.http import upstream_timeout
 from core.transport.owned import HttpTransportMixin
 from server.formats import UpstreamUnavailableError
 from upstream.zen.chat_stream import extract_error_info, post_chat_stream
-from upstream.zen.payload import build_headers
+from upstream.zen.openai_chat import build_headers
 from upstream.zen.proxy import (
     NodeManager,
     ZenProxyError,
@@ -213,6 +213,14 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
         async for event in self._stream_with_retries(payload, _fallback_applied):
             yield event
 
+    async def _mute_and_switch(self, desc: str, *, reason: str) -> str:
+        """静音当前节点并切换到下一个，返回新节点描述。"""
+        await self.node_manager.mute_current()
+        new_node = await self.node_manager.switch_next()
+        logger.debug("zen %s via %s, switch -> %s", reason, desc, new_node)
+        await self.reset_http_transport()
+        return new_node
+
     async def _stream_with_retries(
         self,
         payload: Dict[str, Any],
@@ -237,14 +245,8 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             except ZenValidationError:
                 raise
             except UpstreamUnavailableError as exc:
-                # 上游不可用（429/502/503等）：静音当前节点 1h，切换到下一个
-                await self.node_manager.mute_current()
-                new_node = await self.node_manager.switch_next()
-                if "429" in str(exc):
-                    logger.debug("zen 429 rate limited via %s, switch -> %s", desc, new_node)
-                else:
-                    logger.debug("zen upstream unavailable via %s, switch -> %s", desc, new_node)
-                await self.reset_http_transport()
+                reason = "429 rate limited" if "429" in str(exc) else "upstream unavailable"
+                await self._mute_and_switch(desc, reason=reason)
                 last_error = exc
                 continue
             except (asyncio.CancelledError, GeneratorExit):
@@ -252,25 +254,20 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             except Exception as exc:
                 last_error = exc
                 if isinstance(exc, ZenProxyError) or is_proxy_error(exc):
-                    await self.node_manager.mute_current()
-                    new_node = await self.node_manager.switch_next()
-                    logger.debug("zen proxy error via %s, switch -> %s", desc, new_node)
-                    await self.reset_http_transport()
+                    await self._mute_and_switch(desc, reason="proxy error")
                     continue
                 logger.debug(
                     "zen attempt %d/%d via %s failed: %s",
                     attempt + 1, 1 + RETRY_COUNT, desc, exc,
                 )
                 await self.reset_http_transport()
-        new_node = await self.node_manager.switch_next()
+        await self.node_manager.switch_next()
         if last_error is not None and "429" in str(last_error):
             raise UpstreamUnavailableError(
-                "HTTP 429 - Rate limit exceeded",
-                upstream="zen",
+                "HTTP 429 - Rate limit exceeded", upstream="zen",
             )
         raise UpstreamUnavailableError(
-            "zen request failed: all retries exhausted",
-            upstream="zen",
+            "zen request failed: all retries exhausted", upstream="zen",
         )
 
     async def _on_model_unsupported(

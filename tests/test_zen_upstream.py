@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from upstream.zen.payload import build_chat_payload, normalize_model_name, normalize_tools
+from upstream.zen.openai_chat import build_chat_payload, normalize_model_name, normalize_tools
 from upstream.zen.chat_stream import SseLineAssembler, has_valid_sse_event, parse_openai_sse_data
 from upstream.zen.proxy import (
     load_dynamic_proxy_pool,
