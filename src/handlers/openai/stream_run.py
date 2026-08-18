@@ -30,6 +30,8 @@ from handlers.shared.fncall_inject import (
 )
 from server.formats import (
     _gen_chatcmpl_id,
+    build_openai_chunk,
+    build_openai_stream_usage_chunk,
     log_qwen_upstream_usage,
 )
 from server.records.response_record import record_raw_response
