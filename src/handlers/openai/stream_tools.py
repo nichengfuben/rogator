@@ -42,6 +42,7 @@ class OpenAIStreamState:
     streamed_tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     stream_tool: Optional[Dict[str, Any]] = None
     stream_tool_blocks_sent: int = 0
+    native_tc_sent: int = 0
     usage_tracker: UpstreamUsageTracker = field(default_factory=UpstreamUsageTracker)
 
     def stream_chunk(self, **kwargs: Any) -> Dict[str, Any]:
@@ -106,6 +107,27 @@ async def _process_openai_stream_thinking(st: OpenAIStreamState, content: str) -
     return await _emit_chunk(st.resp, chunk, st.disconnected)
 
 
+async def _process_native_tool_call(
+    st: OpenAIStreamState, event: Dict[str, Any]
+) -> bool:
+    """透传上游原生 tool_call delta（zen 等非 entml 上游）。"""
+    tc = event.get("tool_call")
+    if not isinstance(tc, dict):
+        return True
+    if tc.get("id"):
+        st.native_tc_sent += 1
+    entry = dict(tc)
+    if "index" in entry:
+        entry["index"] = st.pending_tc_index + entry["index"]
+    chunk = build_openai_chunk(
+        st.model,
+        chunk_id=st.chunk_id,
+        tool_calls=[entry],
+        usage_null=st.include_usage,
+    )
+    return await _emit_chunk(st.resp, chunk, st.disconnected)
+
+
 async def _process_openai_stream_answer(st: OpenAIStreamState, content: str) -> bool:
     st.full_answer += content
     ready_calls = st.parser.feed(content)
@@ -146,6 +168,8 @@ async def _process_openai_stream_event(
     content = event.get("content", "")
     if etype == "thinking":
         return await _process_openai_stream_thinking(st, content)
+    if etype == "tool_call":
+        return await _process_native_tool_call(st, event)
     if etype != "answer":
         return True
     return await _process_openai_stream_answer(st, content)

@@ -102,23 +102,10 @@ def build_headers(*, stream: bool) -> Dict[str, str]:
 
 
 def _prepare_stream(
-    state: Any,
     messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
-    req_id: str,
-    model: str,
-    protocol_options: Optional[Dict[str, Any]],
-    prompt_api: str,
-) -> Tuple[List[Dict[str, Any]], str, ThinkingRoute]:
-    injected, full_content, route = prepare_injected_messages(
-        state, messages, tools, req_id, model, protocol_options, prompt_api,
-    )
-    final_messages, send_text, _filename, _file_bytes = apply_prompt_budget(
-        state, injected, full_content, use_file_split=False, model=model,
-    )
-    if final_messages:
-        final_messages[0]["content"] = send_text
-    return final_messages, send_text, route
+) -> List[Dict[str, Any]]:
+    """zen 上游直接透传消息列表，不做 inject/budget，避免上下文丢失。"""
+    return list(messages)
 
 
 async def stream_openai_chat(
@@ -133,17 +120,16 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    del files  # Zen 无附件上传；超长由 gateway inject/截断处理
+    del files, state, req_id, prompt_api
     model = normalize_model_name(model)
-    final_messages, send_text, route = _prepare_stream(
-        state, messages, tools, req_id, model, protocol_options, prompt_api,
-    )
+    final_messages = _prepare_stream(messages)
+    thinking = bool((protocol_options or {}).get("thinking", False))
     payload = build_chat_payload(
         final_messages,
         model,
         stream=True,
         tools=normalize_tools(tools),
-        thinking=bool(route.qwen_native_enabled),
+        thinking=thinking,
     )
     async for event in client.stream_chat(payload):
         yield event

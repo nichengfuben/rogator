@@ -29,7 +29,7 @@ _BAXIA_SM_MARKERS: frozenset[str] = frozenset(
     {"RGV587", "FAIL_SYS", "FAIL_SYS_USER_VALIDATE", "RGV587_ERROR::SM"}
 )
 _UPSTREAM_RATE_LIMIT_CODES: frozenset[str] = frozenset(
-    {"RateLimited", "ParallelLimited", "quotaLimited", "Too_Many_Requests"}
+    {"RateLimited", "ParallelLimited", "quotaLimited", "Too_Many_Requests", "quota_limit"}
 )
 
 
@@ -131,7 +131,34 @@ def _event_from_sse_data(
     event = parse_sse_event(data_str)
     if event:
         _track_response_id(event, response_id_out)
-    return event
+        # 检测顶层 error.code 是否为可重试限流错误（如 quota_limit）
+        err = event.get("error")
+        if isinstance(err, dict):
+            err_code = str(err.get("code") or "")
+            if err_code in _UPSTREAM_RATE_LIMIT_CODES:
+                logger.warning(
+                    "Session %s upstream quota limited via SSE error event (%s)",
+                    session.username[:6], err_code,
+                )
+                raise TokenExpiredError(f"Rate limited (SSE error): {err_code}")
+        return event
+    # parse_sse_event 无法解析时（如 Qwen error 事件无 choices），直接检查原始 JSON
+    try:
+        obj = json.loads(data_str)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    err = obj.get("error")
+    if isinstance(err, dict):
+        err_code = str(err.get("code") or "")
+        if err_code in _UPSTREAM_RATE_LIMIT_CODES:
+            logger.warning(
+                "Session %s upstream quota limited via SSE error event (%s)",
+                session.username[:6], err_code,
+            )
+            raise TokenExpiredError(f"Rate limited (SSE error): {err_code}")
+    return None
 
 
 def _dispatch_assembled_sse_line(

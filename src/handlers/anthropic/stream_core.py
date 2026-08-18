@@ -130,6 +130,9 @@ async def _flush_remaining_text(
     safe_text = parser.partial_text if parser.has_calls else (final_text or parser.partial_text)
     new_text, state.last_safe_len = advance_partial_buffer(state.last_safe_len, safe_text)
     if not new_text:
+        # 上游仅返回 thinking 无 text/tool_calls 时，补发空 text block 避免下游误判
+        if state.block_type == "thinking" and not parser.has_calls:
+            return await _emit_final_text_delta(resp, "", state, disconnected)
         return True
     if state.stream_tool is not None:
         if not await _flush_open_stream_tool(resp, parser, state.stream_tool, disconnected):
@@ -239,6 +242,12 @@ async def _complete_anthropic_stream(
         return stream_result_tuple(stream_state, usage_tracker, early_return=True)
     if not await _finalize_open_tools(resp, parser, stream_state, req_id, disconnected):
         return stream_result_tuple(stream_state, usage_tracker, early_return=True)
+    # 关闭未结束的 native tool_use block（zen 等非 entml 上游）
+    if stream_state.block_type == "native_tool" and not disconnected[0]:
+        stream_state.block_idx = await _close_block(
+            resp, stream_state.block_idx, disconnected,
+        )
+        stream_state.block_type = None
 
     _reconcile_tool_calls(stream_state)
     await _maybe_emit_message_start(

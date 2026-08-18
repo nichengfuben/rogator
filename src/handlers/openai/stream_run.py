@@ -58,6 +58,10 @@ async def _flush_remaining_thinking_and_text(
     if new_text:
         chunk = st.stream_chunk(content=new_text)
         await _emit_chunk(st.resp, chunk, st.disconnected)
+    elif st.full_thinking and not st.parser.has_calls:
+        # 上游仅返回 thinking 无 text/tool_calls 时，补发空 content 避免下游误判中断
+        chunk = st.stream_chunk(content="")
+        await _emit_chunk(st.resp, chunk, st.disconnected)
 
 
 async def _finalize_openai_stream_tool(
@@ -200,7 +204,7 @@ async def _finish_openai_stream(
         st.chunk_id,
         all_tool_calls,
         st.disconnected,
-        already_sent_tc_count=st.pending_tc_index,
+        already_sent_tc_count=st.pending_tc_index + st.native_tc_sent,
         usage=usage,
         include_usage=emit_usage,
     )
