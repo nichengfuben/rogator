@@ -99,7 +99,7 @@ class TestConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             user_path, tpl_path = _write_user_config(tmp, "[server]\nport = 8932\n")
             cfg = load_config(user_path, template_path=tpl_path)
-            self.assertEqual(cfg.upstream_enabled, ("qwen",))
+            self.assertEqual(cfg.upstream_enabled, ("qwen", "ollama"))
 
     def test_load_config_upstream_enabled_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

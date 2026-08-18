@@ -4,6 +4,7 @@
 
 echotools>=2.4.8
 aiohttp>=3.9.0
+h2>=4.0.0
 aiohttp-socks>=0.8.0
 anyio>=4.0.0
 typing-extensions>=4.7.0; python_version < "3.9"
