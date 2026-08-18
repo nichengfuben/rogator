@@ -21,8 +21,11 @@ def _caps_ok(mod: UpstreamModule, required: Iterable[str]) -> bool:
 def _model_ok(mod: UpstreamModule, model_id: str, models_by_upstream: Dict[str, Set[str]]) -> bool:
     owned = models_by_upstream.get(mod.name) or set()
     if not owned:
-        # Unknown inventory: allow (single-upstream bootstrap / cache cold)
-        return True
+        # 仅当所有上游清单均为空时放行（真正的冷启动）；
+        # 若其他上游已有清单而本上游为空，说明尚未初始化，不应匹配任意模型
+        if not any(v for v in models_by_upstream.values()):
+            return True
+        return False
     return model_id in owned
 
 
