@@ -14,9 +14,9 @@ from handlers.openai.stream_tools import (
     _emit_openai_streaming_tool_argument_pieces,
     _emit_partial_thinking,
     _emit_ready_tool_calls,
+    _emit_tool_call_chunks,
     _process_openai_stream_event,
     _safe_write,
-    _send_stream_finish,
     _write_openai_stream_error,
 )
 from server.formats.headers import cloudflare_headers
@@ -291,3 +291,51 @@ async def _handle_stream(
                 log_qwen_upstream_usage(req_id, st.usage_tracker)
     except QueueFullError as exc:
         return handler_error_response(exc, label="OpenAI stream")
+
+
+async def _send_stream_finish(
+    resp,
+    model: str,
+    chunk_id: str,
+    all_tool_calls: List[Dict[str, Any]],
+    disconnected: list,
+    already_sent_tc_count: int = 0,
+    usage: Optional[Dict[str, Any]] = None,
+    *,
+    include_usage: bool = False,
+) -> None:
+    """补发未流式送出的 tool_calls，然后 finish + [DONE]（对齐 OpenAI 官方流式收尾）。"""
+    remaining = all_tool_calls[already_sent_tc_count:]
+    if remaining:
+        await _emit_tool_call_chunks(
+            resp,
+            model,
+            chunk_id,
+            remaining,
+            already_sent_tc_count,
+            disconnected,
+            include_usage=include_usage,
+        )
+    finish_reason = (
+        "tool_calls" if (all_tool_calls or already_sent_tc_count > 0) else "stop"
+    )
+    if include_usage:
+        chunk = build_openai_chunk(
+            model,
+            chunk_id=chunk_id,
+            finish_reason=finish_reason,
+            usage_null=True,
+        )
+        await _emit_chunk(resp, chunk, disconnected)
+        if usage is not None:
+            usage_chunk = build_openai_stream_usage_chunk(model, chunk_id, usage)
+            await _emit_chunk(resp, usage_chunk, disconnected)
+    else:
+        chunk = build_openai_chunk(
+            model,
+            chunk_id=chunk_id,
+            finish_reason=finish_reason,
+            usage=usage,
+        )
+        await _emit_chunk(resp, chunk, disconnected)
+    await _safe_write(resp, b"data: [DONE]\n\n", disconnected)
