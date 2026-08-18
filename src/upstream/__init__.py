@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-"""上游命名空间与注册表加载入口。"""
+"""Upstream provider packages live as subpackages of this namespace."""
 
-from core.registry import UpstreamRegistry, load_upstreams
-
-__all__: list[str] = ["UpstreamRegistry", "load_upstreams"]
+__all__: list[str] = []
