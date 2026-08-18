@@ -140,10 +140,17 @@ class NodeManager:
         self._pool: List[Optional[str]] = pool if pool else [None]
         self._state_file = state_file
         self._current_index = 0
-        self._lock = asyncio.Lock()
+        self.__lock: Optional[asyncio.Lock] = None
         # 节点级 mute：{节点描述: 解除静音的 Unix 时间戳}
         self._muted: Dict[str, float] = {}
         self._load()
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        """延迟创建锁，避免 Python 3.8 下无 event loop 时 RuntimeError。"""
+        if self.__lock is None:
+            self.__lock = asyncio.Lock()
+        return self.__lock
 
     def _describe(self, index: int) -> str:
         node = self._pool[index]
