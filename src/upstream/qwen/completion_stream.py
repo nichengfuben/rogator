@@ -18,7 +18,10 @@ from upstream.qwen.chat.chat import (
     handle_chat_error,
 )
 from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH
-from upstream.qwen.chat.upload.upstream_api import reconnect_sse_events_with_retry
+from upstream.qwen.chat.upload.upstream_api import (
+    reconnect_sse_events_with_retry,
+    update_user_settings,
+)
 from core.transport.http import upstream_timeout
 from server.formats import (
     BaxiaSmBlockedError,
@@ -336,6 +339,100 @@ async def _prepare_stream(
     return final_messages, files, route
 
 
+async def _retry_after_function_role(
+    client: "QwenClient",
+    session: "QwenSession",
+    model: str,
+    final_messages: List[Dict[str, Any]],
+    uploaded_files: List[Any],
+    route: ThinkingRoute,
+    cookies: Dict[str, str],
+    old_chat_id: str,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """function role 触发时：update settings → cleanup → recreate → restream。"""
+    if old_chat_id:
+        await abort_upstream_on_cancel(client, session, old_chat_id, "")
+    try:
+        ok = await update_user_settings(client, session)
+        if not ok:
+            raise RuntimeError("settings update failed")
+        new_chat_id = await client.create_chat(session, model, cookies=cookies)
+    except Exception:
+        logger.warning("function role retry: setup failed, fallback")
+        yield {"type": "thinking", "content": ""}
+        raise asyncio.CancelledError("qwen function role detected")
+    try:
+        async for event in client.chat_completion(
+            session, new_chat_id, final_messages, model, uploaded_files,
+            qwen_thinking_enabled=route.qwen_native_enabled,
+            qwen_thinking_mode=route.qwen_native_mode,
+            cookies=cookies,
+        ):
+            if isinstance(event, dict) and event.get("type") == "_qwen_function_role":
+                yield {"type": "thinking", "content": ""}
+                raise asyncio.CancelledError("qwen function role retry failed")
+            yield event
+    except (asyncio.CancelledError, GeneratorExit):
+        if new_chat_id:
+            await abort_upstream_on_cancel(client, session, new_chat_id, "")
+        raise
+    except Exception:
+        logger.warning("function role retry: restream failed, fallback")
+        yield {"type": "thinking", "content": ""}
+        raise asyncio.CancelledError("qwen function role retry failed")
+
+
+async def _stream_openai_chat_inner(
+    client: "QwenClient",
+    session: "QwenSession",
+    messages: List[Dict[str, Any]],
+    model: str,
+    tools: Optional[List[Dict[str, Any]]],
+    req_id: str,
+    state: Any,
+    *,
+    protocol_options: Optional[Dict[str, Any]] = None,
+    prompt_api: str = "openai",
+    files: Optional[List[Any]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """stream_openai_chat 的实际逻辑，剥离 async with 以降低嵌套深度。"""
+    final_messages, uploaded_files, route = await _prepare_stream(
+        state, client, session, messages, model, tools, req_id, protocol_options,
+        prompt_api=prompt_api,
+    )
+    if files is not None:
+        uploaded_files = files
+    send_text = final_messages[0].get("content") or ""
+    yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
+    chat_id = ""
+    thinking_mode = route.qwen_native_mode or "Fast"
+    cookies = client.begin_chat_cookies(session, thinking_mode=thinking_mode)
+    try:
+        chat_id = await client.create_chat(session, model, cookies=cookies)
+        async for event in client.chat_completion(
+            session, chat_id, final_messages, model, uploaded_files,
+            qwen_thinking_enabled=route.qwen_native_enabled,
+            qwen_thinking_mode=route.qwen_native_mode,
+            cookies=cookies,
+        ):
+            if isinstance(event, dict) and event.get("type") == "_qwen_function_role":
+                async for retry_event in _retry_after_function_role(
+                    client, session, model, final_messages, uploaded_files,
+                    route, cookies, chat_id,
+                ):
+                    yield retry_event
+                return
+            yield event
+    except UpstreamChatNotFoundError:
+        if chat_id:
+            await client.cleanup_chat(session, chat_id)
+        raise
+    except (asyncio.CancelledError, GeneratorExit):
+        if chat_id:
+            await abort_upstream_on_cancel(client, session, chat_id, "")
+        raise
+
+
 async def stream_openai_chat(
     state: Any,
     client: Any,
@@ -351,36 +448,8 @@ async def stream_openai_chat(
     async with client.lease_valid_session() as session:
         if not session:
             raise TokenExpiredError("No valid session available")
-        final_messages, uploaded_files, route = await _prepare_stream(
-            state, client, session, messages, model, tools, req_id, protocol_options,
-            prompt_api=prompt_api,
-        )
-        if files is not None:
-            uploaded_files = files
-        send_text = final_messages[0].get("content") or ""
-        yield {"type": "prompt_meta", "prompt_chars": len(send_text)}
-        chat_id = ""
-        thinking_mode = route.qwen_native_mode or "Fast"
-        cookies = client.begin_chat_cookies(session, thinking_mode=thinking_mode)
-        try:
-            chat_id = await client.create_chat(session, model, cookies=cookies)
-            async for event in client.chat_completion(
-                session, chat_id, final_messages, model, uploaded_files,
-                qwen_thinking_enabled=route.qwen_native_enabled,
-                qwen_thinking_mode=route.qwen_native_mode,
-                cookies=cookies,
-            ):
-                # role 校验：非 assistant role 视为异常，发送 "" 后中断
-                if isinstance(event, dict) and event.get("type") == "_qwen_function_role":
-                    yield {"type": "thinking", "content": ""}
-                    raise asyncio.CancelledError("qwen function role detected")
-                yield event
-        except UpstreamChatNotFoundError:
-            # 上游会话已失效，清理后由重试层重建 chat
-            if chat_id:
-                await client.cleanup_chat(session, chat_id)
-            raise
-        except (asyncio.CancelledError, GeneratorExit):
-            if chat_id:
-                await abort_upstream_on_cancel(client, session, chat_id, "")
-            raise
+        async for event in _stream_openai_chat_inner(
+            client, session, messages, model, tools, req_id, state,
+            protocol_options=protocol_options, prompt_api=prompt_api, files=files,
+        ):
+            yield event
