@@ -16,7 +16,7 @@ from upstream.qwen.chat.chat import (
     handle_chat_error,
 )
 from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH
-from upstream.qwen.chat.upload.stream_helpers import prepare_stream
+from upstream.qwen.chat.upload.oss import prepare_stream
 from upstream.qwen.chat.upload.upstream_api import (
     reconnect_sse_events_with_retry,
     update_user_settings,
