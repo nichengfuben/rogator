@@ -226,6 +226,48 @@ async def _process_answer_content_event(
     )
 
 
+async def _process_native_tool_call_anthropic(
+    resp,
+    event: Dict[str, Any],
+    state: AnthropicStreamState,
+    disconnected: list,
+) -> bool:
+    """透传上游原生 tool_call delta 为 Anthropic tool_use content block。"""
+    tc = event.get("tool_call")
+    if not isinstance(tc, dict):
+        return True
+    # 新 tool call：关闭当前 block，开启 tool_use block
+    if tc.get("id"):
+        if state.block_type is not None:
+            state.block_idx = await _close_block(resp, state.block_idx, disconnected)
+            state.block_type = None
+        state.block_idx += 1
+        tool_id = tc["id"]
+        if not tool_id.startswith("toolu_"):
+            tool_id = "toolu_" + tool_id
+        func = tc.get("function", {})
+        name = func.get("name", "")
+        if not await _emit_anthropic_event(resp, {
+            "type": "content_block_start",
+            "index": state.block_idx,
+            "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
+        }, disconnected):
+            return False
+        state.block_type = "native_tool"
+        state.pending_tc_count += 1
+    # arguments delta
+    func = tc.get("function", {})
+    args_delta = func.get("arguments")
+    if args_delta and state.block_type == "native_tool":
+        if not await _emit_anthropic_event(resp, {
+            "type": "content_block_delta",
+            "index": state.block_idx,
+            "delta": {"type": "input_json_delta", "partial_json": args_delta},
+        }, disconnected):
+            return False
+    return True
+
+
 async def _process_anthropic_content_event(
     resp,
     proc_event: Dict[str, Any],
@@ -244,6 +286,10 @@ async def _process_anthropic_content_event(
             state,
             disconnected,
             parser=parser,
+        )
+    if etype == "tool_call":
+        return await _process_native_tool_call_anthropic(
+            resp, proc_event, state, disconnected,
         )
     if etype != "answer":
         return True
