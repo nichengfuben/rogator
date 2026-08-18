@@ -13,8 +13,8 @@ from echotools import FncallStreamParser, get_protocol
 from handlers.openai.stream_tools import (
     _emit_openai_streaming_tool_delta,
     _openai_tool_call_entry,
-    _send_stream_finish,
 )
+from handlers.openai.stream_run import _send_stream_finish
 from server.formats import (
     build_openai_chunk,
     build_openai_stream_usage_chunk,
