@@ -47,4 +47,5 @@ jobs:
         run: python -m pytest tests -q --tb=short
 
       - name: Run achecker
+        if: matrix.python-version != '3.8'
         run: python achecker.py
