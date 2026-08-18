@@ -745,5 +745,96 @@ class TestSessionRetry(unittest.TestCase):
         self.assertEqual(closed["n"], 1)
 
 
+class TestDispatchModelFilter(unittest.TestCase):
+    """dispatch._model_ok / candidate_upstreams 单元测试，防止跨上游误路由。"""
+
+    def _make_mod(self, name: str, caps: Optional[Dict[str, bool]] = None) -> Any:
+        from core.registry import UpstreamModule
+        return UpstreamModule(
+            name=name,
+            capabilities=caps or {"chat": True},
+            create_client=lambda *a, **kw: None,
+            module=None,
+        )
+
+    def test_model_ok_match(self) -> None:
+        from core.dispatch import _model_ok
+        mod = self._make_mod("qwen")
+        inv = {"qwen": {"qwen3.8-max", "qwen3.7-max"}}
+        self.assertTrue(_model_ok(mod, "qwen3.8-max", inv))
+
+    def test_model_ok_no_match(self) -> None:
+        from core.dispatch import _model_ok
+        mod = self._make_mod("qwen")
+        inv = {"qwen": {"qwen3.7-max"}}
+        self.assertFalse(_model_ok(mod, "qwen3.8-max", inv))
+
+    def test_model_ok_empty_inventory_all_empty_allows(self) -> None:
+        """所有上游清单均为空时放行（真正的冷启动）。"""
+        from core.dispatch import _model_ok
+        mod = self._make_mod("ollama")
+        inv: Dict[str, set] = {}
+        self.assertTrue(_model_ok(mod, "qwen3.8-max", inv))
+
+    def test_model_ok_empty_inventory_other_populated_rejects(self) -> None:
+        """其他上游已有清单而本上游为空时拒绝，防止跨上游误路由。"""
+        from core.dispatch import _model_ok
+        mod = self._make_mod("ollama")
+        inv = {"qwen": {"qwen3.8-max"}, "ollama": set()}
+        self.assertFalse(_model_ok(mod, "qwen3.8-max", inv))
+
+    def test_model_ok_missing_key_other_populated_rejects(self) -> None:
+        """上游不在清单 dict 中且其他上游有清单时拒绝。"""
+        from core.dispatch import _model_ok
+        mod = self._make_mod("ollama")
+        inv = {"qwen": {"qwen3.8-max"}}
+        self.assertFalse(_model_ok(mod, "qwen3.8-max", inv))
+
+    def test_caps_ok_pass(self) -> None:
+        from core.dispatch import _caps_ok
+        mod = self._make_mod("qwen", {"chat": True, "vision": True})
+        self.assertTrue(_caps_ok(mod, ("chat",)))
+        self.assertTrue(_caps_ok(mod, ("chat", "vision")))
+
+    def test_caps_ok_fail(self) -> None:
+        from core.dispatch import _caps_ok
+        mod = self._make_mod("qwen", {"chat": True, "vision": False})
+        self.assertFalse(_caps_ok(mod, ("chat", "vision")))
+
+    def test_candidate_upstreams_filters_by_model(self) -> None:
+        from core.dispatch import candidate_upstreams
+        from core.registry import UpstreamRegistry
+        reg = UpstreamRegistry(modules={
+            "qwen": self._make_mod("qwen"),
+            "ollama": self._make_mod("ollama"),
+        })
+        inv = {"qwen": {"qwen3.8-max"}, "ollama": {"llama3"}}
+        cands = candidate_upstreams(
+            model_id="qwen3.8-max",
+            required_capabilities=("chat",),
+            models_by_upstream=inv,
+            registry=reg,
+        )
+        names = [c.name for c in cands]
+        self.assertIn("qwen", names)
+        self.assertNotIn("ollama", names)
+
+    def test_select_upstream_no_candidates_raises(self) -> None:
+        from core.dispatch import select_upstream
+        from core.registry import UpstreamRegistry
+        from core.types import ModelNotAvailableError
+        reg = UpstreamRegistry(modules={
+            "qwen": self._make_mod("qwen"),
+        })
+        inv = {"qwen": {"qwen3.7-max"}}
+        with self.assertRaises(ModelNotAvailableError):
+            select_upstream(
+                model_id="nonexistent-model",
+                required_capabilities=("chat",),
+                models_by_upstream=inv,
+                registry=reg,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
