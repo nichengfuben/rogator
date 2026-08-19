@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """Rogator 多上游 AI 适配服务器入口（OpenAI / Anthropic 兼容 API）。"""
 
-from __future__ import annotations
+import faulthandler
+
+faulthandler.enable()
 
 import sys
 from pathlib import Path
