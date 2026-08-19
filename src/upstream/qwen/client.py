@@ -43,7 +43,17 @@ logger = logging.getLogger("rogator")
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def _client_session_kwargs(self) -> dict:
-        return {"use_env_proxy": True}
+        from upstream.qwen.proxy_toggle import get_proxy_toggle
+        if get_proxy_toggle().enabled:
+            return {"use_env_proxy": True}
+        return {}
+
+    def _get_proxy_kwarg(self) -> Optional[str]:
+        from upstream.qwen.proxy_toggle import get_proxy_toggle
+        if not get_proxy_toggle().enabled:
+            return None
+        from server.retry.http_client import active_proxy_url
+        return active_proxy_url()
 
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
@@ -236,6 +246,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         qwen_thinking_enabled: bool = False,
         qwen_thinking_mode: str = "Fast",
         cookies: Optional[Dict[str, str]] = None,
+        req_id: str = "",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         if not messages:
             raise ValueError("messages cannot be empty")
@@ -260,7 +271,8 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
             cookies=cookies,
         )
         async for event in chat_completion_stream(
-            self, session, chat_id, payload, headers, cookies=cookies,
+            self, session, chat_id, payload, headers,
+            cookies=cookies, req_id=req_id,
         ):
             yield event
 
