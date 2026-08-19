@@ -173,6 +173,42 @@ async def update_user_settings(client: "QwenClient", session: "QwenSession") -> 
         return False
 
 
+async def check_and_sync_user_settings(client: "QwenClient", session: "QwenSession") -> None:
+    """登录后后台检查远端设置，仅在不一致时下发默认值。"""
+    try:
+        http = await client._ensure_http_session()
+        status, body = await request_json(
+            http,
+            "POST",
+            f"{BASE_URL}{SETTINGS_UPDATE_PATH}",
+            headers=await build_headers_async(
+                session.token,
+                cookies=merge_session_cookies(
+                    session.token, user_id=str(session.user_id or ""),
+                ),
+            ),
+            json={},
+            timeout=upstream_timeout(30.0),
+        )
+        if status != 200 or not isinstance(body, dict) or not body.get("success"):
+            logger.debug(
+                "check_and_sync_user_settings: fetch failed HTTP %d", status,
+            )
+            return
+        remote_data = body.get("data")
+        if not isinstance(remote_data, dict):
+            return
+        if remote_data == DEFAULT_USER_SETTINGS_PAYLOAD:
+            return
+        ok = await update_user_settings(client, session)
+        if ok:
+            logger.info("check_and_sync_user_settings: settings synced for %s", session.account.username[:6])
+        else:
+            logger.warning("check_and_sync_user_settings: sync failed for %s", session.account.username[:6])
+    except Exception as exc:
+        logger.debug("check_and_sync_user_settings error: %s", exc)
+
+
 async def fetch_app_config(client: "QwenClient", session: "QwenSession") -> Dict[str, Any]:
     async def _run() -> Dict[str, Any]:
         http = await client._ensure_http_session()

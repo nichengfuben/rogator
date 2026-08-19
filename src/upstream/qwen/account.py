@@ -86,6 +86,11 @@ async def _qwen_signin_once(
             await warmup_session(client, plat)
         except Exception as exc:
             logger.debug("Login warmup skipped for %s: %s", account.username[:6], exc)
+        try:
+            from upstream.qwen.chat.upload.upstream_api import check_and_sync_user_settings
+            asyncio.create_task(check_and_sync_user_settings(client, plat))
+        except Exception:
+            pass
         return plat
 
 
