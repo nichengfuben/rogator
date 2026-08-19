@@ -78,7 +78,7 @@ logger.info(
 
 
 APP_NAME: str = "Rogator"
-APP_VERSION: str = "2.2.1"
+APP_VERSION: str = "2.3"
 APP_DESCRIPTION: str = "多上游 AI 适配服务器（Qwen / DeepSeek 等）"
 SHUTDOWN_CANCEL_GRACE: float = 0.3
 
