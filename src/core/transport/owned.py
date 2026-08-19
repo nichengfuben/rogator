@@ -41,10 +41,14 @@ class HttpTransportMixin:
         """reset 后是否立即重建 session；默认由下次 ensure 惰性创建。"""
         return False
 
+    def _client_session_kwargs(self) -> dict:
+        """子类可覆盖以向 client_session 传递额外参数（如 use_env_proxy）。"""
+        return {}
+
     def _ensure_http_unlocked(self) -> aiohttp.ClientSession:
         if not session_is_usable(self._http):
             from server.retry.http_client import client_session
-            self._http = client_session()
+            self._http = client_session(**self._client_session_kwargs())
             self._on_http_session_created(self._http)
         return self._http
 
@@ -68,7 +72,7 @@ class HttpTransportMixin:
                 await reset_upstream_transport(old)
             if self._should_recreate_http_on_reset():
                 from server.retry.http_client import client_session
-                self._http = client_session()
+                self._http = client_session(**self._client_session_kwargs())
                 self._on_http_session_created(self._http)
 
     async def close_http_transport(self) -> None:

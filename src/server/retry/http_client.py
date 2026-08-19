@@ -69,24 +69,31 @@ def _socks_connector(proxy_url: str) -> Optional[aiohttp.BaseConnector]:
         return None
 
 
-def client_session(**kwargs: Any) -> aiohttp.ClientSession:
-    """创建尊重环境变量代理的 ClientSession。
+def client_session(
+    *, use_env_proxy: bool = False, **kwargs: Any
+) -> aiohttp.ClientSession:
+    """创建 ClientSession；仅当 ``use_env_proxy=True`` 时读取环境变量代理。
+
+    默认 ``use_env_proxy=False`` 使 session 不受 HTTP_PROXY 等环境变量影响，
+    避免非 Qwen 上游意外走代理。QwenClient 覆盖 ``_ensure_http_unlocked``
+    传入 ``use_env_proxy=True`` 以启用代理。
 
     使用进程级共享 ``make_connector()`` 时必须 ``connector_owner=False``，
     否则任一 session.close() 会关闭共享 connector，导致其它 client 报
     ``Session is closed``（aiohttp 以 connector.closed 判定 session.closed）。
     """
     if "connector" not in kwargs:
-        proxy = active_proxy_url()
-        if proxy and proxy.lower().startswith("socks"):
-            connector = _socks_connector(proxy)
-            if connector is not None:
-                kwargs["connector"] = connector
-                return aiohttp.ClientSession(**kwargs)
+        if use_env_proxy:
+            proxy = active_proxy_url()
+            if proxy and proxy.lower().startswith("socks"):
+                connector = _socks_connector(proxy)
+                if connector is not None:
+                    kwargs["connector"] = connector
+                    return aiohttp.ClientSession(**kwargs)
         kwargs["connector"] = make_connector()
         kwargs.setdefault("connector_owner", False)
     if "trust_env" not in kwargs:
-        kwargs["trust_env"] = True
+        kwargs["trust_env"] = use_env_proxy
     return aiohttp.ClientSession(**kwargs)
 
 

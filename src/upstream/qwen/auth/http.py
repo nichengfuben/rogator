@@ -127,7 +127,7 @@ def absorb_response_cookies(jar: Dict[str, str], response: Any) -> None:
 
 def create_http_session() -> aiohttp.ClientSession:
     """Create one Qwen HTTP session respecting proxy env when present."""
-    return client_session()
+    return client_session(use_env_proxy=True)
 
 
 @asynccontextmanager

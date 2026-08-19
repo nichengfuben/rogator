@@ -42,6 +42,9 @@ logger = logging.getLogger("rogator")
 
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
+    def _client_session_kwargs(self) -> dict:
+        return {"use_env_proxy": True}
+
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
         self._cookie_jars: Dict[str, Dict[str, str]] = {}
