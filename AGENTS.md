@@ -1,56 +1,60 @@
 # AGENTS.md
 
-本文件为 AI 编码助手提供项目级别的行为指令。
+This file provides behavioral instructions for AI coding assistants working on this project.
 
-## 语言规范
+**IMPORTANT: CLAUDE.md and AGENTS.md specification files must be written in English only.**
 
-- **始终使用中文与用户对话。** 所有回复、解释、建议、状态更新和交互信息必须使用中文。
-- 代码注释和文档字符串同样使用中文（已在 CLAUDE.md 中规定）。
-- 无论用户使用何种语言提问，回复一律中文。
+## Language Rules
 
-## 注释与文档规范
+- **Always respond to users in Simplified Chinese.** All replies, explanations, suggestions, status updates, and interactions must be in Simplified Chinese.
+- Code comments and docstrings must also be in Chinese (as specified in CLAUDE.md).
+- Regardless of the language the user uses to ask a question, always reply in Chinese.
 
-### 禁止的注释套话（一律不得写入源码）
+## Comment and Documentation Standards
 
-- 「标准模块」「项目标准模块」「作为 Provider-Evo 项目标准模块」
-- 文件末尾「本模块对外契约」「相关模块」分隔注释块
-- 「中文说明：」「公开方法/公开类 xxx。」等机械 docstring
-- 「修改指引参见…」「保持单文件 200-400 行」等自描述套话
-- 在 `.py` 里复述 `docs-src/`、`PROJECT_DECISIONS.md`、覆盖率门禁等文档内容
+### Prohibited Boilerplate (never include in source code)
 
-详细设计只写 `docs-src/`；源码注释只解释当前实现里不易一眼看出的点。
+- "Standard module", "Project standard module", "As a Provider-Evo project standard module"
+- End-of-file "Module contract" / "Related modules" separator comment blocks
+- Mechanical docstrings like "Chinese description:", "Public method/class xxx."
+- Self-referential notes like "See modification guide...", "Keep single file 200-400 lines"
+- Restating docs-src/, PROJECT_DECISIONS.md, coverage gates, or other documentation content inside .py files
 
-### 注释与文档分工
+Detailed design belongs in `docs-src/`; source code comments should only explain aspects of the current implementation that are not immediately obvious.
 
-注释服务于**读代码的人**，不是凑合规字数。好注释回答 **「为何这样写」** 和 **「否则会怎样」**，不重复函数名已表达的信息。
+### Division of Responsibility Between Comments and Documentation
 
-#### 推荐注释场景
+Comments serve **people reading the code**, not compliance word counts. Good comments answer **"why was it written this way"** and **"what would go wrong otherwise"** — they do not repeat information already conveyed by function names.
 
-| 场景 | 写什么 |
-|------|--------|
-| 锁 / 并发 | 为何选某种锁；是否存在多 event loop、跨线程调用；选错锁的后果 |
-| 取消 / 超时 | 父协程取消时须显式取消子任务，否则后台请求泄漏连接或使超时失效 |
-| 魔法常量 | 阈值、窗口、burst 判定的业务后果；误触发或统计口径边界 |
-| 兼容 / 降级 | 旧数据、可选 API、插件旧字段——退化行为是什么、为何不能更精确 |
-| 跨层契约 | HTTP 状态码、错误码映射的前后端约定 |
-| 信任边界 | 哪些字段可信、哪些用户可控；为何不用昵称/自由文本做安全判断 |
-| 操作顺序 | 回滚、切换、清理时的步骤顺序，避免新旧状态混合 |
+#### Recommended Comment Scenarios
 
-**风格参考（非模板，勿照抄堆砌）：**
+| Scenario | What to write |
+|----------|---------------|
+| Locks / concurrency | Why a particular lock type was chosen; whether multi-event-loop or cross-thread calls exist; consequences of choosing the wrong lock |
+| Cancellation / timeouts | Child tasks must be explicitly cancelled when the parent coroutine is cancelled, otherwise background requests leak connections or invalidate timeouts |
+| Magic constants | Business impact of thresholds, windows, burst detection; consequences of false triggers or statistical boundary conditions |
+| Compatibility / degradation | Legacy data, optional APIs, old plugin fields — what the degraded behavior is and why a more precise approach isn't feasible |
+| Cross-layer contracts | Frontend/backend conventions for HTTP status codes, error code mappings |
+| Trust boundaries | Which fields are trusted vs user-controlled; why nicknames/free-text must not be used for security decisions |
+| Operation ordering | Step sequence during rollback, switchover, cleanup to avoid mixing old and new state |
+
+**Style reference (not a template — do not copy verbatim):**
 
 ```python
-# SQLite WAL 仅单写；网关存在多 event loop / 跨线程直调，须用进程级 threading.Lock，
-# asyncio.Lock 无法跨 loop 互斥。
-
-# 调用方因 wait_for 取消时，必须 cancel 子任务并 await 清理，否则 httpx 请求仍在后台占用连接。
-
-# 使用 502 而非上游 401/403：前端 fetchWithAuth 会把 401 当作 WebUI 会话失效。
+# SQLite WAL allows only a single writer; the gateway has multiple event loops and
+# cross-thread direct calls, so a process-level threading.Lock is required —
+# asyncio.Lock cannot provide cross-loop mutual exclusion.
+# When the caller is cancelled via wait_for, child tasks must be cancelled and
+# awaited for cleanup, otherwise httpx requests continue occupying connections in
+# the background.
+# Use 502 instead of upstream 401/403: the frontend fetchWithAuth treats 401 as
+# an expired WebUI session.
 ```
 
-公开 API 的 docstring：**一句话职责即可**；参数/返回值能从类型注解读出时不逐条复述。复杂逻辑用行内 `#` 注释放在分支或常量旁，不要堆在文件头。
+Public API docstrings: **one sentence describing the responsibility is sufficient**; do not enumerate parameters/return values when they can be inferred from type annotations. For complex logic, use inline `#` comments next to branches or constants rather than stacking them at the top of the file.
 
-#### 坏注释（禁止）
+#### Bad Comments (Prohibited)
 
-- 重复函数名/参数名；上文「禁止套话」清单中的机械 docstring
-- 为通过 `achecker` 堆砌的空洞 docstring 或文件末尾契约块
-- 在 `.py` 里复述 `docs-src/`、门禁规则、架构长文
+- Repeating function/parameter names; mechanical docstrings from the prohibited boilerplate list above
+- Empty docstrings or end-of-file contract blocks added solely to pass `achecker`
+- Restating docs-src/, gate rules, or architectural essays inside `.py` files

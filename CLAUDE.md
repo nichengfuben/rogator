@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Rogator v2.1.0 — Qwen AI adapter server. Python 3.14, aiohttp. Proxies Qwen (Alibaba LLM) through OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) compatible endpoints.
+Rogator — Multi-upstream AI adapter server. Python 3.8+, aiohttp. Proxies multiple LLM upstreams (Qwen, DeepSeek, Zen, Cursor, Ollama) through OpenAI (`/v1/chat/completions`) and Anthropic (`/v1/messages`) compatible endpoints.
 
 This repository is a VERY EARLY WIP. Proposing sweeping changes that improve long-term maintainability is encouraged.
 
@@ -22,7 +22,7 @@ Long term maintainability is a core priority. If you add new functionality, firs
 
 ## Output Style
 
-- 回复语言默认简体中文，除非用户明确要求其他语言。
+- Default reply language: Simplified Chinese, unless the user explicitly requests another language.
 - Length: match response length to task complexity; default to fewer than four lines for conversational replies.
 - Order: lead with the outcome; reasoning follows.
 - Markdown: use Markdown for code and structured data, not for prose chat.
@@ -34,24 +34,31 @@ Long term maintainability is a core priority. If you add new functionality, firs
 ## Running
 
 ```
-python main.py
+python main.py              # Start the server
+python -m pytest tests/ -q  # Run tests
+python achecker.py           # Code compliance check
 ```
 
 ## Architecture
 
-- `handlers/` — OpenAI / Anthropic 协议适配
-- `core/` — 平台核心：upstream registry、dispatch（能力+模型过滤后随机选上游）、共享错误/HTTP/SSE
-- `upstream/qwen/` — Qwen 上游（client、账号、auth、chat、media）
-- `server/` — 全局配置、formats、model registry/catalog、records、retry（无 client）
-- `src/state.py` — AppState、调度器；经 core 缓存上游客户端
-- `main.py` — aiohttp 入口
-- `achecker.py` / `amerger.py` — 合规检查与合并工具
-- 数据：`persist/`（全局 registry）+ `persist/qwen/`（账号、sessions、login_history）
+- `src/handlers/` — OpenAI / Anthropic protocol adaptation
+- `src/core/` — Platform core: upstream registry, dispatch (capability + model filtering, random selection), shared error/HTTP/SSE
+- `src/upstream/` — Upstream implementations: qwen, deepseek, zen, cursor, ollama
+- `src/server/` — Global config, formats, model registry/catalog, records, retry (no client)
+- `src/state.py` — AppState, scheduler; caches upstream clients via core
+- `main.py` — aiohttp entry point
+- `achecker.py` / `amerger.py` — Compliance checker and merge tool
+- Data: `persist/` (per-upstream subdirectories: qwen/deepseek/zen/ollama)
 
 ## Dependencies
 
-- **echotools** (`>=2.4.5`) — logging (`echotools.base.logger`), protocol (`ToolProtocol`), fncall inject, tool id (`gen_tool_id`, `fix_tool_call_id`)
-- No pyproject.toml or requirements.txt — dependencies are managed externally
+- **echotools** (`>=2.4.8`) — logging (`echotools.base.logger`), protocol (`ToolProtocol`), fncall inject, tool id (`gen_tool_id`, `fix_tool_call_id`)
+- Dependencies managed via `requirements.txt` (runtime) and `requirements-dev.txt` (dev/test)
+
+## External Libraries
+
+- **echotools** (`>=2.4.8`) — Internal toolkit for LLM gateway infrastructure. Provides structured logging (`echotools.base.logger`), tool protocol definitions and registry (`ToolProtocol`, `get_protocol`), streaming function-call parser for SSE (`FncallStreamParser`), entml thinking-mode protocol (`entml_think.core`), prompt injection for function-calling instructions (`inject_fncall`), and tool-call ID generation/normalization (`gen_tool_id`, `fix_tool_call_id`, `ensure_toolu_tool_call_id`).
+- **aiohttp-socks** (`>=0.8.0`) — SOCKS4/5 proxy connector for aiohttp; used by upstream clients that route through proxy pools (e.g., Zen).
 
 ## Code Style
 
@@ -67,12 +74,16 @@ python main.py
 ## Key Gotchas
 
 - **No system role in Qwen** — system messages are folded into the last user message. Don't pass system messages directly.
-- **Baxia anti-bot** — requests require `bx-ua` and `bx-umidtoken` headers (Alibaba fingerprinting). Override via `QWEN_BX_UMIDTOKEN` env var.
+- **Baxia anti-bot** — Qwen requests require `bx-ua` and `bx-umidtoken` headers (Alibaba fingerprinting). Override via `QWEN_BX_UMIDTOKEN` env var.
 - **SSL disabled** (`ssl=False`) on all outbound requests.
-- **Long text overflow** — inject 后超长由 splitter / OSS 处理。
-- **Tool calling** — entml 协议；网关 `thinking` 恒 true（core 硬编码，与上游无关）。
-- **TTS & Video** — `upstream/qwen/media/`。
-- **Default model** — `qwen3.7-max`（`server/formats`）。
-- **Accounts** — `persist/qwen/accounts.csv`（`upstream.qwen.accounts`）。
+- **Long text overflow** — post-inject overflow handled by splitter / OSS.
+- **Tool calling** — entml protocol; gateway `thinking` is always true (hardcoded in core, independent of upstream).
+- **TTS & Video** — `src/upstream/qwen/media/`.
+- **Default model** — `qwen3.7-max` (`server/formats`).
+- **Accounts** — Qwen: `persist/qwen/accounts.csv`; DeepSeek: `persist/deepseek/accounts.csv`; Zen/Cursor/Ollama have no account pool.
+- **DeepSeek** — HIF token management; WAF challenge and user-muted errors require special handling.
+- **Zen** — Proxy pool auto-mutes failing nodes (429/502/connection errors, 1-hour duration); does NOT log prompt/response/SSE.
+- **Cursor** — Access tokens obtained via self-hosted Token Service; does NOT log prompt/response/SSE.
+- **Ollama** — Pure static registry (`persist/ollama/registry.json`), maps models to server URLs, random server selection per request.
 
 @AGENTS.md
