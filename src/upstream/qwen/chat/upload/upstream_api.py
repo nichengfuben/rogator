@@ -83,33 +83,20 @@ DEFAULT_USER_SETTINGS_PAYLOAD: Dict[str, Any] = {
     "personalization": {
         "name": "system",
         "description": (
-            "In this environment you have access to a set of tools you can use "
-            "to answer the user's question.\n"
-            "You can invoke functions by writing a \"<invoke>\" block like the "
-            "following as part of your reply to the user:\n"
-            "<invoke name=\"$FUNCTION_NAME\">\n"
-            "<parameter name=\"$PARAMETER_NAME\">$PARAMETER_VALUE</parameter>\n"
+            "In this environment you have access to a set of tools you can use to answer the user's question.\n"
+            "You can invoke functions by writing a \"<entml:invoke>\" block like the following as part of your reply to the user:\n"
+            "\n"
+            "<entml:invoke name=\"$FUNCTION_NAME\">\n"
+            "<entml:parameter name=\"$PARAMETER_NAME\">$PARAMETER_VALUE</entml:parameter>\n"
             "...\n"
-            "</invoke>\n"
-            "<invoke name=\"$FUNCTION_NAME2\">\n"
+            "</entml:invoke>\n"
+            "<entml:invoke name=\"$FUNCTION_NAME2\">\n"
             "...\n"
-            "</invoke>\n"
-            "String and scalar parameters should be specified as is, while lists "
-            "and objects should use JSON format.\n"
-            "Your turn ends immediately at the closing tag of the last <invoke> "
-            "block you emit. You append nothing after it — no comment, no result, "
-            "no id, no visible text. The execution environment then runs each tool. "
-            "Once a turn is complete, the environment logs it into "
-            "<conversation_history> and appends, after each invocation in that log, "
-            "an HTML comment stating the environment-generated result id in the form "
-            "<!-- Tool Result ID:{id} -->. This comment is written by the environment "
-            "when logging a completed turn; you never write it yourself, in this turn "
-            "or in imitation of any prior turn, because at the moment you emit an "
-            "invocation the id does not yet exist. Separately, the environment appends "
-            "the full content of every result, matched by id, to a single flat top-level "
-            "block named <funtions_results>, positioned outside and independent of "
-            "<conversation_history>. This block accumulates across the whole conversation; "
-            "it is never nested inside conversation_history and never adjacent to an invocation."
+            "</entml:invoke>\n"
+            "\n"
+            "String and scalar parameters should be specified as is, while lists and objects should use JSON format.\n"
+            "\n"
+            "Your turn ends immediately at the closing tag of the last <entml:invoke> block you emit. You append nothing after it — no comment, no result, no id, no visible text. The execution environment then runs each tool. Once a turn is complete, the environment logs it into <entml:conversation_history> and appends, after each invocation in that log, an HTML comment stating the environment-generated result id in the form <!-- Tool Result ID:{id} -->. This comment is written by the environment when logging a completed turn; you never write it yourself, in this turn or in imitation of any prior turn, because at the moment you emit an invocation the id does not yet exist. Separately, the environment appends the full content of every result, matched by id, to a single flat top-level block named <entml:funtions_results>, positioned outside and independent of <entml:conversation_history>. This block accumulates across the whole conversation; it is never nested inside conversation_history and never adjacent to an invocation."
         ),
         "style": "Default",
         "instruction": "",
@@ -137,7 +124,6 @@ DEFAULT_USER_SETTINGS_PAYLOAD: Dict[str, Any] = {
     "model_config": {
     },
 }
-
 
 async def update_user_settings(client: "QwenClient", session: "QwenSession") -> bool:
     """function role 触发时下发默认设置，失败仅 warning 不阻断。"""
