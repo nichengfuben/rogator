@@ -223,6 +223,45 @@ async def upload_to_oss(
 
 # ==== 流式请求的消息准备与文件收集 ====
 
+
+def _strip_media_for_inject(messages: List[Any]) -> List[Any]:
+    """深拷贝 messages 并移除非文本 content parts，供 inject 使用。
+
+    echotools inject 会将 content 序列化为纯文本 prompt；若 content 包含
+    image_url / video_url / input_audio 等多模态 part，base64 数据会被当作
+    JSON 字符串嵌入 prompt，导致 prompt 膨胀且泄露敏感数据。
+    此函数保留纯文本 part，其余 part 丢弃；若剥离后仅剩单个 text part，
+    则简化为 str 以匹配 inject 的预期格式。
+    """
+    import copy
+
+    stripped: List[Any] = []
+    for msg in messages or []:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            stripped.append(msg)
+            continue
+        text_parts = [
+            p for p in content
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        if len(text_parts) == 1:
+            new_msg = copy.copy(msg)
+            new_msg["content"] = str(text_parts[0].get("text", ""))
+            stripped.append(new_msg)
+        elif text_parts:
+            new_msg = copy.copy(msg)
+            new_msg["content"] = "\n".join(
+                str(p.get("text", "")) for p in text_parts
+            )
+            stripped.append(new_msg)
+        else:
+            new_msg = copy.copy(msg)
+            new_msg["content"] = ""
+            stripped.append(new_msg)
+    return stripped
+
+
 _URL_RE = re.compile(r"https?://[^\s<>\"']+")
 
 
@@ -318,8 +357,9 @@ async def prepare_stream(
     *,
     prompt_api: str = "openai",
 ) -> Tuple[List[Any], List[Any], ThinkingRoute]:
+    stripped = _strip_media_for_inject(messages)
     injected, full_content, route = prepare_injected_messages(
-        state, messages, tools, req_id, model, protocol_options, prompt_api,
+        state, stripped, tools, req_id, model, protocol_options, prompt_api,
     )
     image_uris = client.extract_base64_images(messages)
     media_urls = client.extract_remote_media_urls(messages)

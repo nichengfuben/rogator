@@ -2,6 +2,16 @@
 # -*- coding: utf-8 -*-
 """Rogator 多上游 AI 适配服务器入口（OpenAI / Anthropic 兼容 API）。"""
 
+import os
+
+# 清理并重新设置代理环境变量
+for key in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']:
+    val = os.environ.get(key)
+    if val:
+        # 移除首尾的冒号、空格、换行等
+        cleaned = val.strip().lstrip(':')
+        os.environ[key] = cleaned
+
 import faulthandler
 
 faulthandler.enable()
