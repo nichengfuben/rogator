@@ -213,6 +213,7 @@ async def chat_completion_stream(
     payload: Dict[str, Any],
     headers: Dict[str, str],
     cookies: Optional[Dict[str, str]] = None,
+    req_id: str = "",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     response_id_box: List[str] = []
     cancelled = False
@@ -225,6 +226,9 @@ async def chat_completion_stream(
             yield event
     except BaxiaSmBlockedError:
         baxia_sm_retry = True
+        if req_id:
+            from upstream.qwen.media.proxy_toggle import get_proxy_toggle
+            await get_proxy_toggle().on_sm_block(req_id)
         raise
     except (asyncio.CancelledError, GeneratorExit):
         cancelled = True
@@ -347,11 +351,20 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    async with client.lease_valid_session() as session:
-        if not session:
-            raise TokenExpiredError("No valid session available")
-        async for event in _stream_openai_chat_inner(
-            client, session, messages, model, tools, req_id, state,
-            protocol_options=protocol_options, prompt_api=prompt_api, files=files,
-        ):
-            yield event
+    from upstream.qwen.media.proxy_toggle import get_proxy_toggle, set_current_req_id
+    rid_token = set_current_req_id(req_id) if req_id else None
+    try:
+        async with client.lease_valid_session() as session:
+            if not session:
+                raise TokenExpiredError("No valid session available")
+            async for event in _stream_openai_chat_inner(
+                client, session, messages, model, tools, req_id, state,
+                protocol_options=protocol_options, prompt_api=prompt_api, files=files,
+            ):
+                yield event
+    finally:
+        if rid_token is not None:
+            from upstream.qwen.media.proxy_toggle import _current_req_id
+            _current_req_id.reset(rid_token)
+        if req_id:
+            get_proxy_toggle().release_task(req_id)

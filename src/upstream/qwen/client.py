@@ -43,13 +43,13 @@ logger = logging.getLogger("rogator")
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def _client_session_kwargs(self) -> dict:
-        from upstream.qwen.proxy_toggle import get_proxy_toggle
+        from upstream.qwen.media.proxy_toggle import get_proxy_toggle
         if get_proxy_toggle().enabled:
             return {"use_env_proxy": True}
         return {}
 
     def _get_proxy_kwarg(self) -> Optional[str]:
-        from upstream.qwen.proxy_toggle import get_proxy_toggle
+        from upstream.qwen.media.proxy_toggle import get_proxy_toggle
         if not get_proxy_toggle().enabled:
             return None
         from server.retry.http_client import active_proxy_url

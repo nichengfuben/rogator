@@ -245,7 +245,7 @@ async def _run_server(
 
 async def main_async() -> None:
     """服务器异步主入口（配置来自 config.toml + template/config.toml）。"""
-    from upstream.qwen.proxy_toggle import get_proxy_toggle
+    from upstream.qwen.media.proxy_toggle import get_proxy_toggle
     await get_proxy_toggle().initialize()
     cfg = load_config()
     CONFIG.swap(cfg)

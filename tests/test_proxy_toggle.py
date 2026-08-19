@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from upstream.qwen.proxy_toggle import ProxyToggleManager
+from upstream.qwen.media.proxy_toggle import ProxyToggleManager
 
 
 class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
@@ -31,7 +31,7 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
     async def test_initialize_probe_fails(self) -> None:
         with patch.dict(os.environ, {"HTTP_PROXY": "http://bad:8080"}):
             with patch(
-                "upstream.qwen.proxy_toggle._probe_proxy_alive",
+                "upstream.qwen.media.proxy_toggle._probe_proxy_alive",
                 new_callable=AsyncMock,
                 return_value=False,
             ):
@@ -45,12 +45,12 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         )
         with patch.dict(os.environ, {"HTTP_PROXY": "http://proxy:8080"}):
             with patch(
-                "upstream.qwen.proxy_toggle._probe_proxy_alive",
+                "upstream.qwen.media.proxy_toggle._probe_proxy_alive",
                 new_callable=AsyncMock,
                 return_value=True,
             ):
                 with patch(
-                    "upstream.qwen.proxy_toggle._PERSIST_PATH",
+                    "upstream.qwen.media.proxy_toggle._PERSIST_PATH",
                     self.test_persist,
                 ):
                     await self.mgr.initialize()
@@ -61,12 +61,12 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
             self.test_persist.unlink()
         with patch.dict(os.environ, {"HTTP_PROXY": "http://proxy:8080"}):
             with patch(
-                "upstream.qwen.proxy_toggle._probe_proxy_alive",
+                "upstream.qwen.media.proxy_toggle._probe_proxy_alive",
                 new_callable=AsyncMock,
                 return_value=True,
             ):
                 with patch(
-                    "upstream.qwen.proxy_toggle._PERSIST_PATH",
+                    "upstream.qwen.media.proxy_toggle._PERSIST_PATH",
                     self.test_persist,
                 ):
                     await self.mgr.initialize()
@@ -122,7 +122,7 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_persist_written_on_toggle(self) -> None:
         with patch(
-            "upstream.qwen.proxy_toggle._PERSIST_PATH", self.test_persist,
+            "upstream.qwen.media.proxy_toggle._PERSIST_PATH", self.test_persist,
         ):
             self.mgr._enabled = False
             self.mgr._initialized = True
@@ -132,7 +132,7 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["enabled"], 1)
 
     async def test_has_proxy_env_detection(self) -> None:
-        from upstream.qwen.proxy_toggle import _has_proxy_env
+        from upstream.qwen.media.proxy_toggle import _has_proxy_env
 
         with patch.dict(os.environ, {}, clear=True):
             for k in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
