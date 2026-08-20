@@ -77,8 +77,12 @@ class PostScript:
 class TransportProbe(HttpTransportMixin):
     def __init__(self, script: PostScript) -> None:
         self._script = script
+        self._last_used_proxy_enabled: bool = False
         self._init_http_transport()
         self.reset_count = 0
+
+    def _get_proxy_kwarg(self) -> None:
+        return None
 
     def _ensure_http_unlocked(self) -> aiohttp.ClientSession:
         if self._http is None or bool(getattr(self._http, "closed", True)):

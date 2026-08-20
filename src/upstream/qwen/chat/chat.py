@@ -17,6 +17,7 @@ from upstream.qwen.auth.http import run_with_connection_retry, absorb_response_c
 from core.transport.http import request_json, upstream_timeout
 from server.config import CONFIG
 from server.formats import (
+    BaxiaSmBlockedError,
     PayloadTooLargeError,
     TokenExpiredError,
     UpstreamTimeoutError,
@@ -64,6 +65,33 @@ def _raise_for_non_json_create_chat(
     )
 
 
+_BAXIA_SM_MARKERS = ("RGV587_ERROR::SM", "FAIL_SYS_USER_VALIDATE")
+
+
+def _check_baxia_block_in_body(body: str | dict) -> None:
+    """检测响应体中的 Baxia SM / WAF 拦截标记，命中则抛出对应异常。"""
+    if isinstance(body, dict):
+        ret = body.get("ret")
+        if isinstance(ret, list):
+            msg = " ".join(str(p) for p in ret if p)
+            data = body.get("data") if isinstance(body.get("data"), dict) else {}
+            punish_url = str(data.get("url") or "")
+            if any(m in msg for m in _BAXIA_SM_MARKERS):
+                raise BaxiaSmBlockedError(msg[:200])
+            if punish_url or "FAIL_SYS" in msg or "RGV587" in msg:
+                raise UpstreamWafBlockedError(
+                    f"Qwen Baxia blocked: {msg[:200]}", upstream="qwen",
+                )
+        if body.get("success") is False:
+            data = body.get("data") if isinstance(body.get("data"), dict) else {}
+            combined = f"{data.get('code', '')} {data.get('details', '')}"
+            if any(m in combined for m in _BAXIA_SM_MARKERS):
+                raise BaxiaSmBlockedError(combined[:200])
+    elif isinstance(body, str):
+        if any(m in body for m in _BAXIA_SM_MARKERS):
+            raise BaxiaSmBlockedError(body[:200])
+
+
 def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict[str, Any]) -> None:
     data_obj = data.get("data") or {}
     if not isinstance(data_obj, dict):
@@ -73,6 +101,18 @@ def check_create_chat_error(client: QwenClient, session: QwenSession, data: Dict
         client, session, f"{data_obj.get('code', '')} {details}",
     )
     raise RuntimeError(f"Create chat failed: {data}")
+
+
+def _resolve_create_chat_cookies(
+    client: QwenClient, session: QwenSession,
+    cookies: Optional[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    if cookies is not None:
+        return cookies
+    fn = getattr(client, "begin_chat_cookies", None) or getattr(
+        client, "cookies_for_session", None,
+    )
+    return fn(session) if callable(fn) else None
 
 
 async def _post_create_chat(
@@ -85,26 +125,22 @@ async def _post_create_chat(
     from upstream.qwen.chat.upload.payload import build_new_chat_payload
 
     payload = build_new_chat_payload(model)
-    if cookies is None:
-        cookies_fn = getattr(client, "begin_chat_cookies", None) or getattr(
-            client, "cookies_for_session", None,
-        )
-        if callable(cookies_fn):
-            cookies = cookies_fn(session)
+    cookies = _resolve_create_chat_cookies(client, session, cookies)
     headers = await build_headers_async(
-        session.token,
-        include_version=True,
-        api_path=NEW_CHAT_PATH,
-        cookies=cookies,
+        session.token, include_version=True,
+        api_path=NEW_CHAT_PATH, cookies=cookies,
     )
 
     async def _run() -> Dict[str, Any]:
         http = await client._ensure_http_session()
+        proxy_kw = client._get_proxy_kwarg()
+        logger.debug(
+            "create_chat request: %s",
+            f"USING PROXY {proxy_kw}" if proxy_kw else "DIRECT (NO PROXY)",
+        )
         async with http.post(
-            f"{BASE_URL}{NEW_CHAT_PATH}",
-            headers=headers,
-            json=payload,
-            timeout=upstream_timeout(timeout_s),
+            f"{BASE_URL}{NEW_CHAT_PATH}", headers=headers, json=payload,
+            timeout=upstream_timeout(timeout_s), proxy=proxy_kw,
         ) as resp:
             absorb_fn = getattr(client, "absorb_cookies_for_session", None)
             if callable(absorb_fn):
@@ -117,6 +153,7 @@ async def _post_create_chat(
                 body = await resp.json(content_type=None)
             except Exception:
                 body = await resp.text()
+            _check_baxia_block_in_body(body)
             if isinstance(body, dict):
                 return body
             _raise_for_non_json_create_chat(client, session, str(body))
@@ -243,6 +280,7 @@ async def handle_chat_error(client: QwenClient, resp: aiohttp.ClientResponse, se
     raise_qwen_session_error(client, session, body)
     snippet = body[:200].strip() or f"HTTP {resp.status}"
     logger.error("Chat HTTP %d: %s", resp.status, body[:500])
+    _check_baxia_block_in_body(body)
     # 502/503/504 等网关错误保留原始状态码，避免降级为 500
     if resp.status in (502, 503, 504):
         raise UpstreamConnectionError(

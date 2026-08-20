@@ -28,6 +28,7 @@ from server.formats import (
     TokenExpiredError,
     UpstreamChatNotFoundError,
     UpstreamTimeoutError,
+    UpstreamWafBlockedError,
 )
 from server.model.model_thinking import ThinkingRoute
 from upstream.qwen.chat.sse import iter_sse_events
@@ -85,7 +86,15 @@ async def _stream_one_chat_post(
     cookies: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     http = await client._ensure_http_session()
-    async with http.post(url, json=payload, headers=headers, timeout=timeout) as resp:
+    proxy_kw = client._get_proxy_kwarg()
+    logger.debug(
+        "chat completion SSE request: %s",
+        f"USING PROXY {proxy_kw}" if proxy_kw else "DIRECT (NO PROXY)"
+    )
+    async with http.post(
+        url, json=payload, headers=headers, timeout=timeout,
+        proxy=proxy_kw,
+    ) as resp:
         absorb_fn = getattr(client, "absorb_cookies_for_session", None)
         if callable(absorb_fn):
             absorb_fn(session, resp, binding=cookies)
@@ -218,17 +227,18 @@ async def chat_completion_stream(
     response_id_box: List[str] = []
     cancelled = False
     baxia_sm_retry = False
+    from upstream.qwen.media.proxy_toggle import get_proxy_toggle
+    used_enabled = get_proxy_toggle().enabled
     try:
         async for event in _post_chat_sse(
             client, session, chat_id, payload, headers, response_id_box,
             cookies=cookies,
         ):
             yield event
-    except BaxiaSmBlockedError:
+    except (BaxiaSmBlockedError, UpstreamWafBlockedError):
         baxia_sm_retry = True
         if req_id:
-            from upstream.qwen.media.proxy_toggle import get_proxy_toggle
-            await get_proxy_toggle().on_sm_block(req_id)
+            await get_proxy_toggle().on_sm_block(req_id, used_enabled)
         raise
     except (asyncio.CancelledError, GeneratorExit):
         cancelled = True
@@ -354,8 +364,8 @@ async def stream_openai_chat(
     prompt_api: str = "openai",
     files: Optional[List[Any]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    from upstream.qwen.media.proxy_toggle import get_proxy_toggle, set_current_req_id
-    rid_token = set_current_req_id(req_id) if req_id else None
+    from upstream.qwen.media.proxy_toggle import get_proxy_toggle
+    used_enabled = get_proxy_toggle().enabled
     try:
         async with client.lease_valid_session() as session:
             if not session:
@@ -365,9 +375,11 @@ async def stream_openai_chat(
                 protocol_options=protocol_options, prompt_api=prompt_api, files=files,
             ):
                 yield event
+    except (BaxiaSmBlockedError, UpstreamWafBlockedError) as exc:
+        logger.info("proxy toggle: caught block error type=%s, triggering proxy toggle", type(exc).__name__)
+        if req_id:
+            await get_proxy_toggle().on_sm_block(req_id, used_enabled)
+        raise
     finally:
-        if rid_token is not None:
-            from upstream.qwen.media.proxy_toggle import _current_req_id
-            _current_req_id.reset(rid_token)
         if req_id:
             get_proxy_toggle().release_task(req_id)

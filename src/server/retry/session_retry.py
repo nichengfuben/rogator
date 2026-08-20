@@ -196,7 +196,7 @@ def _log_chat_not_found_switch(
 ) -> None:
     """记录 CHAT_NOT_FOUND 换号结果。"""
     if new_session is not None:
-        logger.warning(
+        logger.debug(
             "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated old and switched "
             "session: old=%s new=%s",
             req_id, retries, limit,
@@ -204,7 +204,7 @@ def _log_chat_not_found_switch(
             mask_username(new_session.username),
         )
     else:
-        logger.warning(
+        logger.debug(
             "CHAT_NOT_FOUND for %s (retry %d/%d), invalidated session %s",
             req_id, retries, limit,
             mask_username(old_name or ""),
@@ -260,6 +260,24 @@ async def _handle_chat_not_found_retry(
     raise exc
 
 
+async def _trigger_proxy_toggle_on_block(
+    req_id: str, exc: BaseException, client: Any | None,
+) -> None:
+    """SM/WAF block 时触发代理切换，基于请求时的 toggle 状态计算目标值。"""
+    if not isinstance(exc, (BaxiaSmBlockedError, UpstreamWafBlockedError)):
+        return
+    try:
+        from upstream.qwen.media.proxy_toggle import get_proxy_toggle
+        used_enabled = getattr(client, "_last_used_proxy_enabled", get_proxy_toggle().enabled)
+        logger.info(
+            "session_retry: caught block error type=%s, triggering proxy toggle (req_id=%s, used_enabled=%s)",
+            type(exc).__name__, req_id[:16], used_enabled,
+        )
+        await get_proxy_toggle().on_sm_block(req_id, used_enabled)
+    except Exception as e:
+        logger.warning("session_retry: failed to trigger proxy toggle: %s", e)
+
+
 async def _dispatch_session_retry(
     req_id: str,
     state: Any,
@@ -274,6 +292,7 @@ async def _dispatch_session_retry(
     _raise_if_shutting_down(state)
     retries += 1
     if isinstance(exc, (TokenExpiredError, BaxiaSmBlockedError, UpstreamWafBlockedError)):
+        await _trigger_proxy_toggle_on_block(req_id, exc, client)
         if isinstance(exc, BaxiaSmBlockedError):
             try:
                 from upstream.qwen.auth.crypto import reset_baxia_runtime

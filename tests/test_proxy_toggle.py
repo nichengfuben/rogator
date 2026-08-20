@@ -34,6 +34,9 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
                 "upstream.qwen.media.proxy_toggle._probe_proxy_alive",
                 new_callable=AsyncMock,
                 return_value=False,
+            ), patch(
+                "upstream.qwen.media.proxy_toggle._PERSIST_PATH",
+                self.test_persist,
             ):
                 await self.mgr.initialize()
         self.assertFalse(self.mgr.enabled)
@@ -78,34 +81,35 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
     async def test_sm_block_toggles_state(self) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
-        result = await self.mgr.on_sm_block("req-001")
+        result = await self.mgr.on_sm_block("req-001", False)
         self.assertTrue(result)
         self.assertTrue(self.mgr.enabled)
 
     async def test_sm_block_same_task_no_double_toggle(self) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
-        r1 = await self.mgr.on_sm_block("req-002")
-        r2 = await self.mgr.on_sm_block("req-002")
+        r1 = await self.mgr.on_sm_block("req-002", False)
+        r2 = await self.mgr.on_sm_block("req-002", False)
         self.assertTrue(r1)
         self.assertTrue(r2)
         self.assertTrue(self.mgr.enabled)
 
-    async def test_sm_block_different_tasks_toggle_each(self) -> None:
+    async def test_sm_block_same_used_enabled_no_flip_back(self) -> None:
+        """同一 used_enabled 的多个请求不会反复翻转回原点。"""
         self.mgr._enabled = False
         self.mgr._initialized = True
-        r1 = await self.mgr.on_sm_block("req-003")
-        r2 = await self.mgr.on_sm_block("req-004")
+        r1 = await self.mgr.on_sm_block("req-003", False)
+        r2 = await self.mgr.on_sm_block("req-004", False)
         self.assertTrue(r1)
-        self.assertFalse(r2)
-        self.assertFalse(self.mgr.enabled)
+        self.assertTrue(r2)
+        self.assertTrue(self.mgr.enabled)
 
     async def test_release_task_allows_re_toggle(self) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
-        await self.mgr.on_sm_block("req-005")
+        await self.mgr.on_sm_block("req-005", False)
         self.mgr.release_task("req-005")
-        result = await self.mgr.on_sm_block("req-005")
+        result = await self.mgr.on_sm_block("req-005", True)
         self.assertFalse(result)
         self.assertFalse(self.mgr.enabled)
 
@@ -113,9 +117,9 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         self.mgr._enabled = False
         self.mgr._initialized = True
         results = await asyncio.gather(
-            self.mgr.on_sm_block("req-concurrent"),
-            self.mgr.on_sm_block("req-concurrent"),
-            self.mgr.on_sm_block("req-concurrent"),
+            self.mgr.on_sm_block("req-concurrent", False),
+            self.mgr.on_sm_block("req-concurrent", False),
+            self.mgr.on_sm_block("req-concurrent", False),
         )
         self.assertEqual(results.count(True), 3)
         self.assertTrue(self.mgr.enabled)
@@ -126,7 +130,7 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         ):
             self.mgr._enabled = False
             self.mgr._initialized = True
-            await self.mgr.on_sm_block("req-persist")
+            await self.mgr.on_sm_block("req-persist", False)
         self.assertTrue(self.test_persist.exists())
         data = json.loads(self.test_persist.read_text(encoding="utf-8"))
         self.assertEqual(data["enabled"], 1)
@@ -173,7 +177,7 @@ class TestChatCompletionStreamSmBlock(unittest.IsolatedAsyncioTestCase):
                     client, None, "chat-1", {}, {}, req_id="req-sm-1",
                 ):
                     pass
-        mock_toggle.on_sm_block.assert_awaited_once_with("req-sm-1")
+        mock_toggle.on_sm_block.assert_awaited_once_with("req-sm-1", True)
 
     async def test_sm_block_without_req_id_skips_toggle(self):
         from server.formats import BaxiaSmBlockedError

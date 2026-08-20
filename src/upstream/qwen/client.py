@@ -43,22 +43,28 @@ logger = logging.getLogger("rogator")
 
 class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMixin):
     def _client_session_kwargs(self) -> dict:
-        from upstream.qwen.media.proxy_toggle import get_proxy_toggle
-        if get_proxy_toggle().enabled:
-            return {"use_env_proxy": True}
+        # 代理由每次请求的 proxy= 参数控制（_get_proxy_kwarg），
+        # session 级不设 use_env_proxy，避免 toggle 切换后旧 session 残留代理配置。
         return {}
 
     def _get_proxy_kwarg(self) -> Optional[str]:
         from upstream.qwen.media.proxy_toggle import get_proxy_toggle
-        if not get_proxy_toggle().enabled:
+        toggle = get_proxy_toggle()
+        # 记录本次请求使用的 toggle 状态，供 SM block 时计算目标值
+        self._last_used_proxy_enabled = toggle.enabled
+        logger.debug("QwenClient._get_proxy_kwarg: toggle.enabled=%s, toggle._initialized=%s", toggle.enabled, toggle._initialized)
+        if not toggle.enabled:
             return None
         from server.retry.http_client import active_proxy_url
-        return active_proxy_url()
+        proxy_url = active_proxy_url()
+        logger.debug("QwenClient._get_proxy_kwarg: using proxy_url=%s", proxy_url)
+        return proxy_url
 
     def __init__(self, splitter: Any) -> None:
         self._splitter = splitter
         self._cookie_jars: Dict[str, Dict[str, str]] = {}
         self._cookie_jars_lock = threading.Lock()
+        self._last_used_proxy_enabled: bool = False
         self._init_session_pool()
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))

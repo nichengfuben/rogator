@@ -54,37 +54,76 @@ class ProxyToggleManager:
         self._seen_tasks: set[str] = set()
 
     async def initialize(self) -> None:
-        if self._initialized:
-            return
-        if not _has_proxy_env():
-            self._enabled = False
+        async with self._lock:
+            if self._initialized:
+                logger.debug("proxy toggle: already initialized, skipping")
+                return
+            logger.debug("proxy toggle: starting initialize...")
+            if not _has_proxy_env():
+                self._enabled = False
+                self._initialized = True
+                logger.info("proxy toggle: no proxy env, disabled")
+                return
+            logger.debug("proxy toggle: proxy env detected, starting proxy probe...")
+            alive = await _probe_proxy_alive()
+            logger.debug("proxy toggle: probe result: alive=%s", alive)
+            # 先读取用户持久化保存的状态，探针仅用于判断代理是否实际可用
+            # 避免因为启动瞬间网络波动/代理刚启动导致探针失败，覆盖用户之前保存的 enabled=1
+            persisted_enabled = self._read_persist()
+            logger.debug("proxy toggle: read persist: persisted_enabled=%s (None=file not exists)", persisted_enabled)
+            if not alive:
+                logger.debug("proxy toggle: probe failed, handling branch...")
+                # 探针失败: 持久化文件不存在 → 安全默认禁用
+                if persisted_enabled is None:
+                    self._enabled = False
+                    self._write_persist()
+                    self._initialized = True
+                    logger.info("proxy toggle: proxy env set but probe failed, disabled")
+                    return
+                # 持久化文件存在但里面enabled是0 → 保持禁用
+                if not persisted_enabled:
+                    self._enabled = False
+                    self._initialized = True
+                    logger.info("proxy toggle: proxy env set but probe failed, disabled")
+                    return
+                # 持久化文件存在且用户显式设了 enabled=1 → 尊重用户选择忽略探针失败
+                self._enabled = True
+                self._initialized = True
+                logger.warning("proxy toggle: probe failed but respect persisted enabled=1, proxy will still be used")
+                return
+            logger.debug("proxy toggle: probe succeeded")
+            # 探针成功，正常读取持久化状态
+            if persisted_enabled is None:
+                self._enabled = False
+                # 持久化文件不存在，把默认值写回
+                self._write_persist()
+            else:
+                self._enabled = persisted_enabled
             self._initialized = True
-            logger.info("proxy toggle: no proxy env, disabled")
-            return
-        alive = await _probe_proxy_alive()
-        if not alive:
-            self._enabled = False
-            self._initialized = True
-            logger.info("proxy toggle: proxy env set but probe failed, disabled")
-            return
-        self._enabled = self._read_persist()
-        self._initialized = True
-        logger.info("proxy toggle: initialized enabled=%s", self._enabled)
+            logger.info("proxy toggle: initialized enabled=%s", self._enabled)
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
-    async def on_sm_block(self, req_id: str) -> bool:
+    async def on_sm_block(self, req_id: str, used_enabled: bool) -> bool:
+        """SM block 触发代理切换：基于请求时的状态计算新值，避免并发翻转回原点。"""
         async with self._lock:
             if req_id in self._seen_tasks:
                 return self._enabled
             self._seen_tasks.add(req_id)
-            self._enabled = not self._enabled
+            new_value = not used_enabled
+            if new_value == self._enabled:
+                logger.info(
+                    "proxy toggle: sm block req=%s target enabled=%s already active, skip",
+                    req_id[:12], new_value,
+                )
+                return self._enabled
+            self._enabled = new_value
             self._write_persist()
             logger.info(
-                "proxy toggle: sm block req=%s switched to enabled=%s",
-                req_id[:12], self._enabled,
+                "proxy toggle: sm block req=%s used_enabled=%s → enabled=%s",
+                req_id[:12], used_enabled, self._enabled,
             )
             return self._enabled
 
@@ -92,14 +131,15 @@ class ProxyToggleManager:
         self._seen_tasks.discard(req_id)
 
     def _read_persist(self) -> bool:
+        if not _PERSIST_PATH.exists():
+            # 没有持久化文件，返回 None 标记不存在，让调用方处理默认值
+            return None  # type: ignore
         try:
-            if _PERSIST_PATH.exists():
-                data = json.loads(_PERSIST_PATH.read_text(encoding="utf-8"))
-                return bool(data.get("enabled", 0))
+            data = json.loads(_PERSIST_PATH.read_text(encoding="utf-8"))
+            return bool(data.get("enabled", 0))
         except Exception as exc:
             logger.warning("proxy toggle: read persist failed: %s", exc)
-        self._write_persist()
-        return False
+        return None  # type: ignore
 
     def _write_persist(self) -> None:
         try:
@@ -114,32 +154,9 @@ class ProxyToggleManager:
 
 _manager: Optional[ProxyToggleManager] = None
 
-import contextvars
-
-_current_req_id: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "qwen_current_req_id", default="",
-)
-
 
 def get_proxy_toggle() -> ProxyToggleManager:
     global _manager
     if _manager is None:
         _manager = ProxyToggleManager()
     return _manager
-
-
-def set_current_req_id(req_id: str) -> contextvars.Token:
-    return _current_req_id.set(req_id)
-
-
-def get_current_req_id() -> str:
-    return _current_req_id.get()
-
-
-def schedule_sm_block_toggle(req_id: str) -> None:
-    """同步入口：在 raise_sse_inline_error 等同步上下文中调度异步切换。"""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(get_proxy_toggle().on_sm_block(req_id))
-    except RuntimeError:
-        pass
