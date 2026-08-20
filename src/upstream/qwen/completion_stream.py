@@ -254,6 +254,7 @@ async def _retry_after_function_role(
     route: ThinkingRoute,
     cookies: Dict[str, str],
     old_chat_id: str,
+    req_id: str = "",
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """function role 触发时：update settings → cleanup → recreate → restream。"""
     if old_chat_id:
@@ -273,6 +274,7 @@ async def _retry_after_function_role(
             qwen_thinking_enabled=route.qwen_native_enabled,
             qwen_thinking_mode=route.qwen_native_mode,
             cookies=cookies,
+            req_id=req_id,
         ):
             if isinstance(event, dict) and event.get("type") == "_qwen_function_role":
                 yield {"type": "thinking", "content": ""}
@@ -320,11 +322,12 @@ async def _stream_openai_chat_inner(
             qwen_thinking_enabled=route.qwen_native_enabled,
             qwen_thinking_mode=route.qwen_native_mode,
             cookies=cookies,
+            req_id=req_id,
         ):
             if isinstance(event, dict) and event.get("type") == "_qwen_function_role":
                 async for retry_event in _retry_after_function_role(
                     client, session, model, final_messages, uploaded_files,
-                    route, cookies, chat_id,
+                    route, cookies, chat_id, req_id=req_id,
                 ):
                     yield retry_event
                 return

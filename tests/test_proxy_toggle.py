@@ -142,5 +142,105 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(_has_proxy_env())
 
 
+class TestChatCompletionStreamSmBlock(unittest.IsolatedAsyncioTestCase):
+    """验证 chat_completion_stream 遇到 BaxiaSmBlockedError 时触发代理切换。"""
+
+    async def _make_mock_client(self):
+        from unittest.mock import AsyncMock, MagicMock
+        client = MagicMock()
+        client.cleanup_chat = AsyncMock(return_value=True)
+        return client
+
+    async def test_sm_block_with_req_id_triggers_toggle(self):
+        from server.formats import BaxiaSmBlockedError
+        from upstream.qwen.completion_stream import chat_completion_stream
+
+        mock_toggle = AsyncMock()
+        mock_toggle.enabled = True
+
+        async def _raise_sm(*a, **kw):
+            raise BaxiaSmBlockedError("SM blocked")
+            yield  # noqa: make it an async generator
+
+        with patch(
+            "upstream.qwen.completion_stream._post_chat_sse", side_effect=_raise_sm,
+        ), patch(
+            "upstream.qwen.media.proxy_toggle.get_proxy_toggle", return_value=mock_toggle,
+        ):
+            client = await self._make_mock_client()
+            with self.assertRaises(BaxiaSmBlockedError):
+                async for _ in chat_completion_stream(
+                    client, None, "chat-1", {}, {}, req_id="req-sm-1",
+                ):
+                    pass
+        mock_toggle.on_sm_block.assert_awaited_once_with("req-sm-1")
+
+    async def test_sm_block_without_req_id_skips_toggle(self):
+        from server.formats import BaxiaSmBlockedError
+        from upstream.qwen.completion_stream import chat_completion_stream
+
+        mock_toggle = AsyncMock()
+        mock_toggle.enabled = True
+
+        async def _raise_sm(*a, **kw):
+            raise BaxiaSmBlockedError("SM blocked")
+            yield
+
+        with patch(
+            "upstream.qwen.completion_stream._post_chat_sse", side_effect=_raise_sm,
+        ), patch(
+            "upstream.qwen.media.proxy_toggle.get_proxy_toggle", return_value=mock_toggle,
+        ):
+            client = await self._make_mock_client()
+            with self.assertRaises(BaxiaSmBlockedError):
+                async for _ in chat_completion_stream(
+                    client, None, "chat-2", {}, {}, req_id="",
+                ):
+                    pass
+        mock_toggle.on_sm_block.assert_not_awaited()
+
+    async def test_sm_block_toggles_real_manager_state(self):
+        """用真实 ProxyToggleManager 验证 SM block 触发后状态自动翻转。"""
+        from server.formats import BaxiaSmBlockedError
+        from upstream.qwen.completion_stream import chat_completion_stream
+
+        real_mgr = ProxyToggleManager()
+        real_mgr._enabled = True
+        real_mgr._initialized = True
+
+        test_persist = Path("persist/qwen/test_sm_toggle_real.json")
+        try:
+            async def _raise_sm(*a, **kw):
+                raise BaxiaSmBlockedError("SM blocked")
+                yield
+
+            with patch(
+                "upstream.qwen.completion_stream._post_chat_sse",
+                side_effect=_raise_sm,
+            ), patch(
+                "upstream.qwen.media.proxy_toggle.get_proxy_toggle",
+                return_value=real_mgr,
+            ), patch(
+                "upstream.qwen.media.proxy_toggle._PERSIST_PATH",
+                test_persist,
+            ):
+                client = await self._make_mock_client()
+                self.assertTrue(real_mgr.enabled)
+                with self.assertRaises(BaxiaSmBlockedError):
+                    async for _ in chat_completion_stream(
+                        client, None, "chat-real", {}, {},
+                        req_id="req-real-toggle",
+                    ):
+                        pass
+            self.assertFalse(real_mgr.enabled)
+            self.assertTrue(test_persist.exists())
+            data = json.loads(test_persist.read_text(encoding="utf-8"))
+            self.assertEqual(data["enabled"], 0)
+        finally:
+            if test_persist.exists():
+                test_persist.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()
+
