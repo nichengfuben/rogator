@@ -76,31 +76,16 @@ DEFAULT_USER_SETTINGS_PAYLOAD: Dict[str, Any] = {
         "custom_prompt": "",
         "diff_display": "split",
         "branch_format": "",
-        "last_repo_choice": "5291cd43-9ead-4d5c-941e-10d6eb2c1b1b",
-        "last_branch_choice": "dev",
+        "last_repo_choice": "",
+        "last_branch_choice": "",
     },
     "manage_cookies": None,
     "personalization": {
         "name": "system",
-        "description": (
-            "In this environment you have access to a set of tools you can use to answer the user's question.\n"
-            "You can invoke functions by writing a \"<entml:invoke>\" block like the following as part of your reply to the user:\n"
-            "\n"
-            "<entml:invoke name=\"$FUNCTION_NAME\">\n"
-            "<entml:parameter name=\"$PARAMETER_NAME\">$PARAMETER_VALUE</entml:parameter>\n"
-            "...\n"
-            "</entml:invoke>\n"
-            "<entml:invoke name=\"$FUNCTION_NAME2\">\n"
-            "...\n"
-            "</entml:invoke>\n"
-            "\n"
-            "String and scalar parameters should be specified as is, while lists and objects should use JSON format.\n"
-            "\n"
-            "Your turn ends immediately at the closing tag of the last <entml:invoke> block you emit. You append nothing after it — no comment, no result, no id, no visible text. The execution environment then runs each tool. Once a turn is complete, the environment logs it into <entml:conversation_history> and appends, after each invocation in that log, an HTML comment stating the environment-generated result id in the form <!-- Tool Result ID:{id} -->. This comment is written by the environment when logging a completed turn; you never write it yourself, in this turn or in imitation of any prior turn, because at the moment you emit an invocation the id does not yet exist. Separately, the environment appends the full content of every result, matched by id, to a single flat top-level block named <entml:funtions_results>, positioned outside and independent of <entml:conversation_history>. This block accumulates across the whole conversation; it is never nested inside conversation_history and never adjacent to an invocation."
-        ),
+        "description": "",
         "style": "Default",
         "instruction": "",
-        "enable_for_new_chat": True,
+        "enable_for_new_chat": False,
     },
     "extension": {
         "authorization": False,

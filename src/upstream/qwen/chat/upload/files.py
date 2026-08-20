@@ -153,9 +153,11 @@ class UploadMixin:
         )
 
     async def upload_file(
-        self, session: QwenSession, file_data: bytes, filename: str
+        self, session: QwenSession, file_data: bytes, filename: str,
+        content_type: Optional[str] = None,
     ) -> Tuple[str, Dict[str, Any]]:
-        content_type = get_mime_type(filename)
+        if not content_type:
+            content_type = get_mime_type(filename)
         file_type, _ = get_file_category(content_type)
         file_size = len(file_data)
         limit = _MAX_FILE_SIZES.get(file_type, 20 * 1024 * 1024)
@@ -204,10 +206,15 @@ class UploadMixin:
         padding = (-len(encoded)) % 4
         if padding:
             encoded += "=" * padding
-        filename = (
-            f"upload_{uuid.uuid4().hex[:8]}{DATA_URI_EXT_MAP.get(mime_type, '.bin')}"
+        ext = DATA_URI_EXT_MAP.get(mime_type)
+        if not ext and mime_type.startswith("image/"):
+            ext = f".{mime_type.split('/')[-1]}"
+        if not ext:
+            ext = ".bin"
+        filename = f"upload_{uuid.uuid4().hex[:8]}{ext}"
+        return await self.upload_file(
+            session, base64.b64decode(encoded), filename, content_type=mime_type,
         )
-        return await self.upload_file(session, base64.b64decode(encoded), filename)
 
     @staticmethod
     def extract_base64_images(messages: List[Dict[str, Any]]) -> List[str]:
@@ -276,9 +283,13 @@ class UploadMixin:
                 content_type = resp.headers.get(
                     "Content-Type", "application/octet-stream"
                 ).split(";", 1)[0]
-        ext = DATA_URI_EXT_MAP.get(content_type, ".bin")
+        ext = DATA_URI_EXT_MAP.get(content_type)
+        if not ext and content_type.startswith("image/"):
+            ext = f".{content_type.split('/')[-1]}"
+        if not ext:
+            ext = ".bin"
         filename = f"upload_{uuid.uuid4().hex[:8]}{ext}"
-        return await self.upload_file(session, data, filename)
+        return await self.upload_file(session, data, filename, content_type=content_type)
 
     async def upload_file_from_path(
         self,

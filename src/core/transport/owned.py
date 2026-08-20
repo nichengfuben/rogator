@@ -3,11 +3,14 @@ from __future__ import annotations
 """上游 ClientSession 持有：ensure / reset / close，供各 upstream client 复用。"""
 
 import asyncio
+import time
 from typing import Optional
 
 import aiohttp
 
 from core.transport.http import reset_upstream_transport
+
+_RESET_COOLDOWN_SECONDS = 2.0
 
 
 def session_is_usable(session: aiohttp.ClientSession | None) -> bool:
@@ -33,6 +36,7 @@ class HttpTransportMixin:
     def _init_http_transport(self) -> None:
         self._http = None
         self._transport_lock_holder = None
+        self._last_reset_mono: float = 0.0
 
     def _on_http_session_created(self, session: aiohttp.ClientSession) -> None:
         """新建 session 后钩子（如 DeepSeek rebind HIF）。"""
@@ -64,11 +68,17 @@ class HttpTransportMixin:
 
         使用 ``connector_owner=False`` 的共享 connector 不会被关闭；
         其它 client 持有的 session 实例不受影响。
+
+        Cooldown 期内的重复 reset 仅丢弃引用而不关闭 session，
+        避免并发请求因级联 reset 触发 ``_timeout_ceil_threshold`` 等 stale session 异常。
         """
         async with self._transport_lock:
+            now = time.monotonic()
+            in_cooldown = (now - self._last_reset_mono) < _RESET_COOLDOWN_SECONDS
             old = self._http
             self._http = None
-            if old is not None and not old.closed:
+            self._last_reset_mono = now
+            if not in_cooldown and old is not None and not old.closed:
                 await reset_upstream_transport(old)
             if self._should_recreate_http_on_reset():
                 from server.retry.http_client import client_session

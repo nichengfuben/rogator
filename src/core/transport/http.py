@@ -40,7 +40,6 @@ def make_connector() -> aiohttp.TCPConnector:
         limit_per_host=_POOL_LIMIT_PER_HOST,
         keepalive_timeout=_POOL_KEEPALIVE_TIMEOUT,
         force_close=False,
-        enable_cleanup_closed=True,
     )
     return _connector
 
