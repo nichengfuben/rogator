@@ -268,7 +268,9 @@ async def _trigger_proxy_toggle_on_block(
         return
     try:
         from upstream.qwen.media.proxy_toggle import get_proxy_toggle
-        used_enabled = getattr(client, "_last_used_proxy_enabled", get_proxy_toggle().enabled)
+        used_enabled = getattr(exc, "_proxy_used_enabled", None)
+        if used_enabled is None:
+            used_enabled = getattr(client, "_last_used_proxy_enabled", get_proxy_toggle().enabled)
         logger.info(
             "session_retry: caught block error type=%s, triggering proxy toggle (req_id=%s, used_enabled=%s)",
             type(exc).__name__, req_id[:16], used_enabled,

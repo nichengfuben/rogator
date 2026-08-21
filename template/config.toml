@@ -25,7 +25,7 @@ model_context_length = 256000
 # true：绝不截断 prompt、不上传超长前缀附件，整段直发上游（413 时也不自动降限重试）
 send_full_prompt = false
 # aiohttp 入站 POST body 上限（默认 1 MiB 会导致 Claude CLI 长会话 413）
-client_max_body_bytes = 33554432
+client_max_body_bytes = 3355443200
 
 [timeout]
 create_chat = 15.0

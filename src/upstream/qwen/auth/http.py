@@ -125,6 +125,15 @@ def absorb_response_cookies(jar: Dict[str, str], response: Any) -> None:
                 jar[name] = str(value)
 
 
+def get_qwen_proxy() -> Optional[str]:
+    """获取当前 proxy toggle 状态对应的代理 URL，供独立 HTTP 请求使用。"""
+    from server.retry.http_client import active_proxy_url
+    from upstream.qwen.media.proxy_toggle import get_proxy_toggle
+    if not get_proxy_toggle().enabled:
+        return None
+    return active_proxy_url()
+
+
 def create_http_session() -> aiohttp.ClientSession:
     """Create one Qwen HTTP session respecting proxy env when present."""
     return client_session(use_env_proxy=True)

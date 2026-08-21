@@ -26,6 +26,7 @@ from upstream.qwen.chat.routes import (
     USER_AGENT,
 )
 from upstream.qwen.chat.store import QwenSession
+from upstream.qwen.auth.http import get_qwen_proxy
 from upstream.qwen.chat.upload.oss import upload_to_oss
 from upstream.qwen.chat.upload.parse import wait_file_parsed
 from upstream.qwen.chat.upload.storage import (
@@ -94,6 +95,7 @@ class UploadMixin:
                 headers=headers,
                 ssl=False,
                 timeout=aiohttp.ClientTimeout(total=15),
+                proxy=get_qwen_proxy(),
             ) as resp:
                 if resp.status != 200:
                     return None
@@ -254,6 +256,7 @@ class UploadMixin:
                 },
                 ssl=False,
                 timeout=aiohttp.ClientTimeout(total=60),
+                proxy=get_qwen_proxy(),
             ) as resp:
                 if resp.status != 200:
                     return None
@@ -276,6 +279,7 @@ class UploadMixin:
                 },
                 ssl=False,
                 timeout=aiohttp.ClientTimeout(total=30),
+                proxy=get_qwen_proxy(),
             ) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"download file failed: HTTP {resp.status}")
@@ -351,6 +355,7 @@ class UploadMixin:
                     },
                     ssl=False,
                     timeout=aiohttp.ClientTimeout(total=180),
+                    proxy=get_qwen_proxy(),
                 ) as resp:
                     if resp.status != 200:
                         logger.warning("Download video failed: HTTP %d", resp.status)

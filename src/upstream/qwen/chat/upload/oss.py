@@ -17,6 +17,7 @@ import aiohttp
 
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from server.model.model_thinking import ThinkingRoute
+from upstream.qwen.auth.http import get_qwen_proxy
 from upstream.qwen.chat.routes import USER_AGENT
 
 if TYPE_CHECKING:
@@ -35,6 +36,7 @@ async def _request_sts_credentials(
         async with s.post(
             url, json=payload, headers=headers, ssl=False,
             timeout=aiohttp.ClientTimeout(total=15),
+            proxy=get_qwen_proxy(),
         ) as resp:
             if resp.status != 200:
                 return None
@@ -109,6 +111,7 @@ async def get_oss_time(host: str) -> Optional[str]:
             async with s.head(
                 f"https://{host}", ssl=False,
                 timeout=aiohttp.ClientTimeout(total=5),
+                proxy=get_qwen_proxy(),
             ) as resp:
                 date_header = resp.headers.get("Date")
                 if date_header:
@@ -184,6 +187,7 @@ async def try_oss_upload(
             f"https://{connect_host}/{object_key}", data=file_data,
             headers=headers, ssl=False,
             timeout=aiohttp.ClientTimeout(total=180),
+            proxy=get_qwen_proxy(),
         ) as resp:
             if resp.status not in (200, 201):
                 raise RuntimeError(f"HTTP {resp.status}: {(await resp.text())[:300]}")
@@ -287,6 +291,8 @@ async def _upload_base64_images(
             _, image_obj = await client.upload_file_from_base64(session, uri)
             files.append(image_obj)
         except Exception as e:
+            if "All STS endpoints failed" in str(e):
+                raise
             logger.warning("Image upload failed: %s", e)
     return files
 

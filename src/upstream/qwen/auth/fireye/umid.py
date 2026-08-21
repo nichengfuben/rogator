@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from typing import Final, Optional
 
+from upstream.qwen.auth.http import get_qwen_proxy
 from upstream.qwen.chat.routes import CHAT_ORIGIN, USER_AGENT
 
 logger = logging.getLogger("rogator")
@@ -95,6 +96,7 @@ async def fetch_umid_from_ynuf(
                 headers=headers,
                 ssl=ssl_ctx,
                 timeout=aiohttp.ClientTimeout(total=8),
+                proxy=get_qwen_proxy(),
             ) as resp:
                 text = (await resp.text()).strip()
                 if resp.status == 200 and text.startswith(_UMID_PREFIX):

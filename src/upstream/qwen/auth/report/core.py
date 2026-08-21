@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import urlencode
 
+from upstream.qwen.auth.http import get_qwen_proxy
 from upstream.qwen.chat.routes import (
     APLUS_BASE_URL,
     APP_VERSION,
@@ -172,6 +173,7 @@ async def silent_request(
                 kwargs["data"] = data
             elif json_body is not None:
                 kwargs["json"] = json_body
+            kwargs["proxy"] = get_qwen_proxy()
             async with http.request(method, url, **kwargs) as resp:
                 await resp.read()
     except Exception as exc:

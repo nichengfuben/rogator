@@ -108,6 +108,12 @@ class ProxyToggleManager:
 
     async def on_sm_block(self, req_id: str, used_enabled: bool) -> bool:
         """SM block 触发代理切换：基于请求时的状态计算新值，避免并发翻转回原点。"""
+        if not _has_proxy_env():
+            logger.debug(
+                "proxy toggle: sm block req=%s ignored — no proxy env var set, toggle has no effect",
+                req_id[:12],
+            )
+            return self._enabled
         async with self._lock:
             if req_id in self._seen_tasks:
                 return self._enabled
@@ -127,8 +133,9 @@ class ProxyToggleManager:
             )
             return self._enabled
 
-    def release_task(self, req_id: str) -> None:
-        self._seen_tasks.discard(req_id)
+    async def release_task(self, req_id: str) -> None:
+        async with self._lock:
+            self._seen_tasks.discard(req_id)
 
     def _read_persist(self) -> bool:
         if not _PERSIST_PATH.exists():

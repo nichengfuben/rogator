@@ -7,7 +7,7 @@ import json
 import os
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from upstream.qwen.media.proxy_toggle import ProxyToggleManager
 
@@ -78,14 +78,16 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         data = json.loads(self.test_persist.read_text(encoding="utf-8"))
         self.assertEqual(data["enabled"], 0)
 
-    async def test_sm_block_toggles_state(self) -> None:
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_sm_block_toggles_state(self, _mock_env) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
         result = await self.mgr.on_sm_block("req-001", False)
         self.assertTrue(result)
         self.assertTrue(self.mgr.enabled)
 
-    async def test_sm_block_same_task_no_double_toggle(self) -> None:
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_sm_block_same_task_no_double_toggle(self, _mock_env) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
         r1 = await self.mgr.on_sm_block("req-002", False)
@@ -94,7 +96,8 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(r2)
         self.assertTrue(self.mgr.enabled)
 
-    async def test_sm_block_same_used_enabled_no_flip_back(self) -> None:
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_sm_block_same_used_enabled_no_flip_back(self, _mock_env) -> None:
         """同一 used_enabled 的多个请求不会反复翻转回原点。"""
         self.mgr._enabled = False
         self.mgr._initialized = True
@@ -104,16 +107,30 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(r2)
         self.assertTrue(self.mgr.enabled)
 
-    async def test_release_task_allows_re_toggle(self) -> None:
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_release_task_allows_re_toggle(self, _mock_env) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
         await self.mgr.on_sm_block("req-005", False)
-        self.mgr.release_task("req-005")
+        self.assertTrue(self.mgr.enabled)
+        await self.mgr.release_task("req-005")
         result = await self.mgr.on_sm_block("req-005", True)
         self.assertFalse(result)
         self.assertFalse(self.mgr.enabled)
 
-    async def test_concurrent_sm_blocks_single_toggle(self) -> None:
+    async def test_sm_block_no_proxy_env_skips_toggle(self) -> None:
+        """无代理环境变量时 on_sm_block 不切换状态，仅输出 debug 日志。"""
+        self.mgr._enabled = False
+        self.mgr._initialized = True
+        with patch.dict(os.environ, {}, clear=True):
+            for k in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+                os.environ.pop(k, None)
+            result = await self.mgr.on_sm_block("req-no-env", False)
+        self.assertFalse(result)
+        self.assertFalse(self.mgr.enabled)
+
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_concurrent_sm_blocks_single_toggle(self, _mock_env) -> None:
         self.mgr._enabled = False
         self.mgr._initialized = True
         results = await asyncio.gather(
@@ -124,7 +141,8 @@ class TestProxyToggleManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results.count(True), 3)
         self.assertTrue(self.mgr.enabled)
 
-    async def test_persist_written_on_toggle(self) -> None:
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_persist_written_on_toggle(self, _mock_env) -> None:
         with patch(
             "upstream.qwen.media.proxy_toggle._PERSIST_PATH", self.test_persist,
         ):
@@ -150,9 +168,10 @@ class TestChatCompletionStreamSmBlock(unittest.IsolatedAsyncioTestCase):
     """验证 chat_completion_stream 遇到 BaxiaSmBlockedError 时触发代理切换。"""
 
     async def _make_mock_client(self):
-        from unittest.mock import AsyncMock, MagicMock
         client = MagicMock()
         client.cleanup_chat = AsyncMock(return_value=True)
+        # 显式设置避免 MagicMock 动态属性覆盖 getattr 默认值
+        client._last_used_proxy_enabled = True
         return client
 
     async def test_sm_block_with_req_id_triggers_toggle(self):
@@ -203,7 +222,8 @@ class TestChatCompletionStreamSmBlock(unittest.IsolatedAsyncioTestCase):
                     pass
         mock_toggle.on_sm_block.assert_not_awaited()
 
-    async def test_sm_block_toggles_real_manager_state(self):
+    @patch("upstream.qwen.media.proxy_toggle._has_proxy_env", return_value=True)
+    async def test_sm_block_toggles_real_manager_state(self, _mock_env):
         """用真实 ProxyToggleManager 验证 SM block 触发后状态自动翻转。"""
         from server.formats import BaxiaSmBlockedError
         from upstream.qwen.completion_stream import chat_completion_stream
@@ -247,4 +267,3 @@ class TestChatCompletionStreamSmBlock(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
