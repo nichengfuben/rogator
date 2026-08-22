@@ -4,7 +4,12 @@ import asyncio
 import unittest
 from unittest.mock import MagicMock
 
-from server.formats import BaxiaSmBlockedError, TokenExpiredError, UpstreamWafBlockedError
+from server.formats import (
+    BaxiaSmBlockedError,
+    DataInspectionFailedError,
+    TokenExpiredError,
+    UpstreamWafBlockedError,
+)
 from core.session.accounts import Account
 from upstream.qwen.chat.chat import iter_sse_events, raise_sse_inline_error
 from upstream.qwen.chat.store import QwenSession
@@ -84,6 +89,29 @@ class TestIterSseBaxiaError(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BaxiaSmBlockedError):
             async for _ in iter_sse_events(client, resp, session):
                 pass
+
+
+class TestIterSseDataInspection(unittest.IsolatedAsyncioTestCase):
+    async def test_iter_sse_events_raises_data_inspection_failed(self) -> None:
+        client = MagicMock()
+        session = MagicMock(username="u@test.com")
+        line = (
+            'data: {"error": {"modality": ["text"], "code": "data_inspection_failed", '
+            '"stage": "input", "details": "内容安全警告：输入数据可能包含不适当的内容！"}, '
+            '"response_id": "r1", "response_index": 0}'
+        )
+
+        async def _body():
+            yield (line + "\n\n").encode("utf-8")
+
+        resp = MagicMock()
+        resp.content = _body()
+        with self.assertRaises(DataInspectionFailedError) as ctx:
+            async for _ in iter_sse_events(client, resp, session):
+                pass
+        self.assertIn("内容安全警告", str(ctx.exception))
+        self.assertEqual(ctx.exception.code, "data_inspection_failed")
+        self.assertEqual(ctx.exception.stage, "input")
 
 
 if __name__ == "__main__":

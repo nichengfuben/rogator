@@ -24,6 +24,7 @@ from server.formats.constants import (
 from server.formats.errors import (
     BaxiaSmBlockedError,
     ClientDisconnectedError,
+    DataInspectionFailedError,
     PayloadTooLargeError,
     TokenExpiredError,
     UpstreamConnectionError,
@@ -89,6 +90,7 @@ __all__ = [
     "SHUTDOWN_WAIT_IDLE_TIMEOUT",
     "TokenExpiredError",
     "BaxiaSmBlockedError",
+    "DataInspectionFailedError",
     "UpstreamConnectionError",
     "UpstreamStsError",
     "UpstreamTimeoutError",

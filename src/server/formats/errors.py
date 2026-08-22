@@ -72,6 +72,18 @@ class BaxiaSmBlockedError(Exception):
     """Baxia SM 人机验证拦截：账号仍有效，换号重试即可。"""
 
 
+class DataInspectionFailedError(Exception):
+    """Qwen 内容安全拦截（data_inspection_failed）：输入内容违规，直接透传给请求者。
+
+    不属于账号/网络问题，不能换号重试，也不触发代理切换。
+    """
+
+    def __init__(self, message: str, *, code: str = "", stage: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+
+
 class ClientDisconnectedError(Exception):
     """????????????????"""
 

@@ -127,7 +127,13 @@ def _safe_loads(data_str: str) -> Optional[Any]:
 
 def _parse_head_event(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if "error" in data:
-        return {"type": "error", "message": str(data["error"])}
+        err = data["error"]
+        if isinstance(err, dict):
+            # 顶层 error 对象（如 data_inspection_failed）保留原始字段，
+            # 让 sse.py 按 code 分类抛错；error/error_code 键供 _event_from_sse_data 命中
+            return {"type": "error", "message": str(err.get("details") or err),
+                    "error": err, "error_code": str(err.get("code") or "")}
+        return {"type": "error", "message": str(err)}
     created = data.get("response.created")
     if isinstance(created, dict):
         return {

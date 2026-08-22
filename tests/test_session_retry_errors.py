@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """session_retry 层对 STS/ChatNotFound 的捕获与 proxy_toggle 翻转触发测试。"""
 
+import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -63,6 +64,75 @@ class TestTriggerProxyToggleExpanded(unittest.IsolatedAsyncioTestCase):
         ):
             await _trigger_proxy_toggle_on_block("req-x", PayloadTooLargeError("413"), client)
         mock_toggle.on_sm_block.assert_not_awaited()
+
+    async def test_data_inspection_failed_skips_toggle(self) -> None:
+        from server.formats import DataInspectionFailedError
+
+        mock_toggle = AsyncMock()
+        client = MagicMock()
+        with patch(
+            "upstream.qwen.media.proxy_toggle.get_proxy_toggle", return_value=mock_toggle
+        ):
+            await _trigger_proxy_toggle_on_block(
+                "req-x",
+                DataInspectionFailedError(
+                    "内容安全警告：输入数据可能包含不适当的内容！",
+                    code="data_inspection_failed",
+                    stage="input",
+                ),
+                client,
+            )
+        mock_toggle.on_sm_block.assert_not_awaited()
+
+
+class TestDataInspectionNotRetryable(unittest.TestCase):
+    def test_data_inspection_failed_is_not_retryable(self) -> None:
+        from server.formats import DataInspectionFailedError
+
+        exc = DataInspectionFailedError("内容安全警告", code="data_inspection_failed")
+        self.assertFalse(is_retryable_error(exc))
+
+
+class TestDataInspectionErrorMapping(unittest.TestCase):
+    def test_error_mapped_to_400_for_requester(self) -> None:
+        from handlers.shared.api_errors import (
+            classify_stream_error,
+            handler_error_response,
+        )
+        from server.formats import DataInspectionFailedError
+
+        exc = DataInspectionFailedError(
+            "内容安全警告：输入数据可能包含不适当的内容！",
+            code="data_inspection_failed",
+            stage="input",
+        )
+        info = classify_stream_error(exc)
+        assert info.kind == "invalid_request_error"
+        assert info.code == 400
+
+        resp = handler_error_response(exc, label="test")
+        assert resp.status == 400
+        body = json.loads(resp.body.decode("utf-8"))
+        assert "内容安全警告" in body["error"]["message"]
+
+
+class TestDataInspectionDispatch(unittest.IsolatedAsyncioTestCase):
+    async def test_dispatch_raises_without_retry_or_toggle(self) -> None:
+        from server.formats import DataInspectionFailedError
+
+        mock_toggle = AsyncMock()
+        state = _mock_state()
+        client = MagicMock()
+        exc = DataInspectionFailedError("内容安全警告", code="data_inspection_failed")
+        with patch(
+            "upstream.qwen.media.proxy_toggle.get_proxy_toggle", return_value=mock_toggle
+        ):
+            with self.assertRaises(DataInspectionFailedError):
+                await _dispatch_session_retry(
+                    "req-di", state, exc, retries=0, limit=3, client=client,
+                )
+        mock_toggle.on_sm_block.assert_not_awaited()
+        client.switch_to_next.assert_not_called()
 
 
 class TestDispatchSessionRetryStS(unittest.IsolatedAsyncioTestCase):

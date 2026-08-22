@@ -12,6 +12,7 @@ import aiohttp
 from upstream.qwen.chat.upload.parse import SseEventAssembler, parse_sse_event, parse_sse_line
 from server.formats import (
     BaxiaSmBlockedError,
+    DataInspectionFailedError,
     TokenExpiredError,
     UpstreamChatNotFoundError,
     UpstreamTimeoutError,
@@ -134,13 +135,7 @@ def _event_from_sse_data(
         # 检测顶层 error.code 是否为可重试限流错误（如 quota_limit）
         err = event.get("error")
         if isinstance(err, dict):
-            err_code = str(err.get("code") or "")
-            if err_code in _UPSTREAM_RATE_LIMIT_CODES:
-                logger.warning(
-                    "Session %s upstream quota limited via SSE error event (%s)",
-                    session.username[:6], err_code,
-                )
-                raise TokenExpiredError(f"Rate limited (SSE error): {err_code}")
+            _raise_for_sse_error_event(client, session, err)
         return event
     # parse_sse_event 无法解析时（如 Qwen error 事件无 choices），直接检查原始 JSON
     try:
@@ -151,14 +146,33 @@ def _event_from_sse_data(
         return None
     err = obj.get("error")
     if isinstance(err, dict):
-        err_code = str(err.get("code") or "")
-        if err_code in _UPSTREAM_RATE_LIMIT_CODES:
-            logger.warning(
-                "Session %s upstream quota limited via SSE error event (%s)",
-                session.username[:6], err_code,
-            )
-            raise TokenExpiredError(f"Rate limited (SSE error): {err_code}")
+        _raise_for_sse_error_event(client, session, err)
     return None
+
+
+def _raise_for_sse_error_event(
+    client: "QwenClient",
+    session: "QwenSession",
+    err: Dict[str, Any],
+) -> None:
+    """顶层 error 帧分类：限流抛可重试 TokenExpired，内容安全拦截抛非重试业务错误。"""
+    err_code = str(err.get("code") or "")
+    if err_code == "data_inspection_failed":
+        logger.info(
+            "Session %s Qwen data inspection failed (stage=%s): %s",
+            session.username[:6], err.get("stage"), err.get("details"),
+        )
+        raise DataInspectionFailedError(
+            str(err.get("details") or "content inspection failed"),
+            code=err_code,
+            stage=str(err.get("stage") or ""),
+        )
+    if err_code in _UPSTREAM_RATE_LIMIT_CODES:
+        logger.warning(
+            "Session %s upstream quota limited via SSE error event (%s)",
+            session.username[:6], err_code,
+        )
+        raise TokenExpiredError(f"Rate limited (SSE error): {err_code}")
 
 
 def _dispatch_assembled_sse_line(

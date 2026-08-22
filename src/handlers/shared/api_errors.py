@@ -11,6 +11,7 @@ from aiohttp import web
 from echotools.base.logger import get_logger
 from server.formats import (
     BaxiaSmBlockedError,
+    DataInspectionFailedError,
     TokenExpiredError,
     UpstreamConnectionError,
     UpstreamStsError,
@@ -46,6 +47,9 @@ class StreamErrorInfo:
 def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
     if isinstance(exc, TokenExpiredError):
         return StreamErrorInfo("rate_limited", str(exc), 429)
+    if isinstance(exc, DataInspectionFailedError):
+        # 内容安全拦截属于请求方内容违规，按 400 invalid_request 语义直接回给客户端
+        return StreamErrorInfo("invalid_request_error", str(exc), 400)
     if isinstance(exc, BaxiaSmBlockedError):
         return StreamErrorInfo("server_error", f"Baxia SM blocked: {exc}", 503)
     if isinstance(exc, UpstreamTimeoutError):
@@ -191,6 +195,10 @@ def handler_error_response(
         logger.warning("%s token expired: %s", label, exc)
         kind = "rate_limit_error" if protocol == "anthropic" else "rate_limited"
         return err(429, str(exc), kind)
+    if isinstance(exc, DataInspectionFailedError):
+        logger.info("%s content inspection failed: %s", label, exc)
+        kind = "invalid_request_error"
+        return err(400, str(exc), kind)
     if isinstance(exc, BaxiaSmBlockedError):
         logger.debug("%s Baxia SM blocked: %s", label, exc)
         kind = "api_error" if protocol == "anthropic" else "server_error"
