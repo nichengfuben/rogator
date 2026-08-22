@@ -18,7 +18,7 @@ from core.session.store import PlatformSession
 from upstream.qwen.auth.crypto import build_headers_async, build_login_headers, hash_password
 from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
 from upstream.qwen.chat.store import fetch_user_id
-from upstream.qwen.auth.http import run_with_connection_retry
+from upstream.qwen.auth.http import get_qwen_proxy, run_with_connection_retry
 from core.transport.http import upstream_timeout
 from upstream.qwen.chat.routes import DEFAULT_MODELS, MODELS_CACHE_FILE
 from server.formats import LOGIN_TIMEOUT, MODELS_FETCH_TIMEOUT
@@ -57,6 +57,7 @@ async def _qwen_signin_once(
         f"{AUTH_BASE_URL}/api/v2/auths/signin",
         json=payload,
         headers=build_login_headers(),
+        proxy=get_qwen_proxy(),
         timeout=upstream_timeout(LOGIN_TIMEOUT),
     ) as resp:
         if resp.status != 200:
@@ -74,7 +75,7 @@ async def _qwen_signin_once(
         if not token:
             logger.warning("Login %s no token", account.username[:6])
             return None
-        user_id = await fetch_user_id(http, token, AUTH_BASE_URL)
+        user_id = await fetch_user_id(http, token, AUTH_BASE_URL, proxy=get_qwen_proxy())
         plat = PlatformSession(
             account=account,
             token=token,

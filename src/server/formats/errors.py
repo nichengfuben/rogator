@@ -58,6 +58,12 @@ class UpstreamConnectionError(RuntimeError):
         self.upstream = upstream
 
 
+class UpstreamStsError(UpstreamConnectionError):
+    """上游 STS 取 token 全部端点失败（代理/网络不可达）。"""
+
+    error_type: str = "upstream_sts_error"
+
+
 class TokenExpiredError(Exception):
     """Token ??????? session"""
 

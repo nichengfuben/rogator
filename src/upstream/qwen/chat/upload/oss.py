@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
+from server.formats import UpstreamStsError
 from server.model.model_thinking import ThinkingRoute
 from upstream.qwen.auth.http import get_qwen_proxy
 from upstream.qwen.chat.routes import USER_AGENT
@@ -68,7 +69,7 @@ async def get_sts_credentials(
                 return creds
         except Exception:
             continue
-    raise RuntimeError("All STS endpoints failed")
+    raise UpstreamStsError("All STS endpoints failed")
 
 
 def build_oss_authorization(

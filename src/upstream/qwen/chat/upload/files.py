@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
+from server.formats import UpstreamStsError
 from upstream.qwen.auth.crypto import build_headers_async
 from upstream.qwen.auth.report import (
     report_file_parse_success,
@@ -126,7 +127,7 @@ class UploadMixin:
                     return creds
             except Exception:
                 continue
-        raise RuntimeError("All STS endpoints failed")
+        raise UpstreamStsError("All STS endpoints failed")
 
     async def _report_upload_timeline(
         self,

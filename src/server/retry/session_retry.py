@@ -232,6 +232,7 @@ async def _handle_chat_not_found_retry(
         retries, limit, req_id,
         mask_username(old_name or ""), type(retry_client).__name__,
     )
+    await _trigger_proxy_toggle_on_block(req_id, exc, retry_client)
     invalidate = getattr(retry_client, "mark_invalid_current", None)
     if callable(invalidate):
         invalidate()
@@ -263,8 +264,16 @@ async def _handle_chat_not_found_retry(
 async def _trigger_proxy_toggle_on_block(
     req_id: str, exc: BaseException, client: Any | None,
 ) -> None:
-    """SM/WAF block 时触发代理切换，基于请求时的 toggle 状态计算目标值。"""
-    if not isinstance(exc, (BaxiaSmBlockedError, UpstreamWafBlockedError)):
+    """SM/WAF block、STS 失败、CHAT_NOT_FOUND 时触发代理切换，基于请求时的 toggle 状态计算目标值。"""
+    if not isinstance(
+        exc,
+        (
+            BaxiaSmBlockedError,
+            UpstreamWafBlockedError,
+            UpstreamConnectionError,
+            UpstreamChatNotFoundError,
+        ),
+    ):
         return
     try:
         from upstream.qwen.media.proxy_toggle import get_proxy_toggle
@@ -314,6 +323,7 @@ async def _dispatch_session_retry(
         _handle_upstream_timeout_retry(req_id, exc, retries=retries, limit=limit, state=state)
         return retries
     if isinstance(exc, UpstreamConnectionError):
+        await _trigger_proxy_toggle_on_block(req_id, exc, client)
         await _reset_client_transport(client)
         _handle_upstream_connection_retry(req_id, exc, retries=retries, limit=limit, state=state)
         return retries

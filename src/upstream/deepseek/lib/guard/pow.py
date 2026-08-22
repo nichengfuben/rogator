@@ -272,5 +272,5 @@ async def get_pow_response(
                 limiter=pow_limiter(),
             )
     except Exception as exc:
-        logger.warning("PoW 失败: %s", exc)
+        logger.warning("PoW 失败 [%s]: %r", type(exc).__name__, exc)
         return ""

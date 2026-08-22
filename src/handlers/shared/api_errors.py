@@ -13,6 +13,7 @@ from server.formats import (
     BaxiaSmBlockedError,
     TokenExpiredError,
     UpstreamConnectionError,
+    UpstreamStsError,
     UpstreamTimeoutError,
     UpstreamUnavailableError,
     UpstreamWafBlockedError,
@@ -49,6 +50,9 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
         return StreamErrorInfo("server_error", f"Baxia SM blocked: {exc}", 503)
     if isinstance(exc, UpstreamTimeoutError):
         return StreamErrorInfo("timeout", str(exc), 504)
+    if isinstance(exc, UpstreamStsError):
+        # STS 取 token 失败属于连接级错误，重试后仍失败则不影响客户端使用 502
+        return StreamErrorInfo("server_error", str(exc), exc.status)
     if isinstance(exc, UpstreamUnavailableError) and "429" in str(exc):
         return StreamErrorInfo("rate_limited", exc.message, 429)
     if isinstance(exc, (UpstreamWafBlockedError, UpstreamUnavailableError, UpstreamChatNotFoundError)):
@@ -61,6 +65,16 @@ def classify_stream_error(exc: BaseException) -> StreamErrorInfo:
 def log_classified_stream_error(exc: BaseException, *, label: str) -> StreamErrorInfo:
     """分类流式异常并按 kind 打日志；协议层只负责写 SSE。"""
     info = classify_stream_error(exc)
+    # 已知可重试类错误(STS=连接错误)，穷尽后单行 WARN 即可，不输出完整栈
+    if isinstance(exc, UpstreamStsError):
+        logger.warning("%s: %s", label, exc)
+        return info
+    if isinstance(exc, UpstreamChatNotFoundError):
+        logger.warning("%s: %s", label, exc)
+        return info
+    if isinstance(exc, UpstreamConnectionError):
+        logger.warning("%s upstream connection: %s", label, exc.message)
+        return info
     if isinstance(exc, BaxiaSmBlockedError):
         logger.debug("%s Baxia SM blocked: %s", label, exc)
     elif info.kind == "rate_limited":
@@ -193,5 +207,9 @@ def handler_error_response(
         logger.warning("%s upstream connection: %s", label, exc.message)
         kind = "api_error" if protocol == "anthropic" else "server_error"
         return err(exc.status, exc.message, kind)
+    if isinstance(exc, UpstreamChatNotFoundError):
+        # CHAT_NOT_FOUND 重试耗尽后属于业务错误，单行 WARN，不输出完整栈
+        logger.warning("%s stream error: %s", label, exc)
+        return err(exc.status, exc.message, "api_error" if protocol == "anthropic" else "server_error")
     logger.error("%s error: %s", label, exc, exc_info=True)
     return err(500, str(exc), "api_error" if protocol == "anthropic" else "server_error")

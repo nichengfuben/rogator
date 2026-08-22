@@ -165,7 +165,9 @@ async def silent_request(
 
     try:
         timeout = aiohttp.ClientTimeout(total=8.0, connect=3.0)
-        async with aiohttp.ClientSession(timeout=timeout) as http:
+        http = None
+        try:
+            http = aiohttp.ClientSession(timeout=timeout)
             kwargs: Dict[str, Any] = {"headers": headers or {}, "ssl": False}
             if params:
                 kwargs["params"] = params
@@ -176,6 +178,11 @@ async def silent_request(
             kwargs["proxy"] = get_qwen_proxy()
             async with http.request(method, url, **kwargs) as resp:
                 await resp.read()
+        finally:
+            # 上报 session 未注册到任何 transport 管理器，异常路径也要确保回收，
+            # 否则 event loop 强压取消时会打 asyncio "Unclosed client session"。
+            if http is not None and not http.closed:
+                await http.close()
     except Exception as exc:
         logger.debug("Qwen report failed %s %s: %s", method, url.split("?")[0], exc)
 

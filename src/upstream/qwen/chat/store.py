@@ -53,12 +53,13 @@ def save_sessions(
     )
 
 
-async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_url: str) -> str:
+async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_url: str, proxy: Optional[str] = None) -> str:
     try:
         async with session.get(
             f"{auth_base_url}/api/v2/user",
             headers={"Authorization": f"Bearer {token}", "User-Agent": USER_AGENT},
             ssl=False,
+            proxy=proxy,
             timeout=aiohttp.ClientTimeout(total=15),
         ) as ur:
             if ur.status == 200:
