@@ -14,8 +14,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 import aiohttp
 
 from upstream.qwen.auth.crypto import build_headers_async
-from upstream.qwen.chat.routes import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
-from upstream.qwen.chat.upload.payload import (
+from upstream.qwen.chat.endpoints import BASE_URL, TTS_DIR, TTS_PATH, TTS_TIMEOUT
+from upstream.qwen.chat.upload import (
     build_replace_content_payload,
     build_tts_payload,
 )

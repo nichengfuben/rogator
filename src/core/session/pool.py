@@ -185,7 +185,10 @@ class SessionLoginMixin(SessionReplenishMixin, SessionSwitchMixin):
                 i for i, s in enumerate(self._sessions)
                 if s.is_valid and not s.is_expired()
             ]
-            self._current_index = random.choice(valid_indices) if valid_indices else 0
+            if valid_indices:
+                self._current_index = random.choice(valid_indices)
+            else:
+                self._current_index = 0
         elif self._current_index >= len(self._sessions):
             self._current_index = 0
 

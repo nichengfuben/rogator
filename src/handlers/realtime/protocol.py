@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional
 
-from upstream.qwen.chat.routes import ASR_SAMPLE_RATE
+from upstream.qwen.chat.endpoints import ASR_SAMPLE_RATE
 
 DEFAULT_TRANSCRIPTION_MODEL: str = "qwen-asr"
 

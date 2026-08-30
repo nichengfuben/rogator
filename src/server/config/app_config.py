@@ -206,6 +206,34 @@ def _overlay_if_exists(
     return overlay_user_config(base, overlay) if base else overlay
 
 
+# 候选路径搜索顺序：模板默认 → 用户覆盖 → 老式扁平路径
+_UPSTREAM_CANDIDATE_PATHS = (
+    lambda name: upstream_config_template_path(),
+    lambda name: USER_CONFIG_DIR / LEGACY_UPSTREAM_DEFAULTS_NAME,
+    lambda name: upstream_template_dir() / f"{name}.toml",
+    lambda name: upstream_user_config_path(name),
+    lambda name: USER_UPSTREAM_DIR / f"{name}.toml",
+    lambda name: USER_UPSTREAM_DIR / name / f"{name}.toml",
+    lambda name: USER_CONFIG_DIR / f"{name}.toml",
+    lambda name: PROJECT_ROOT / "configs" / f"{name}.toml",
+)
+
+
+def resolve_upstream_config_path(name: str) -> tuple[Path | None, str]:
+    """返回上游 TOML 第一个命中的 (path, source_label)；缺失返 ``(None, "")``。"""
+    for factory in _UPSTREAM_CANDIDATE_PATHS:
+        try:
+            path = factory(name)
+        except Exception:  # noqa: BLE001
+            continue
+        if path is None:
+            continue
+        if isinstance(path, Path) and path.is_file():
+            label = "legacy_defaults" if path.name == LEGACY_UPSTREAM_DEFAULTS_NAME else path.name
+            return path, label
+    return None, ""
+
+
 def _load_upstream_toml(name: str) -> Dict[str, Any]:
     """template/upstream_config.toml → template/upstream/<name>.toml → config/upstream/<name>/config.toml。"""
     raw: Dict[str, Any] = {}

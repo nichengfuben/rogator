@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     DEFAULT_MODEL_CONTEXT_LENGTH,
     DEFAULT_MODEL_MODALITY,
     PERSISTED_MODEL_CAPABILITIES,

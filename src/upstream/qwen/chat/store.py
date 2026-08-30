@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Qwen 上游 session 类型与持久化接口。"""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 import aiohttp
 
@@ -12,19 +12,19 @@ from core.session.store import (
     SessionStoreMeta,
     clean_expired,
     describe_sessions,
+    find_session_index,
     is_session_fatal_error,
     load_upstream_sessions,
     mark_invalid,
     mask_username,
+    oldest_session_username,
+    remove_by_username,
     replace_or_append,
     save_upstream_sessions,
-    valid_session_count,
-    find_session_index,
-    oldest_session_username,
     usernames_in_use,
-    remove_by_username,
+    valid_session_count,
 )
-from upstream.qwen.chat.routes import USER_AGENT
+from upstream.qwen.chat.endpoints import USER_AGENT
 
 _UPSTREAM = "qwen"
 SESSIONS_FILE = "persist/qwen/sessions.json"
@@ -43,7 +43,7 @@ def save_sessions(
     sessions: List[QwenSession],
     *,
     current_index: int = 0,
-    blocked_accounts: Optional[Dict[str, float]] = None,
+    blocked_accounts: Optional[dict] = None,
 ) -> List[str]:
     return save_upstream_sessions(
         _UPSTREAM,
@@ -53,7 +53,12 @@ def save_sessions(
     )
 
 
-async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_url: str, proxy: Optional[str] = None) -> str:
+async def fetch_user_id(
+    session: aiohttp.ClientSession,
+    token: str,
+    auth_base_url: str,
+    proxy: Optional[str] = None,
+) -> str:
     try:
         async with session.get(
             f"{auth_base_url}/api/v2/user",
@@ -72,8 +77,8 @@ async def fetch_user_id(session: aiohttp.ClientSession, token: str, auth_base_ur
 __all__ = [
     "CLEANUP_INTERVAL",
     "QwenSession",
-    "SessionStoreMeta",
     "SESSIONS_FILE",
+    "SessionStoreMeta",
     "clean_expired",
     "describe_sessions",
     "fetch_user_id",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from core.transport.compat import removeprefix, removesuffix
+from core.transport.http import removeprefix, removesuffix
 
 
 class TestCompat(unittest.TestCase):

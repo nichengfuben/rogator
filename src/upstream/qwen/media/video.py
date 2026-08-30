@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 
 import aiohttp
 
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     BASE_URL,
     CHAT_PATH,
     GENERATED_VIDEO_DIR,
@@ -24,8 +24,8 @@ from upstream.qwen.chat.routes import (
     VIDEO_TASK_POLL_INTERVAL,
 )
 from upstream.qwen.auth.crypto import build_headers_async
-from upstream.qwen.chat.upload.payload import build_i2v_payload
 from upstream.qwen.chat.upload.storage import save_video_file
+from upstream.qwen.chat.upload import build_i2v_payload
 
 logger = logging.getLogger(__name__)
 

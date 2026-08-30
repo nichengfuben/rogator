@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from upstream.qwen.chat.upload.files import UploadMixin
+from upstream.qwen.chat.upload.files_upload import UploadMixin
 
 
 class _Client(UploadMixin):

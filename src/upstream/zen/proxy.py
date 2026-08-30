@@ -6,10 +6,11 @@ import asyncio
 import json
 import logging
 import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from upstream.zen.proxy_state import load_state_payload, save_state_payload
 
 logger = logging.getLogger("rogator")
 
@@ -81,10 +82,16 @@ def load_dynamic_proxy_pool(path: str) -> List[str]:
 def merge_proxy_pools(
     static_pool: List[Optional[str]],
     dynamic_pool: List[str],
+    top_n: int = 0,
 ) -> List[Optional[str]]:
+    """合并静态与动态池。static_pool 已包含 env 注入的代理 + toml ``[proxy].static``。
+
+    ``top_n`` 仅作用于动态池（按 latency 升序的入参由调用方保证），不影响静态候选。
+    """
     merged: List[Optional[str]] = list(static_pool) if static_pool else [None]
     existing = {p for p in merged if p is not None}
-    for proxy in dynamic_pool:
+    candidates = dynamic_pool[:top_n] if top_n > 0 else dynamic_pool
+    for proxy in candidates:
         if proxy in existing:
             continue
         merged.append(proxy)
@@ -101,21 +108,132 @@ def load_static_pool_from_config(raw: Any) -> List[Optional[str]]:
     return out or [None]
 
 
-def build_proxy_pool_from_toml(raw: Dict[str, Any]) -> tuple[List[Optional[str]], str, str]:
-    """从 upstream zen config 构建合并池。返回 (pool, pool_file, state_file)。"""
-    section = raw.get("proxy") if isinstance(raw.get("proxy"), dict) else {}
-    static = load_static_pool_from_config(section.get("static"))
-    pool_file = str(section.get("pool_file") or "proxy_pool.json").strip()
+def load_static_pool_from_env() -> List[Optional[str]]:
+    """从 HTTP(S)_PROXY / ALL_PROXY 环境变量读取静态代理。
+
+    多个变量同时存在时按 HTTPS_PROXY → HTTP_PROXY → ALL_PROXY 顺序取首个非空，
+    归一化为 URL 字符串；与 toml 中 ``[proxy].static`` 合并时 env 项排在前面。
+    """
+    candidates = (
+        os.environ.get("HTTPS_PROXY"),
+        os.environ.get("https_proxy"),
+        os.environ.get("HTTP_PROXY"),
+        os.environ.get("http_proxy"),
+        os.environ.get("ALL_PROXY"),
+        os.environ.get("all_proxy"),
+    )
+    for raw in candidates:
+        url = normalize_proxy_url(raw)
+        if url:
+            return [url]
+    return []
+
+
+def _coalesce_static_pool(
+    env_pool: List[Optional[str]],
+    static_toml: List[Optional[str]],
+) -> List[Optional[str]]:
+    """env 代理排在 toml static 之前；保留首次出现的项，去重。"""
+    static: List[Optional[str]] = []
+    seen: set = set()
+    for url in env_pool + static_toml:
+        if url in seen:
+            continue
+        seen.add(url)
+        static.append(url)
+    return static or [None]
+
+
+def _resolve_pool_paths(
+    section: Dict[str, Any],
+) -> tuple[str, str, int]:
+    """从 toml 解析动态池路径、状态文件路径、动态 top_n。"""
+    from upstream.zen import DEFAULT_DYNAMIC_TOP_N
+    from server.config.files import PROJECT_ROOT, USER_UPSTREAM_DIR
+
+    # 动态代理池路径固定：避免 toml 误配或脚本 cwd 漂移。
+    pool_file = str(USER_UPSTREAM_DIR / "zen" / "proxy_pool.json")
     state_file = str(
         section.get("state_file") or "persist/zen/proxy_state.json"
     ).strip()
+    top_n_raw = section.get("dynamic_top_n")
+    try:
+        top_n = int(top_n_raw) if top_n_raw is not None else DEFAULT_DYNAMIC_TOP_N
+    except (TypeError, ValueError):
+        top_n = DEFAULT_DYNAMIC_TOP_N
+    # pool_file / state_file 转绝对路径：便于跨 cwd 调用
+    if not Path(pool_file).is_absolute():
+        pool_file = str(PROJECT_ROOT / pool_file)
+    if not Path(state_file).is_absolute():
+        state_file = str(PROJECT_ROOT / state_file)
+    return pool_file, state_file, top_n
+
+
+def build_proxy_pool_from_toml(
+    raw: Dict[str, Any],
+) -> tuple[List[Optional[str]], str, str, int, List[Optional[str]]]:
+    """从 upstream zen config 构建合并池。
+
+    返回 ``(pool, pool_file, state_file, top_n, static_pool)``：
+    - ``static_pool`` 是 env + toml ``[proxy].static`` 合并后的静态节点，供
+      后台刷新时区分动态池节点（不入 proxy_pool.json）。
+    - 合并顺序：env 代理（首个非空）→ toml ``[proxy].static`` → 动态池。
+    - 动态池路径固定为 ``config/upstream/zen/proxy_pool.json``（相对项目根），
+      不再通过 toml 配置——避免多份漂移或路径写错导致主服务读不到代理。
+    """
+    section = raw.get("proxy") if isinstance(raw.get("proxy"), dict) else {}
+    env_pool = load_static_pool_from_env()
+    static_toml = load_static_pool_from_config(section.get("static"))
+    static = _coalesce_static_pool(env_pool, static_toml)
+    pool_file, state_file, top_n = _resolve_pool_paths(section)
     dynamic = load_dynamic_proxy_pool(pool_file)
-    merged = merge_proxy_pools(static, dynamic)
+    merged = merge_proxy_pools(static, dynamic, top_n=top_n)
     logger.debug(
-        "zen proxy pool: static=%d dynamic=%d merged=%d file=%s",
-        len(static), len(dynamic), len(merged), pool_file,
+        "zen proxy pool: env=%d toml_static=%d dynamic=%d merged=%d top_n=%d file=%s",
+        len(env_pool), len(static_toml), len(dynamic), len(merged), top_n, pool_file,
     )
-    return merged, pool_file, state_file
+    return merged, pool_file, state_file, top_n, static
+
+
+def save_proxy_pool_file(
+    path: str,
+    pool: List[Optional[str]],
+    static_pool: Optional[List[Optional[str]]] = None,
+) -> None:
+    """将动态代理池写回 proxy_pool.json，静态节点不入此文件。
+
+    静态池由 ``[proxy].static`` / ``HTTP(S)_PROXY`` 环境变量管理；调用方
+    通过 ``static_pool`` 告知"哪些代理属于静态"以便落盘前剔除，缺省则按
+    ``pool`` 全部落盘（仅在纯动态场景下使用）。
+    """
+    static_known: set = {p for p in (static_pool or []) if p is not None}
+    proxies = []
+    seen: set = set()
+    for url in pool:
+        if url is None or url in static_known or url in seen:
+            continue
+        seen.add(url)
+        proxies.append({"proxy": url, "status": "ok", "latency": 0.0, "model_count": 0})
+    data = {
+        "timestamp": int(time.time()),
+        "total_tested": 0,
+        "working": len(proxies),
+        "elapsed_seconds": 0.0,
+        "proxies": proxies,
+    }
+    path_obj = Path(path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path_obj.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    except Exception as exc:
+        logger.warning("zen save proxy pool failed: %s", exc)
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 def is_proxy_error(exc: BaseException) -> bool:
@@ -178,6 +296,13 @@ class NodeManager:
             return False
         return True
 
+    def all_nodes_muted(self) -> bool:
+        """检查是否所有节点都处于静音期。"""
+        for i in range(len(self._pool)):
+            if not self._is_muted(self._describe(i)):
+                return False
+        return True
+
     async def mute_current(self, duration: float = MUTE_DURATION) -> None:
         """将当前节点静音指定秒数；后续 switch_next 会跳过该节点。"""
         async with self._lock:
@@ -188,52 +313,28 @@ class NodeManager:
                 desc, duration,
                 time.strftime("%H:%M:%S", time.localtime(self._muted[desc])),
             )
+        # mute 后立即落盘，否则下次进程退出 mute 就丢失；
+        # run_in_executor 不阻塞 event loop，写失败仅记日志
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._save_sync)
+        except Exception as exc:
+            logger.error("zen NodeManager persist after mute failed: %s", exc)
 
     def _load(self) -> None:
-        path = Path(self._state_file)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            idx = int(data.get("current_node_index", 0))
-            if 0 <= idx < len(self._pool):
-                self._current_index = idx
-                logger.debug(
-                    "zen NodeManager restored index=%d (%s)",
-                    idx, self._describe(idx),
-                )
-                return
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            logger.warning("zen NodeManager load failed: %s", exc)
-        self._current_index = 0
+        idx, muted, _restored, _expired = load_state_payload(
+            self._state_file, len(self._pool), self._describe,
+        )
+        self._current_index = idx
+        self._muted = muted
 
     def _save_sync(self) -> None:
-        data = {
-            "current_node_index": self._current_index,
-            "current_node": self._describe(self._current_index),
-            "updated_at": int(time.time()),
-        }
-        path = Path(self._state_file)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                dir=str(path.parent),
-                delete=False,
-                suffix=".tmp",
-                encoding="utf-8",
-            ) as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-                tmp_path = fh.name
-            os.replace(tmp_path, str(path))
-        except Exception as exc:
-            logger.error("zen NodeManager save failed: %s", exc)
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
+        save_state_payload(
+            self._state_file,
+            current_index=self._current_index,
+            describe_at=self._describe,
+            muted=self._muted,
+        )
 
     async def switch_next(self) -> str:
         async with self._lock:
@@ -245,7 +346,7 @@ class NodeManager:
                 if not self._is_muted(desc):
                     break
             else:
-                # 所有节点都被 mute，保持当前位置
+                # 所有节点都被 mute，保持当前位置；调用方应检测并返回 429
                 desc = self._describe(self._current_index)
                 logger.debug(
                     "zen all %d nodes muted, staying at %s",
@@ -269,9 +370,7 @@ class NodeManager:
             self._pool = new_pool
             self._current_index = 0
             # 清理不再存在于新池中的 mute 记录
-            new_descs = set()
-            for i in range(len(new_pool)):
-                new_descs.add(self._describe(i))
+            new_descs = {self._describe(i) for i in range(len(new_pool))}
             stale = [k for k in self._muted if k not in new_descs]
             for k in stale:
                 del self._muted[k]

@@ -10,11 +10,11 @@ import aiohttp
 from core.transport.http import (
     close_shared_connector,
     get_upstream_ssl_context,
+    HttpTransportMixin,
     make_connector,
     reset_upstream_transport,
     upstream_timeout,
 )
-from core.transport.owned import HttpTransportMixin
 from server.retry.http_client import client_session
 
 

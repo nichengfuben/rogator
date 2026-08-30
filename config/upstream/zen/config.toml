@@ -11,11 +11,15 @@ tts = false
 [proxy]
 # 静态代理池（优先）；空字符串 / "direct" / "none" 表示直连
 # 例: static = ["", "127.0.0.1:7890"]
+# 静态池可由环境变量覆盖/前置：HTTPS_PROXY > HTTP_PROXY > ALL_PROXY（取首个非空）。
+# 静态池永不写入 proxy_pool.json。
 static = ["http://127.0.0.1:7890", ""]
-# 动态代理池 JSON（相对项目根）；不存在则忽略
-# 结构: {"proxies": [{"proxy": "1.2.3.4:8080", "latency": 0.5}, ...]}
-pool_file = "persist/zen/proxy_pool.json"
+# 动态代理池固定从 config/upstream/zen/proxy_pool.json 读取（按 latency 升序截前 20）。
+# 不再通过 pool_file 配置；后续刷新循环也直接写回同一份文件，避免多份漂移。
 # 当前节点索引持久化
 state_file = "persist/zen/proxy_state.json"
+# 动态池去重后选取最快的节点数；0 表示全部选取，默认 20。
+# 仅作用于动态池，不影响静态代理（env / [proxy].static）。
+# dynamic_top_n = 20
 # 动态代理池后台刷新间隔（秒）；0 表示禁用，默认 86400（24小时）
 # refresh_interval_seconds = 86400

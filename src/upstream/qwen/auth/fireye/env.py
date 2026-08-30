@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Final, List
 
-from upstream.qwen.chat.routes import SEC_CH_UA, USER_AGENT
+from upstream.qwen.chat.endpoints import SEC_CH_UA, USER_AGENT
 
 _WEBGL_VENDOR: Final[str] = "Google Inc. (NVIDIA)"
 _WEBGL_RENDERER: Final[str] = (

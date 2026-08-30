@@ -32,7 +32,7 @@ from upstream.qwen.auth.crypto import (
     generate_fingerprint,
     hash_password,
 )
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     APP_VERSION,
     BASE_URL,
     CHAT_ORIGIN,
@@ -43,7 +43,7 @@ from upstream.qwen.chat.routes import (
     USER_AGENT,
 )
 from upstream.qwen.chat.sse import parse_sse_event
-from upstream.qwen.chat.upload.payload import build_new_chat_payload
+from upstream.qwen.chat.upload import build_new_chat_payload
 from server.formats.messages import build_chat_payload, build_qwen_message
 from server.retry.http_client import client_session, sync_proxy_env
 

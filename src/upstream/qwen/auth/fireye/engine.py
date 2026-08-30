@@ -12,7 +12,7 @@ from upstream.qwen.auth.fireye.payload import build_fy_payload
 from upstream.qwen.auth.fireye.session import FireyeSession, get_session, reset_session
 from upstream.qwen.auth.fireye.umid import get_umid_token
 
-from upstream.qwen.chat.routes import CHAT_ORIGIN, CHAT_PATH
+from upstream.qwen.chat.endpoints import CHAT_ORIGIN, CHAT_PATH
 
 _DEFAULT_ORIGIN: Final[str] = "https://chat.qwen.ai/"
 _lock = threading.Lock()

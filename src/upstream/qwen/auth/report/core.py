@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from urllib.parse import urlencode
 
 from upstream.qwen.auth.http import get_qwen_proxy
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     APLUS_BASE_URL,
     APP_VERSION,
     CHAT_ORIGIN,

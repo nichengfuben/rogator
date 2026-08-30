@@ -18,7 +18,7 @@ import path_setup  # noqa: F401
 from core.session.accounts import accounts_for_upstream
 from upstream.qwen.auth.crypto import build_headers
 from upstream.qwen.client import QwenClient
-from upstream.qwen.chat.routes import CHAT_PATH
+from upstream.qwen.chat.endpoints import CHAT_PATH
 
 
 async def main() -> int:

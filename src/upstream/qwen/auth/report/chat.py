@@ -27,7 +27,7 @@ from upstream.qwen.auth.report.core import (
     spm_pre_home,
     uid,
 )
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     APLUS_BASE_URL,
     APP_VERSION,
     BASE_URL,

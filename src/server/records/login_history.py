@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import random
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from core.persist.locks import _save_lock, mark_migrated
 from core.persist.migrate import migrate_login_history_upstream
 from core.persist.paths import PROJECT_ROOT, login_history_path as upstream_login_history_path
 from core.session.accounts import Account
@@ -20,8 +20,6 @@ logger = logging.getLogger("rogator")
 
 STALE_PICK_POOL: int = 20
 _UTC8 = timezone(timedelta(hours=8))
-_save_lock = threading.Lock()
-_migrated_upstreams: set[str] = set()
 
 
 def login_history_path(upstream: str) -> Path:
@@ -37,11 +35,9 @@ def _stale_rank(ts: Optional[float]) -> float:
 
 
 def _maybe_migrate_upstream_login_history(upstream: str) -> None:
-    key = upstream.strip().lower()
-    if key in _migrated_upstreams:
+    if not mark_migrated(upstream):
         return
-    _migrated_upstreams.add(key)
-    migrate_login_history_upstream(key, PROJECT_ROOT, archive_unified=False)
+    migrate_login_history_upstream(upstream.strip().lower(), PROJECT_ROOT, archive_unified=False)
 
 
 class LoginHistoryStore:

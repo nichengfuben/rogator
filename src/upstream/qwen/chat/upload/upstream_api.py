@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-"""Qwen 上游辅助 API：config、parse_url、SSE 重连、登录 warm-up。"""
+"""Qwen 上游辅助 API：config、parse_url、SSE 重连、登录 warm-up。
+
+注意：payload 构建已抽出至 ``payload.py``；此处仅保留对上游 HTTP 端点的调用。
+"""
 
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from upstream.qwen.auth.crypto import build_headers_async, merge_session_cookies
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     BASE_URL,
     CHAT_PATH,
     CONFIGS_PATH,
@@ -17,6 +20,7 @@ from upstream.qwen.chat.routes import (
     SSE_RECONNECT_MAX,
 )
 from upstream.qwen.chat.sse import iter_sse_events
+from upstream.qwen.chat.upload.storage import save_image_file, save_wav_file
 from upstream.qwen.auth.http import run_with_connection_retry
 from core.transport.http import request_json, upstream_timeout
 
@@ -109,6 +113,7 @@ DEFAULT_USER_SETTINGS_PAYLOAD: Dict[str, Any] = {
     "model_config": {
     },
 }
+# === Settings & upstream HTTP endpoints ===
 
 async def update_user_settings(client: "QwenClient", session: "QwenSession") -> bool:
     """function role 触发时下发默认设置，失败仅 warning 不阻断。"""
@@ -362,3 +367,17 @@ async def reconnect_sse_events(
             raise RuntimeError(f"SSE reconnect HTTP {resp.status}: {body[:200]}")
         async for event in iter_sse_events(client, resp, session):
             yield event
+
+
+__all__ = [
+    "update_user_settings",
+    "check_and_sync_user_settings",
+    "fetch_app_config",
+    "fetch_user_settings",
+    "warmup_session",
+    "parse_urls",
+    "reconnect_sse_events_with_retry",
+    "reconnect_sse_events",
+    "save_image_file",
+    "save_wav_file",
+]

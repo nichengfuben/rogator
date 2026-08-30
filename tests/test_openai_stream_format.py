@@ -7,7 +7,7 @@ import json
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-from core.transport.compat import removeprefix
+from core.transport.http import removeprefix
 from echotools import FncallStreamParser, get_protocol
 
 from handlers.openai.stream_tools import (

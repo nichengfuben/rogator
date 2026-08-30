@@ -12,7 +12,7 @@ from upstream.qwen.auth.crypto import (
     generate_fingerprint,
     validate_bxumidtoken,
 )
-from upstream.qwen.chat.routes import BAXIA_SDK_VERSION
+from upstream.qwen.chat.endpoints import BAXIA_SDK_VERSION
 
 logger = logging.getLogger("rogator")
 

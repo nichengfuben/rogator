@@ -10,7 +10,7 @@ from echotools import ToolProtocol, get_protocol
 from echotools.base.logger import get_logger
 
 from server.config import CONFIG
-from upstream.qwen.chat.routes import DEFAULT_MODEL
+from upstream.qwen.chat.endpoints import DEFAULT_MODEL
 from server.formats import (
     SHUTDOWN_CANCEL_GRACE,
 )
@@ -179,9 +179,12 @@ class AppState:
             updated = False
             interval = CONFIG.models_refresh_interval
             for name, client in self._clients.items():
+                # 协议要求所有 client 必须实现 fetch_models(use_cache: bool) -> List[str]
                 fetch = getattr(client, "fetch_models", None)
                 if not callable(fetch):
-                    continue
+                    raise NotImplementedError(
+                        f"upstream {name} client {type(client).__name__} missing fetch_models()"
+                    )
                 if self._should_skip_model_refresh(
                     name, client, require_session=require_session, force=force, interval=interval,
                 ):
@@ -194,6 +197,8 @@ class AppState:
                 logger.info("Refreshed %s models: %d", name, len(models))
             if updated:
                 self._rebuild_unified_models()
+        except NotImplementedError:
+            raise
         except Exception as e:
             logger.warning("Refresh models failed: %s", e)
 

@@ -15,7 +15,7 @@ from upstream.qwen.auth.report.core import (
     silent_request,
     uid,
 )
-from upstream.qwen.chat.routes import APP_VERSION, CHAT_ORIGIN
+from upstream.qwen.chat.endpoints import APP_VERSION, CHAT_ORIGIN
 
 if TYPE_CHECKING:
     from upstream.qwen.client import QwenClient

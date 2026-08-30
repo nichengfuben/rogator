@@ -18,11 +18,11 @@ from core.transport.http import (
     _POOL_CONNECT_TIMEOUT,
     close_shared_connector,
     get_upstream_ssl_context,
+    HttpTransportMixin,
     make_connector,
     reset_upstream_transport,
     upstream_timeout,
 )
-from core.transport.owned import HttpTransportMixin
 from server.formats import LOGIN_TIMEOUT, UpstreamTimeoutError
 from server.retry import run_with_session_retry, stream_with_session_retry
 from upstream.qwen.account import QwenLoginMixin
@@ -397,8 +397,6 @@ class TestCrossVersionImports(unittest.TestCase):
 
     _MODULES = (
         "core.transport.http",
-        "core.transport.owned",
-        "core.transport.conn_retry",
         "core.transport",
         "server.retry.http_client",
         "server.retry.session_retry",

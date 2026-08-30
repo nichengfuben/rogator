@@ -21,16 +21,17 @@ import logging
 logger = logging.getLogger("rogator")
 
 # ---------------------------------------------------------------------------
-# Constants — 与 routes.py 对齐
+# Constants — 与 chat.py 对齐
 # ---------------------------------------------------------------------------
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     APP_VERSION,
     BASE_URL,
     CHAT_ORIGIN,
     SEC_CH_UA,
-    SEC_CH_UA_PLATFORM,
     USER_AGENT,
 )
+
+SEC_CH_UA_PLATFORM = '"Windows"'
 
 BAXIA_VERSION: Final[str] = "0.0.3"
 CUSTOM_BASE64_CHARS: Final[str] = (

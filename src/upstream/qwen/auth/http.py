@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Final, Optiona
 
 import aiohttp
 
-from core.transport.conn_retry import run_with_connection_retry as _run_with_connection_retry
+from core.transport.http import run_with_connection_retry as _run_with_connection_retry
 from server.formats import UpstreamConnectionError, as_upstream_connection_error
 from server.retry.http_client import client_session
 

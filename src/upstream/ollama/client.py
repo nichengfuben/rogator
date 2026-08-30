@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 
 from core.session.models_cache import ModelsCacheMixin
-from core.transport.owned import HttpTransportMixin
+from core.transport.http import HttpTransportMixin
 from upstream.ollama.chat_stream import post_chat_stream
 from upstream.ollama.routes import REGISTRY_FILE, SKIP_PATTERN
 

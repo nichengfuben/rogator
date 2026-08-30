@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import aiohttp
 
 from upstream.qwen.auth.crypto import build_headers_async, build_stop_headers_async
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     BASE_URL,
     CHAT_PATH,
     DELETE_CHAT_PATH,
@@ -17,7 +17,7 @@ from upstream.qwen.chat.routes import (
     STOP_CHAT_PATH,
 )
 from upstream.qwen.chat.upload.parse import parse_sse_event
-from upstream.qwen.chat.upload.payload import (
+from upstream.qwen.chat.upload import (
     build_new_chat_payload,
     build_payload,
     build_stop_payload,

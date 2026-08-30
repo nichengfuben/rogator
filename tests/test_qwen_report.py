@@ -20,8 +20,8 @@ from upstream.qwen.auth.report import (
     report_streaming_statistics,
     report_user_status,
 )
-from upstream.qwen.chat.routes import APP_VERSION, BAXIA_SDK_VERSION, USER_AGENT
-from upstream.qwen.chat.upload.payload import build_new_chat_payload
+from upstream.qwen.chat.endpoints import APP_VERSION, BAXIA_SDK_VERSION, USER_AGENT
+from upstream.qwen.chat.upload import build_new_chat_payload
 from core.session.accounts import Account
 from core.session.store import PlatformSession
 

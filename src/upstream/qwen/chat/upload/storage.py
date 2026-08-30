@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-"""Local media persistence, MIME types, file helpers, and OSS/persistence helpers.
+"""Local media persistence, MIME types, file helpers, OSS auth, payload builders.
 
-Merged from: storage.py, mimes.py, files.py, persistence.py, oss.py
+Merged from: storage.py, mimes.py, files.py, persistence.py, oss.py, payload.py
+
+Payload builders (``build_payload`` / ``build_new_chat_payload`` /
+``build_stop_payload`` / ``build_i2v_payload`` / ``build_tts_payload`` /
+``build_replace_content_payload``) 都集中在此处：
+
+* 它们只依赖 ``storage.build_url_file_object`` 与 ``endpoints.API_VERSION``，
+  没有副作用。
+* 调用方分散在 ``chat``、``media``、``scripts``、``tests`` 中，集中在上传
+  模块可以避免多文件互相 import 的循环风险。
 """
 
 import base64
@@ -14,15 +23,17 @@ import struct
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Final, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
 
 from upstream.qwen.account import Account
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
+    API_VERSION,
     COOKIE_REFRESH_INTERVAL,
     GENERATED_IMAGE_DIR,
     GENERATED_VIDEO_DIR,
     PERSIST_PATH,
     TTS_DIR,
+    USE_LOCAL_MODE,
 )
 
 # ---------------------------------------------------------------------------

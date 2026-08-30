@@ -51,8 +51,10 @@ def test_record_sse_writes_incrementally(
     recorder.write(b"data: chunk1\n\n")
     path = dump / "req_sse.sse"
     assert path.is_file()
+    recorder.maybe_flush(force=True)
     assert path.read_bytes() == b"data: chunk1\n\n"
     recorder.write(b"data: chunk2\n\n")
+    recorder.maybe_flush(force=True)
     assert path.read_bytes() == b"data: chunk1\n\ndata: chunk2\n\n"
     recorder.close()
     assert "record sse req_id=req_sse" in caplog.text

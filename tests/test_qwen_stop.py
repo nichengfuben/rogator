@@ -5,8 +5,8 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from upstream.qwen.chat.chat import abort_upstream_on_cancel, iter_sse_events
-from upstream.qwen.chat.routes import STOP_CHAT_PATH
-from upstream.qwen.chat.upload.payload import build_stop_payload
+from upstream.qwen.chat.endpoints import STOP_CHAT_PATH
+from upstream.qwen.chat.upload import build_stop_payload
 from upstream.qwen.client import QwenClient
 
 

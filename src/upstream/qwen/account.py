@@ -16,11 +16,11 @@ from core.session.models_cache import ModelsCacheMixin
 from core.session.pool import SessionLoginMixin
 from core.session.store import PlatformSession
 from upstream.qwen.auth.crypto import build_headers_async, build_login_headers, hash_password
-from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, MODELS_PATH
+from upstream.qwen.chat.endpoints import AUTH_BASE_URL, BASE_URL, MODELS_PATH
 from upstream.qwen.chat.store import fetch_user_id
 from upstream.qwen.auth.http import get_qwen_proxy, run_with_connection_retry
 from core.transport.http import upstream_timeout
-from upstream.qwen.chat.routes import DEFAULT_MODELS, MODELS_CACHE_FILE
+from upstream.qwen.chat.endpoints import DEFAULT_MODELS, MODELS_CACHE_FILE
 from server.formats import LOGIN_TIMEOUT, MODELS_FETCH_TIMEOUT
 from server.model.model_meta import (
     ModelMeta,
