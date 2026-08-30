@@ -10,7 +10,7 @@ import urllib.request
 from typing import Final, Optional
 
 from upstream.qwen.auth.http import get_qwen_proxy
-from upstream.qwen.chat.routes import CHAT_ORIGIN, USER_AGENT
+from upstream.qwen.chat.endpoints import CHAT_ORIGIN, USER_AGENT
 
 logger = logging.getLogger("rogator")
 

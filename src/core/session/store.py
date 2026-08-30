@@ -5,12 +5,16 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.persist.locks import (
+    _save_lock,
+    get_async_lock,
+    mark_migrated,
+)
 from core.persist.migrate import migrate_sessions_upstream
 from core.persist.paths import PROJECT_ROOT, sessions_path as upstream_sessions_path
 from core.session.accounts import Account
@@ -20,8 +24,6 @@ logger = logging.getLogger("rogator")
 
 CLEANUP_INTERVAL: float = 60.0
 MUTE_LOGIN_BLOCK_SECONDS: float = 86400.0
-_save_lock = threading.Lock()
-_migrated_upstreams: set[str] = set()
 
 
 @dataclass
@@ -123,11 +125,9 @@ def _empty_upstream_store() -> Dict[str, Any]:
 
 
 def _maybe_migrate_upstream_sessions(upstream: str) -> None:
-    key = upstream.strip().lower()
-    if key in _migrated_upstreams:
+    if not mark_migrated(upstream):
         return
-    _migrated_upstreams.add(key)
-    migrate_sessions_upstream(key, PROJECT_ROOT, archive_unified=False)
+    migrate_sessions_upstream(upstream.strip().lower(), PROJECT_ROOT, archive_unified=False)
 
 
 def _read_upstream_store(upstream: str) -> Dict[str, Any]:
@@ -229,16 +229,23 @@ async def save_upstream_sessions_async(
     blocked_accounts: Optional[Dict[str, float]] = None,
     muted_accounts: Optional[Dict[str, float]] = None,
 ) -> List[str]:
+    """落盘放到 ``to_thread``，由 ``asyncio.Lock`` 串行化"落盘意图"。
+
+    - 旧 ``save_upstream_sessions``（同步路径）继续可用，启动期和单元测试走它。
+    - 事件循环里调用本函数：序列化 + 落盘都在 worker 线程内，event loop
+      只承担一个 ``asyncio.Lock`` 的 ``acquire/release``（微秒级）。
+    """
     from core.transport.blocking import run_blocking
 
-    return await run_blocking(
-        _save_upstream_sessions_impl,
-        upstream,
-        sessions,
-        current_index=current_index,
-        blocked_accounts=blocked_accounts,
-        muted_accounts=muted_accounts,
-    )
+    async with get_async_lock():
+        return await run_blocking(
+            _save_upstream_sessions_impl,
+            upstream,
+            sessions,
+            current_index=current_index,
+            blocked_accounts=blocked_accounts,
+            muted_accounts=muted_accounts,
+        )
 
 
 def clean_expired(sessions: List[PlatformSession]) -> Tuple[List[PlatformSession], List[str]]:

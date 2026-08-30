@@ -68,6 +68,7 @@ def build_chat_payload(
     stop: Any = None,
     tool_choice: Any = None,
     thinking: bool = False,
+    reasoning_effort: Optional[str] = None,
 ) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "model": model,
@@ -88,11 +89,13 @@ def build_chat_payload(
             payload["tool_choice"] = tool_choice
     if thinking:
         payload["thinking"] = True
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     return payload
 
 
 def build_headers(*, stream: bool) -> Dict[str, str]:
-    from upstream.zen.routes import USER_AGENT
+    from upstream.zen.client import USER_AGENT
 
     return {
         "Content-Type": "application/json",
@@ -123,13 +126,20 @@ async def stream_openai_chat(
     del files, state, req_id, prompt_api
     model = normalize_model_name(model)
     final_messages = _prepare_stream(messages)
-    thinking = bool((protocol_options or {}).get("thinking", False))
+    opts = protocol_options or {}
+    thinking = bool(opts.get("thinking", False))
+    # thinking_level → reasoning_effort 透传到 zen 上游
+    thinking_level = opts.get("thinking_level")
+    reasoning_effort = thinking_level if thinking_level not in (None, "none") else None
+    if reasoning_effort and not thinking:
+        thinking = True
     payload = build_chat_payload(
         final_messages,
         model,
         stream=True,
         tools=normalize_tools(tools),
         thinking=thinking,
+        reasoning_effort=reasoning_effort,
     )
     async for event in client.stream_chat(payload):
         yield event

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from core.session.models_cache import ModelsCacheMixin
-from core.transport.conn_retry import run_with_connection_retry
-from core.transport.http import upstream_timeout
-from core.transport.owned import HttpTransportMixin
+from core.transport.http import HttpTransportMixin, run_with_connection_retry, upstream_timeout
 from server.formats import UpstreamUnavailableError
 from upstream.zen.chat_stream import extract_error_info, post_chat_stream
+from upstream.zen.models_sync import sync_zen_registry as _sync_zen_registry
 from upstream.zen.openai_chat import build_headers
 from upstream.zen.proxy import (
     NodeManager,
@@ -22,10 +22,10 @@ from upstream.zen.proxy import (
 )
 from upstream.zen.proxy import (
     load_dynamic_proxy_pool,
-    load_static_pool_from_config,
     merge_proxy_pools,
+    save_proxy_pool_file,
 )
-from upstream.zen.routes import (
+from upstream.zen import (
     AUTO_REFRESH_MODELS,
     BASE_URL,
     DEFAULT_MODELS,
@@ -65,12 +65,14 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
         self._init_http_transport()
         self._init_models_cache(list(DEFAULT_MODELS))
         raw = _load_zen_toml()
-        pool, pool_file, state_file = build_proxy_pool_from_toml(raw)
+        pool, pool_file, state_file, top_n, static_pool = build_proxy_pool_from_toml(raw)
         self.node_manager = NodeManager(pool, state_file)
         # 后台刷新所需状态
         section = raw.get("proxy") if isinstance(raw.get("proxy"), dict) else {}
         self._pool_file: str = pool_file
-        self._static_pool = load_static_pool_from_config(section.get("static"))
+        # _static_pool 已包含 env + toml static；保存动态池前用它剔除静态项
+        self._static_pool: List[Optional[str]] = static_pool
+        self._dynamic_top_n: int = top_n
         interval_raw = section.get("refresh_interval_seconds")
         try:
             self._refresh_interval: float = float(interval_raw) if interval_raw is not None else PROXY_REFRESH_INTERVAL
@@ -98,22 +100,47 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
 
     async def _proxy_refresh_loop(self) -> None:
         """后台定时重载动态代理池；异常仅记录日志，不影响服务。"""
-        logger.debug(
-            "zen proxy refresh loop started: interval=%.0fs file=%s",
-            self._refresh_interval, self._pool_file,
+        # 启动时判断池是否为空：文件不存在或加载为空 → empty=True
+        # 文件不存在要明确判定为空，避免日志误导
+        pool_empty = (
+            not os.path.exists(self._pool_file)
+            or not load_dynamic_proxy_pool(self._pool_file)
         )
+        logger.debug(
+            "zen proxy refresh loop started: interval=%.0fs file=%s empty=%s",
+            self._refresh_interval, self._pool_file, pool_empty,
+        )
+        # 启动时池为空 → 跳过首次 sleep 立即刷新一次；非空 → 先等一个间隔
+        first_run = pool_empty
         while True:
-            try:
-                await asyncio.sleep(self._refresh_interval)
-            except asyncio.CancelledError:
-                return
+            if not first_run:
+                try:
+                    await asyncio.sleep(self._refresh_interval)
+                except asyncio.CancelledError:
+                    return
+            first_run = False
             try:
                 dynamic = load_dynamic_proxy_pool(self._pool_file)
-                merged = merge_proxy_pools(self._static_pool, dynamic)
+                merged = merge_proxy_pools(self._static_pool, dynamic, top_n=self._dynamic_top_n)
                 await self.node_manager.reload_pool(merged)
+                # 仅持久化动态池节点：剔除静态代理（env + toml）与 None，
+                # 避免 proxy_pool.json 被静态配置污染
+                static_set = {p for p in self._static_pool if p is not None}
+                dynamic_only = [
+                    p for p in merged if p is not None and p not in static_set
+                ]
+                if dynamic_only:
+                    save_proxy_pool_file(self._pool_file, dynamic_only)
+                elif os.path.exists(self._pool_file):
+                    # 本轮 dynamic 为空：保留历史落盘，避免下一轮 startup 误判为
+                    # "池为空需立即刷新"（参见 _proxy_refresh_loop 的 first_run 判定）。
+                    logger.debug(
+                        "zen proxy pool empty this round, keep existing %s",
+                        self._pool_file,
+                    )
                 logger.debug(
-                    "zen proxy pool refreshed: dynamic=%d merged=%d",
-                    len(dynamic), len(merged),
+                    "zen proxy pool refreshed: dynamic=%d merged=%d persisted=%d",
+                    len(dynamic), len(merged), len(dynamic_only),
                 )
             except asyncio.CancelledError:
                 return
@@ -158,8 +185,7 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
         self._models_fetch_time = time.time()
         # 同步新模型到注册表和 kimi-code config.toml
         try:
-            from upstream.zen.models.registry_sync import sync_zen_registry
-            sync_zen_registry(self._models)
+            _sync_zen_registry(self._models)
         except Exception as exc:
             logger.debug("zen registry sync skipped: %s", exc)
         return list(self._models)
@@ -245,28 +271,65 @@ class ZenClient(HttpTransportMixin, ModelsCacheMixin):
             except ZenValidationError:
                 raise
             except UpstreamUnavailableError as exc:
-                reason = "429 rate limited" if "429" in str(exc) else "upstream unavailable"
-                await self._mute_and_switch(desc, reason=reason)
+                if await self._on_upstream_unavailable(
+                    desc, exc, is_rate_limit=("429" in str(exc)),
+                ):
+                    raise
                 last_error = exc
                 continue
             except (asyncio.CancelledError, GeneratorExit):
                 raise
             except Exception as exc:
+                if not await self._on_general_stream_error(desc, exc):
+                    raise
                 last_error = exc
-                if isinstance(exc, ZenProxyError) or is_proxy_error(exc):
-                    await self._mute_and_switch(desc, reason="proxy error")
-                    continue
-                logger.debug(
-                    "zen attempt %d/%d via %s failed: %s",
-                    attempt + 1, 1 + RETRY_COUNT, desc, exc,
-                )
-                await self.reset_http_transport()
-        await self.node_manager.switch_next()
-        if last_error is not None and "429" in str(last_error):
+                continue
+        raise self._build_final_stream_error(last_error)
+
+    async def _on_upstream_unavailable(
+        self,
+        desc: str,
+        exc: UpstreamUnavailableError,
+        *,
+        is_rate_limit: bool,
+    ) -> bool:
+        """UpstreamUnavailable 路径：mute 当前节点 + 切下一个；若全 mute 抛出 429。
+
+        返回 ``True`` 表示应终止循环（已抛 429）；``False`` 表示继续重试。
+        """
+        reason = "429 rate limited" if is_rate_limit else "upstream unavailable"
+        await self._mute_and_switch(desc, reason=reason)
+        if self.node_manager.all_nodes_muted():
             raise UpstreamUnavailableError(
                 "HTTP 429 - Rate limit exceeded", upstream="zen",
+            ) from exc
+        return False
+
+    async def _on_general_stream_error(
+        self,
+        desc: str,
+        exc: BaseException,
+    ) -> bool:
+        """普通异常：代理错误走 mute+switch；其余仅 reset transport。返回 ``True`` 继续重试。"""
+        if isinstance(exc, ZenProxyError) or is_proxy_error(exc):
+            await self._mute_and_switch(desc, reason="proxy error")
+            if self.node_manager.all_nodes_muted():
+                raise UpstreamUnavailableError(
+                    "HTTP 429 - All upstream nodes rate limited", upstream="zen",
+                ) from exc
+            return True
+        logger.debug(
+            "zen attempt via %s failed: %s", desc, exc,
+        )
+        await self.reset_http_transport()
+        return True
+
+    def _build_final_stream_error(self, last_error: Optional[Exception]) -> Exception:
+        if last_error is not None and "429" in str(last_error):
+            return UpstreamUnavailableError(
+                "HTTP 429 - Rate limit exceeded", upstream="zen",
             )
-        raise UpstreamUnavailableError(
+        return UpstreamUnavailableError(
             "zen request failed: all retries exhausted", upstream="zen",
         )
 

@@ -13,7 +13,7 @@ from upstream.qwen.chat.store import (
     describe_sessions,
     mark_invalid as mark_invalid_in,
 )
-from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH, DEFAULT_MODELS
+from upstream.qwen.chat.endpoints import BASE_URL, CHAT_PATH, DEFAULT_MODELS
 from upstream.qwen.account import ModelsFetchMixin, QwenLoginMixin
 from upstream.qwen.chat.chat import (
     create_chat_for_session,
@@ -24,13 +24,13 @@ from upstream.qwen.completion_stream import chat_completion_stream
 from upstream.qwen.media.asr import AsrTranscriber, aprepare_pcm16_16k_mono
 from upstream.qwen.media.tts import TtsService
 from upstream.qwen.media.video import VideoService
-from upstream.qwen.chat.upload.files import UploadMixin
+from upstream.qwen.chat.upload.files_upload import UploadMixin
 from upstream.qwen.auth.http import (
     merge_session_cookies,
     run_with_connection_retry,
     sync_cookie_store,
 )
-from core.transport.owned import HttpTransportMixin
+from core.transport.http import HttpTransportMixin
 from server.formats import (
     build_chat_payload,
     build_qwen_message,
@@ -185,7 +185,7 @@ class QwenClient(HttpTransportMixin, UploadMixin, QwenLoginMixin, ModelsFetchMix
         model: str = "qwen3-max",
         save_dir: Optional[str] = None,
     ) -> Optional[str]:
-        from upstream.qwen.chat.routes import TTS_DIR
+        from upstream.qwen.chat.endpoints import TTS_DIR
 
         async def _run() -> Optional[str]:
             s = await self._ensure_http_session()

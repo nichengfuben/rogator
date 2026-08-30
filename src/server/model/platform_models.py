@@ -21,7 +21,7 @@ def is_transcription_model(internal_id: str) -> bool:
 
 
 def qwen_asr_model_meta() -> ModelMeta:
-    from upstream.qwen.chat.routes import ASR_MAX_DURATION_SEC, ASR_SAMPLE_RATE
+    from upstream.qwen.chat.endpoints import ASR_MAX_DURATION_SEC, ASR_SAMPLE_RATE
 
     # 上下文长度按最大可转写 PCM 字节估算（对外仅作能力参考）
     max_pcm_bytes = ASR_SAMPLE_RATE * 2 * ASR_MAX_DURATION_SEC

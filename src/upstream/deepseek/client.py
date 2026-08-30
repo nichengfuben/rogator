@@ -9,8 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from core.transport.conn_retry import run_with_connection_retry
-from core.transport.owned import HttpTransportMixin
+from core.transport.http import HttpTransportMixin, run_with_connection_retry
 from core.session.accounts import Account, accounts_for_upstream
 from core.session.models_cache import ModelsCacheMixin
 from core.session.pool import SessionLoginMixin

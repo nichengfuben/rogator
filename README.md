@@ -54,9 +54,12 @@ pip install -r requirements-dev.txt
 | 包 | 用途 |
 |----|------|
 | `aiohttp>=3.9.0` | HTTP 服务端与上游请求 |
+| `aiohttp-socks>=0.10` | SOCKS 代理（启动期硬依赖：缺包即抛 `ImportError`） |
 | `echotools>=2.4.5,!=2.4.2` | entml 工具调用、tool id（`gen_tool_id` / `fix_tool_call_id`）、日志、thinking |
 | `typing-extensions>=4.7.0` | Python 3.8–3.10 类型兼容 |
 | `tomli>=2.0.0` | Python 3.8–3.10 解析 `config.toml`（3.11+ 使用 stdlib `tomllib`） |
+
+> Python<3.11 需手动安装 `tomli>=2.0.0`；3.11+ 已自带 `tomllib`，pip 不会自动引入。
 
 ### 3. 配置（可选）
 

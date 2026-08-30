@@ -22,7 +22,7 @@ if __package__ in {None, ""}:
     import path_setup  # noqa: F401
 
 from upstream.qwen.auth.crypto import build_headers, build_login_headers, hash_password
-from upstream.qwen.chat.routes import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
+from upstream.qwen.chat.endpoints import AUTH_BASE_URL, BASE_URL, CHAT_PATH, NEW_CHAT_PATH
 from upstream.qwen.chat.sse import parse_sse_event
 
 

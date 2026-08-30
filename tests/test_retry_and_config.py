@@ -722,7 +722,7 @@ class TestSessionRetry(unittest.TestCase):
 
     def test_stream_with_session_retry_early_break_closes_inner(self) -> None:
         import asyncio
-        from core.transport.compat import aclosing
+        from core.transport.http import aclosing
 
         state = MagicMock()
         closed = {"n": 0}

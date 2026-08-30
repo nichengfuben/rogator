@@ -33,7 +33,7 @@ from upstream.qwen.auth.crypto import (
     hash_password,
 )
 from upstream.qwen.auth.baxia_runtime import get_baxia_tokens, reset_baxia_runtime
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     APP_VERSION,
     BASE_URL,
     CHAT_ORIGIN,
@@ -44,7 +44,7 @@ from upstream.qwen.chat.routes import (
     USER_AGENT,
 )
 from upstream.qwen.chat.sse import parse_sse_event
-from upstream.qwen.chat.upload.payload import build_new_chat_payload
+from upstream.qwen.chat.upload import build_new_chat_payload
 
 EXT_ACCOUNTS_TOML = Path(
     os.environ.get(

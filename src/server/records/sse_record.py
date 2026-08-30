@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+import threading
+import time
 from pathlib import Path
 from typing import BinaryIO, Iterator, Optional
 
@@ -22,6 +24,10 @@ __all__ = [
 logger = get_logger("rogator")
 
 _SSE_SUBDIR = "sse"
+# 落盘批量大小：累积到这个字节数或 ``_FLUSH_INTERVAL_SECONDS`` 秒就 flush，
+# 避免每 chunk 都触发 fsync-class 系统调用。
+_SSE_FLUSH_BYTES: int = 64 * 1024
+_SSE_FLUSH_INTERVAL: float = 0.25
 _active_recorder: ContextVar[Optional["SseStreamRecorder"]] = ContextVar(
     "rogator_sse_recorder",
     default=None,
@@ -33,9 +39,12 @@ def sse_dump_dir() -> Path:
 
 
 class SseStreamRecorder:
-    """按 TCP chunk 追加写入 logs/sse/{req_id}.sse。"""
+    """按 TCP chunk 追加写入 logs/sse/{req_id}.sse；按大小/时间批量 flush。"""
 
-    __slots__ = ("req_id", "_path", "_handle", "_bytes", "_enabled")
+    __slots__ = (
+        "req_id", "_path", "_handle", "_bytes", "_enabled",
+        "_buffer", "_buffer_bytes", "_last_flush",
+    )
 
     def __init__(self, req_id: str) -> None:
         self.req_id = req_id
@@ -43,6 +52,9 @@ class SseStreamRecorder:
         self._handle: Optional[BinaryIO] = None
         self._bytes = 0
         self._enabled = bool(CONFIG.record_sse)
+        self._buffer: bytearray = bytearray()
+        self._buffer_bytes = 0
+        self._last_flush = 0.0
 
     def write(self, data: bytes) -> None:
         if not self._enabled or not data:
@@ -50,22 +62,43 @@ class SseStreamRecorder:
         if self._handle is None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._handle = self._path.open("ab")
+            self._last_flush = time.monotonic()
             logger.debug("SSE 落盘开始 req_id=%s path=%s", self.req_id, self._path)
-        self._handle.write(data)
+        self._buffer.extend(data)
+        self._buffer_bytes += len(data)
+        if self._buffer_bytes >= _SSE_FLUSH_BYTES:
+            self._flush_now()
+
+    def _flush_now(self) -> None:
+        if self._handle is None or self._buffer_bytes == 0:
+            return
+        self._handle.write(bytes(self._buffer))
+        self._buffer.clear()
+        self._buffer_bytes = 0
         self._handle.flush()
-        self._bytes += len(data)
+        self._last_flush = time.monotonic()
+
+    def maybe_flush(self, *, force: bool = False) -> None:
+        """外部 tick 调用：超时间窗或 force=True 时冲刷缓冲。"""
+        if not self._enabled or self._handle is None or self._buffer_bytes == 0:
+            return
+        if force or (time.monotonic() - self._last_flush) >= _SSE_FLUSH_INTERVAL:
+            self._flush_now()
 
     def close(self) -> None:
         if not self._enabled or self._handle is None:
             return
-        self._handle.close()
-        self._handle = None
-        logger.info(
-            "record sse req_id=%s bytes=%d path=%s",
-            self.req_id,
-            self._bytes,
-            self._path,
-        )
+        try:
+            self._flush_now()
+        finally:
+            self._handle.close()
+            self._handle = None
+            logger.info(
+                "record sse req_id=%s bytes=%d path=%s",
+                self.req_id,
+                self._bytes,
+                self._path,
+            )
 
 
 def append_sse_bytes(data: bytes) -> None:
@@ -93,6 +126,10 @@ def record_sse_stream(req_id: str) -> Iterator[None]:
         return
     recorder = SseStreamRecorder(req_id)
     token = _active_recorder.set(recorder)
+    flusher = threading.Thread(
+        target=_periodic_flush, args=(recorder,), daemon=True,
+    )
+    flusher.start()
     try:
         yield
     finally:
@@ -102,3 +139,13 @@ def record_sse_stream(req_id: str) -> Iterator[None]:
             # async generator aclose 可能在不同 Context 触发；仅清理 recorder
             _active_recorder.set(None)
         recorder.close()
+
+
+def _periodic_flush(recorder: SseStreamRecorder) -> None:
+    while recorder._handle is not None and recorder._enabled:
+        time.sleep(_SSE_FLUSH_INTERVAL)
+        try:
+            recorder.maybe_flush()
+        except Exception as exc:
+            logger.debug("sse periodic flush failed: %s", exc)
+            return

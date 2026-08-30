@@ -19,7 +19,7 @@ from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from server.formats import UpstreamStsError
 from server.model.model_thinking import ThinkingRoute
 from upstream.qwen.auth.http import get_qwen_proxy
-from upstream.qwen.chat.routes import USER_AGENT
+from upstream.qwen.chat.endpoints import USER_AGENT
 
 if TYPE_CHECKING:
     from upstream.qwen.client import QwenClient
@@ -221,7 +221,7 @@ async def upload_to_oss(
             return file_url
         except Exception as exc:
             last_error = exc
-            logger.warning("OSS %s (via %s) failed: %s", header_host, connect_host, exc)
+            logger.debug("OSS %s (via %s) failed: %s", header_host, connect_host, exc)
             continue
     raise RuntimeError(f"all OSS hosts failed: {last_error}")
 
@@ -319,12 +319,11 @@ async def _upload_text_attachment(
 ) -> List[Any]:
     if not filename or not file_bytes:
         return []
-    try:
-        _, file_obj = await client.upload_file(session, file_bytes, filename)
-        return [file_obj]
-    except Exception as e:
-        logger.warning("Upload failed: %s, sending truncated text without attachment", e)
-        return []
+    # 上传失败时不得静默降级为"截断文本无附件"：长 prompt 的剩余部分会缺失，
+    # 模型基于不完整上下文作答等同于返回错误结果。721/423 等限流错误应
+    # 以 HTTP 429 直接告知请求者（由上层 classify 映射），而非继续请求。
+    _, file_obj = await client.upload_file(session, file_bytes, filename)
+    return [file_obj]
 
 
 async def _collect_uploaded_files(
@@ -373,6 +372,11 @@ async def prepare_stream(
     final_messages, send_text, filename, file_bytes = apply_prompt_budget(
         state, injected, full_content, use_file_split=True, model=model,
     )
+    # 截断后补回 entml 工具调用指令：截断取尾部，会把 prompt 最前面的指令文本截掉
+    if route.use_entml and tools and send_text != full_content:
+        from handlers.chat_request import ENTML_TOOL_INSTRUCTION
+        send_text = ENTML_TOOL_INSTRUCTION + send_text
+        final_messages[0]["content"] = send_text
     files = await _collect_uploaded_files(
         client, session, messages, image_uris, media_urls, filename, file_bytes, send_text,
     )

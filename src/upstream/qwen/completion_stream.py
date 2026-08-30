@@ -15,7 +15,7 @@ from upstream.qwen.chat.chat import (
     abort_upstream_on_cancel,
     handle_chat_error,
 )
-from upstream.qwen.chat.routes import BASE_URL, CHAT_PATH
+from upstream.qwen.chat.endpoints import BASE_URL, CHAT_PATH
 from upstream.qwen.chat.upload.oss import prepare_stream
 from upstream.qwen.chat.upload.upstream_api import (
     reconnect_sse_events_with_retry,
@@ -29,6 +29,8 @@ from server.formats import (
     UpstreamChatNotFoundError,
     UpstreamTimeoutError,
     UpstreamWafBlockedError,
+    attach_proxy_toggle,
+    read_proxy_used_enabled,
 )
 from server.model.model_thinking import ThinkingRoute
 from upstream.qwen.chat.sse import iter_sse_events
@@ -107,7 +109,7 @@ async def _stream_one_chat_post(
             try:
                 await handle_chat_error(client, resp, session)
             except (BaxiaSmBlockedError, UpstreamWafBlockedError) as exc:
-                exc._proxy_used_enabled = used_enabled  # type: ignore[attr-defined]
+                attach_proxy_toggle(exc, used_enabled)
                 raise
         async for event in _iter_qwen_sse_or_reconnect(
             client, session, chat_id, resp, response_id_box, cookies=cookies,
@@ -243,9 +245,7 @@ async def chat_completion_stream(
         baxia_sm_retry = True
         if req_id:
             from upstream.qwen.media.proxy_toggle import get_proxy_toggle
-            used_enabled = getattr(exc, "_proxy_used_enabled", None)
-            if used_enabled is None:
-                used_enabled = getattr(client, "_last_used_proxy_enabled", get_proxy_toggle().enabled)
+            used_enabled = read_proxy_used_enabled(exc, client)
             await get_proxy_toggle().on_sm_block(req_id, used_enabled)
         raise
     except (asyncio.CancelledError, GeneratorExit):
@@ -386,9 +386,7 @@ async def stream_openai_chat(
         logger.info("proxy toggle: caught block error type=%s, triggering proxy toggle", type(exc).__name__)
         if req_id:
             from upstream.qwen.media.proxy_toggle import get_proxy_toggle
-            used_enabled = getattr(exc, "_proxy_used_enabled", None)
-            if used_enabled is None:
-                used_enabled = getattr(client, "_last_used_proxy_enabled", get_proxy_toggle().enabled)
+            used_enabled = read_proxy_used_enabled(exc, client)
             await get_proxy_toggle().on_sm_block(req_id, used_enabled)
         raise
     finally:

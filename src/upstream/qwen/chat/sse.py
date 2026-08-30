@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-"""SSE 流错误检测与 live 事件迭代。"""
+"""SSE 流错误检测、live 事件迭代与字节行缓冲。
+
+将原 ``sse_buffer.py`` 合并进本文件，减少 ``src/upstream/qwen/chat`` 子项数；
+``ByteLineBuffer`` 仅在本模块内部使用，外部测试改从 ``upstream.qwen.chat.sse``
+导入同名对象。
+"""
 
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Iterator, List, Optional
 
 import aiohttp
 
@@ -32,6 +37,64 @@ _BAXIA_SM_MARKERS: frozenset[str] = frozenset(
 _UPSTREAM_RATE_LIMIT_CODES: frozenset[str] = frozenset(
     {"RateLimited", "ParallelLimited", "quotaLimited", "Too_Many_Requests", "quota_limit"}
 )
+
+
+class ByteLineBuffer:
+    """TCP chunk 流切出独立行；用 bytearray 避免 s += chunk 的 O(n^2) 行为。"""
+
+    __slots__ = ("_buf", "_chunk_hits", "_max_pending")
+
+    def __init__(self, *, max_pending: int = 1 << 20) -> None:
+        # 1 MiB 上限：防止上游误发不带换行的巨大单行让缓冲区膨胀；
+        # 超过即抛 ``BufferError``，让上层走错误路径。
+        self._buf = bytearray()
+        self._chunk_hits = 0
+        self._max_pending = max_pending
+
+    def feed(self, chunk: bytes) -> List[bytes]:
+        if not chunk:
+            return []
+        self._chunk_hits += 1
+        self._buf.extend(chunk)
+        if len(self._buf) > self._max_pending:
+            raise BufferError(
+                f"SSE 行缓冲超过 {self._max_pending} 字节，无换行"
+            )
+        nl = self._buf.find(b"\n")
+        if nl < 0:
+            return []
+        lines: List[bytes] = []
+        while nl >= 0:
+            line = bytes(self._buf[:nl])
+            del self._buf[: nl + 1]
+            lines.append(line)
+            nl = self._buf.find(b"\n")
+        return lines
+
+    def flush(self) -> bytes:
+        if not self._buf:
+            return b""
+        tail = bytes(self._buf)
+        self._buf.clear()
+        return tail
+
+    def pending(self) -> int:
+        return len(self._buf)
+
+    @property
+    def chunk_hits(self) -> int:
+        return self._chunk_hits
+
+
+def iter_byte_lines(chunks: Iterator[bytes]) -> Iterator[bytes]:
+    """对迭代器产出的 bytes 块，按 ``\\n`` 切出整行；最后一段无换行的尾部单独 yield。"""
+    buf = ByteLineBuffer()
+    for chunk in chunks:
+        for line in buf.feed(chunk):
+            yield line
+    tail = buf.flush()
+    if tail:
+        yield tail
 
 
 def _is_baxia_sm_block(message: str, *, punish_url: str = "") -> bool:
@@ -198,24 +261,23 @@ async def iter_sse_events(
     response_id_out: Optional[list] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """逐行解析 SSE；对齐前端 kT/_T 组帧 + TCP chunk 行缓冲。"""
-    pending = ""
+    buf = ByteLineBuffer()
     assembler = SseEventAssembler()
     try:
         async for raw in resp.content:
             await append_sse_bytes_async(raw)
-            pending += raw.decode("utf-8", errors="replace")
-            while "\n" in pending:
-                line, pending = pending.split("\n", 1)
-                line = line.rstrip("\r")
+            for raw_line in buf.feed(raw):
+                line = raw_line.rstrip(b"\r").decode("utf-8", errors="replace")
                 event = _dispatch_assembled_sse_line(
                     client, session, line, assembler, response_id_out,
                 )
                 if event:
                     yield event
-        tail = pending.rstrip("\r")
+        tail = buf.flush()
         if tail:
+            line = tail.rstrip(b"\r").decode("utf-8", errors="replace")
             event = _dispatch_assembled_sse_line(
-                client, session, tail, assembler, response_id_out,
+                client, session, line, assembler, response_id_out,
             )
             if event:
                 yield event

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-"""HTTP endpoints, constants, and settings for the Qwen upstream.
+"""Qwen upstream endpoints, persistence paths, and capability tables.
 
-Merged from: endpoints.py, constants.py, settings.py
+合并自原 routes.py / endpoints.py / settings.py / constants.py。
+将常量从 ``chat.py`` 拆出，避免 ``chat.py`` 与 ``auth/crypto.py`` 之间的循环 import。
 """
 
 from typing import Any, Dict, Final, List
+
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -36,7 +38,9 @@ SEC_CH_UA: Final[str] = (
 )
 SEC_CH_UA_PLATFORM: Final[str] = '"Windows"'
 FRONTEND_VERSION: Final[str] = WEB_VERSION
-CUSTOM_BASE64_CHARS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+CUSTOM_BASE64_CHARS: Final[str] = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+)
 
 SIGNIN_PATH: Final[str] = f"{AUTH_API_PREFIX}/auths/signin"
 AUTH_CHECK_PATH: Final[str] = f"{AUTH_API_PREFIX}/user"
@@ -99,9 +103,8 @@ TTS_TIMEOUT: Final[int] = 300
 VIDEO_TASK_MAX_POLL_TIME: Final[int] = 900
 VIDEO_TASK_POLL_INTERVAL: Final[int] = 5
 
-
 # ---------------------------------------------------------------------------
-# Models & persistence (自 server/formats/constants.py 迁入)
+# Models & persistence
 # ---------------------------------------------------------------------------
 
 UPSTREAM_NAME: Final[str] = "qwen"
@@ -155,10 +158,6 @@ DEFAULT_MODEL_CAPABILITIES: Final[Dict[str, bool]] = {
 PERSISTED_MODEL_CAPABILITIES: Final[Dict[str, bool]] = dict(DEFAULT_MODEL_CAPABILITIES)
 DEFAULT_MODEL_MODALITY: Final[List[str]] = ["text", "image", "video", "audio"]
 
-# ---------------------------------------------------------------------------
-# Constants (legacy model list)
-# ---------------------------------------------------------------------------
-
 MODELS: Final[List[str]] = list(DEFAULT_MODELS)
 
 CAPS: Final[Dict[str, bool]] = {
@@ -175,11 +174,6 @@ CAPS: Final[Dict[str, bool]] = {
 }
 
 SMART_PROXY_ENABLED: Final[bool] = True
-
-
-# ---------------------------------------------------------------------------
-# Settings (from settings.py)
-# ---------------------------------------------------------------------------
 
 DEFAULT_FULL_SETTINGS: Final[Dict[str, Any]] = {
     "ui": {
@@ -257,57 +251,93 @@ DEFAULT_FULL_SETTINGS: Final[Dict[str, Any]] = {
 
 
 __all__ = [
-    "BASE_URL",
+    "APP_VERSION",
     "APLUS_BASE_URL",
-    "USER_AGENT",
-    "USER_AGENT_MOBILE",
-    "SEC_CH_UA",
-    "FRONTEND_VERSION",
+    "ASR_AUDIO_CHUNK_BYTES",
+    "ASR_MAX_DURATION_SEC",
+    "ASR_SAMPLE_RATE",
+    "ASR_WS_PATH",
+    "ASR_WS_TIMEOUT",
+    "AUTH_API_PREFIX",
+    "AUTH_BASE_URL",
+    "AUTH_CHECK_PATH",
+    "AUTHS_V1_PATH",
     "BAXIA_SDK_VERSION",
+    "BAXIA_VERSION",
+    "BASE_URL",
     "BXUA_VERSION",
-    "CUSTOM_BASE64_CHARS",
-    "USERS_STATUS_PATH",
-    "SETTING_CONFIG_PATH",
-    "MODELS",
     "CAPS",
+    "CHAT_API_PREFIX",
+    "CHAT_ORIGIN",
+    "CHAT_PATH",
+    "CONFIGS_PATH",
+    "COOKIE_REFRESH_INTERVAL",
+    "CUSTOM_BASE64_CHARS",
     "DATA_DIR",
+    "DEFAULT_FULL_SETTINGS",
     "DEFAULT_MODEL",
-    "DEFAULT_MODELS",
     "DEFAULT_MODEL_CAPABILITIES",
     "DEFAULT_MODEL_CONTEXT_LENGTH",
     "DEFAULT_MODEL_MODALITY",
-    "MODEL_META_CAPABILITIES",
-    "MODELS_CACHE_FILE",
-    "PERSISTED_MODEL_CAPABILITIES",
-    "TOKEN_EXPIRE_HOURS",
-    "TOKEN_EXPIRE_SECONDS",
-    "UPSTREAM_NAME",
-    "models_cache_path",
-    "SMART_PROXY_ENABLED",
-    "MODELS_PERSIST_PATH",
-    "PERSIST_PATH",
-    "TASK_TIMERS_PATH",
-    "PROXY_SELECTOR_PERSIST_PATH",
+    "DEFAULT_MODELS",
+    "DELETE_CHAT_PATH",
+    "FILE_PARSE_POLL_INTERVAL",
+    "FILE_PARSE_TIMEOUT",
+    "FRONTEND_VERSION",
     "GENERATED_IMAGE_DIR",
     "GENERATED_VIDEO_DIR",
-    "TTS_DIR",
-    "UPLOAD_TEMP_DIR",
+    "INITIAL_LOGIN_MAX",
     "LOGIN_BATCH",
     "LOGIN_BATCH_SIZE",
     "LOGIN_CONCURRENCY",
-    "LOGIN_POOL_SIZE",
-    "LOGIN_SELECT_MIN",
-    "LOGIN_SELECT_MAX",
-    "INITIAL_LOGIN_MAX",
     "LOGIN_POLL_INTERVAL",
+    "LOGIN_POOL_SIZE",
+    "LOGIN_SELECT_MAX",
+    "LOGIN_SELECT_MIN",
+    "MODELS",
+    "MODEL_META_CAPABILITIES",
+    "MODELS_CACHE_FILE",
+    "MODELS_PATH",
+    "MODELS_PERSIST_PATH",
+    "NEW_CHAT_PATH",
+    "PARSE_FILE_PATH",
+    "PARSE_STATUS_PATH",
+    "PARSE_URL_PATH",
+    "PERSIST_INTERVAL",
+    "PERSIST_PATH",
+    "PERSISTED_MODEL_CAPABILITIES",
+    "PROXY_SELECTOR_PERSIST_PATH",
+    "SEC_CH_UA",
+    "SEC_CH_UA_PLATFORM",
+    "SETTINGS_PATH",
+    "SETTINGS_UPDATE_PATH",
+    "SETTING_CONFIG_PATH",
+    "SIGNIN_PATH",
+    "SMART_PROXY_ENABLED",
+    "SSE_RECONNECT_MAX",
+    "SSE_TIMEOUT",
+    "STOP_CHAT_PATH",
+    "STS_TOKEN_PATH",
+    "STS_TOKEN_PATHS",
+    "SUGGESTIONS_PATH",
+    "TASK_STATUS_PATH",
+    "TASK_TIMERS_PATH",
+    "TOKEN_EXPIRE_HOURS",
+    "TOKEN_EXPIRE_SECONDS",
     "TOKEN_EXPIRY_MARGIN",
     "TOKEN_REFRESH_INTERVAL",
-    "COOKIE_REFRESH_INTERVAL",
-    "PERSIST_INTERVAL",
-    "SSE_TIMEOUT",
+    "TTS_DIR",
+    "TTS_PATH",
     "TTS_TIMEOUT",
+    "UPSTREAM_NAME",
+    "UPLOAD_TEMP_DIR",
+    "USER_AGENT",
+    "USER_AGENT_MOBILE",
+    "USERS_STATUS_PATH",
+    "USE_LOCAL_MODE",
     "VIDEO_CDN_BASE",
     "VIDEO_TASK_MAX_POLL_TIME",
     "VIDEO_TASK_POLL_INTERVAL",
-    "DEFAULT_FULL_SETTINGS",
+    "WEB_VERSION",
+    "models_cache_path",
 ]

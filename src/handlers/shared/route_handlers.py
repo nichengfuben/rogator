@@ -12,7 +12,7 @@ def load_route_handlers() -> Dict[str, Callable[..., Any]]:
         anthropic_audio_transcriptions_handler,
         audio_transcriptions_handler,
     )
-    from handlers.realtime import anthropic_realtime_ws_handler, oai_realtime_ws_handler
+    from handlers.realtime import anthropic_realtime_ws_handler, openai_realtime_ws_handler
     from handlers.platform_handlers import (
         admin_refresh_models_handler,
         admin_sessions_handler,
@@ -42,7 +42,7 @@ def load_route_handlers() -> Dict[str, Callable[..., Any]]:
         "audio_speech": audio_speech_handler,
         "audio_transcriptions": audio_transcriptions_handler,
         "anthropic_audio_transcriptions": anthropic_audio_transcriptions_handler,
-        "oai_realtime": oai_realtime_ws_handler,
+        "oai_realtime": openai_realtime_ws_handler,
         "anthropic_realtime": anthropic_realtime_ws_handler,
         "admin_refresh_models": admin_refresh_models_handler,
         "admin_switch_session": admin_switch_session_handler,

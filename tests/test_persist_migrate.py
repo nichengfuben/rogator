@@ -211,9 +211,12 @@ class TestPerUpstreamSessionsIO(unittest.TestCase):
             def _sessions_file(upstream: str) -> Path:
                 return qwen_file if upstream == "qwen" else ds_file
 
-            old_migrated = set(store._migrated_upstreams)
+            old_migrated = set()
             try:
-                store._migrated_upstreams.clear()
+                import core.persist.locks as _locks
+
+                old_migrated = set(_locks._migrated_upstreams)
+                _locks._migrated_upstreams.clear()
                 with patch.object(store, "sessions_file", side_effect=_sessions_file):
                     qwen_sess = PlatformSession(
                         account=Account(username="q@test.com", password="pw"),
@@ -228,8 +231,8 @@ class TestPerUpstreamSessionsIO(unittest.TestCase):
                 self.assertEqual(qwen_loaded[0].username, "q@test.com")
                 self.assertEqual(len(ds_loaded), 0)
             finally:
-                store._migrated_upstreams.clear()
-                store._migrated_upstreams.update(old_migrated)
+                _locks._migrated_upstreams.clear()
+                _locks._migrated_upstreams.update(old_migrated)
 
 
 class TestLoginHistoryMigrationIntegration(unittest.TestCase):
@@ -257,17 +260,18 @@ class TestLoginHistoryMigrationIntegration(unittest.TestCase):
             )
 
             old_root = lh_mod.PROJECT_ROOT
-            old_migrated = set(lh_mod._migrated_upstreams)
+            import core.persist.locks as _locks
+            old_migrated = set(_locks._migrated_upstreams)
             try:
                 lh_mod.PROJECT_ROOT = root
-                lh_mod._migrated_upstreams.clear()
+                _locks._migrated_upstreams.clear()
                 store = LoginHistoryStore("qwen")
                 self.assertEqual(store.last_login_unix("a@test.com"), 100.0)
                 self.assertTrue(qwen_path.is_file())
             finally:
                 lh_mod.PROJECT_ROOT = old_root
-                lh_mod._migrated_upstreams.clear()
-                lh_mod._migrated_upstreams.update(old_migrated)
+                _locks._migrated_upstreams.clear()
+                _locks._migrated_upstreams.update(old_migrated)
 
 
 if __name__ == "__main__":

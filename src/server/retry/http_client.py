@@ -55,15 +55,10 @@ def _redact_proxy(url: str) -> str:
 
 
 def _socks_connector(proxy_url: str) -> Optional[aiohttp.BaseConnector]:
+    from core.transport.socks import socks_connector
+
     try:
-        from aiohttp_socks import ProxyConnector
-    except ImportError:
-        logger.warning(
-            "SOCKS 代理已配置但缺少 aiohttp-socks，请执行: pip install aiohttp-socks"
-        )
-        return None
-    try:
-        return ProxyConnector.from_url(proxy_url)
+        return socks_connector(proxy_url)
     except Exception as exc:
         logger.warning("SOCKS 代理连接器创建失败: %s", exc)
         return None

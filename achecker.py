@@ -64,6 +64,7 @@ EXEMPT_SHALLOW_REL_PATHS: Tuple[Tuple[str, ...], ...] = (
     ("provider-docs",),
     ("provider-plugin",),
     ("provider-core",),
+    ("~",),
 )
 
 # 运行时目录/文件（自动忽略）

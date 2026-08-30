@@ -16,7 +16,7 @@ from server.formats import (
 )
 from upstream.zen.openai_chat import build_headers
 from upstream.zen.proxy import ZenProxyError, is_proxy_error
-from upstream.zen.routes import (
+from upstream.zen import (
     BASE_URL,
     CHAT_PATH,
     CONNECT_TIMEOUT,

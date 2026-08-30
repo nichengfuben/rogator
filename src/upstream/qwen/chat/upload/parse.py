@@ -8,7 +8,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from upstream.qwen.auth.crypto import build_headers_async, merge_session_cookies
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     BASE_URL,
     FILE_PARSE_POLL_INTERVAL,
     FILE_PARSE_TIMEOUT,

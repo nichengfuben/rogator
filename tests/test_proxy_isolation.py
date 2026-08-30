@@ -8,8 +8,7 @@ from unittest.mock import patch
 
 import aiohttp
 
-from core.transport.http import close_shared_connector
-from core.transport.owned import HttpTransportMixin
+from core.transport.http import close_shared_connector, HttpTransportMixin
 from server.retry.http_client import client_session
 
 

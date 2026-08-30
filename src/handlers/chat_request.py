@@ -18,7 +18,7 @@ from typing import (
 
 from aiohttp import web
 
-from core.transport.compat import aclosing
+from core.transport.http import aclosing
 from core.dispatch import resolve_upstream
 from handlers import extract_system_for_inject
 from handlers.openai.protocol import _inject_protocol_options
@@ -42,6 +42,24 @@ from server.model.model_thinking import ThinkingRoute, resolve_thinking_route
 from server.retry import stream_with_session_retry
 
 logger = logging.getLogger("rogator")
+
+# entml 截断后补回的工具调用指令文本（不含工具描述，仅格式说明）
+ENTML_TOOL_INSTRUCTION = """\
+In this environment you have access to a set of tools you can use to answer the user's question.
+You can invoke functions by writing a "<entml:invoke>" block like the following as part of your reply to the user:
+
+<entml:invoke name="$FUNCTION_NAME">
+<entml:parameter name="$PARAMETER_NAME">$PARAMETER_VALUE</entml:parameter>
+...
+</entml:invoke>
+<entml:invoke name="$FUNCTION_NAME2">
+...
+</entml:invoke>
+
+String and scalar parameters should be specified as is, while lists and objects should use JSON format.
+
+Your turn ends immediately at the closing tag of the last <entml:invoke> block you emit. You append nothing after it — no comment, no result, no id, no visible text. The execution environment then runs each tool. Once a turn is complete, the environment logs it into <entml:conversation_history> and appends, after each invocation in that log, an HTML comment stating the environment-generated result id in the form <!-- Tool Result ID:{id} -->. This comment is written by the environment when logging a completed turn; you never write it yourself, in this turn or in imitation of any prior turn, because at the moment you emit an invocation the id does not yet exist. Separately, the environment appends the full content of every result, matched by id, to a single flat top-level block named <entml:funtions_results>, positioned outside and independent of <entml:conversation_history>. This block accumulates across the whole conversation; it is never nested inside conversation_history and never adjacent to an invocation.
+"""
 
 ChatJsonResult = Union[dict, web.Response]
 ChatModelResult = Union[str, web.Response]

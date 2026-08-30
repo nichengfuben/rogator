@@ -12,7 +12,15 @@ class TestReadRequestJson(unittest.IsolatedAsyncioTestCase):
     async def test_empty_body_allowed(self) -> None:
         request = MagicMock()
         request.can_read_body = False
+        request.headers = {"Content-Length": "0"}
         self.assertEqual(await read_request_json(request), {})
+
+    async def test_empty_body_with_content_length_raises(self) -> None:
+        request = MagicMock()
+        request.can_read_body = False
+        request.headers = {"Content-Length": "42"}
+        with pytest.raises(Exception):  # web.HTTPBadRequest
+            await read_request_json(request)
 
     async def test_connection_reset(self) -> None:
         request = MagicMock()

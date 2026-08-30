@@ -1,0 +1,1376 @@
+{
+  "timestamp": 1786526942,
+  "total_tested": 25550,
+  "working": 228,
+  "elapsed_seconds": 233.69,
+  "proxies": [
+    {
+      "proxy": "177.52.221.100:999",
+      "status": "ok",
+      "latency": 4.72,
+      "model_count": 60
+    },
+    {
+      "proxy": "12.218.209.130:53281",
+      "status": "ok",
+      "latency": 5.12,
+      "model_count": 60
+    },
+    {
+      "proxy": "201.139.115.38:8082",
+      "status": "ok",
+      "latency": 4.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.167.31.157:8080",
+      "status": "ok",
+      "latency": 4.76,
+      "model_count": 60
+    },
+    {
+      "proxy": "187.102.219.64:999",
+      "status": "ok",
+      "latency": 5.71,
+      "model_count": 60
+    },
+    {
+      "proxy": "76.169.128.104:8080",
+      "status": "ok",
+      "latency": 7.5,
+      "model_count": 60
+    },
+    {
+      "proxy": "119.82.242.200:8080",
+      "status": "ok",
+      "latency": 7.83,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.163.80.172:8085",
+      "status": "ok",
+      "latency": 8.61,
+      "model_count": 60
+    },
+    {
+      "proxy": "163.61.112.244:8080",
+      "status": "ok",
+      "latency": 8.3,
+      "model_count": 60
+    },
+    {
+      "proxy": "202.47.162.58:8181",
+      "status": "ok",
+      "latency": 4.77,
+      "model_count": 60
+    },
+    {
+      "proxy": "154.73.28.157:8080",
+      "status": "ok",
+      "latency": 6.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.172.71.209:1080",
+      "status": "ok",
+      "latency": 7.21,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.255.243.9:8080",
+      "status": "ok",
+      "latency": 10.27,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.39.70.252:8181",
+      "status": "ok",
+      "latency": 8.67,
+      "model_count": 60
+    },
+    {
+      "proxy": "201.230.121.86:999",
+      "status": "ok",
+      "latency": 6.55,
+      "model_count": 60
+    },
+    {
+      "proxy": "49.156.22.42:8082",
+      "status": "ok",
+      "latency": 5.94,
+      "model_count": 60
+    },
+    {
+      "proxy": "157.15.144.102:1111",
+      "status": "ok",
+      "latency": 8.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.247.14.222:8080",
+      "status": "ok",
+      "latency": 2.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "179.1.95.213:999",
+      "status": "ok",
+      "latency": 6.51,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.50.25.7:8888",
+      "status": "ok",
+      "latency": 7.93,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.147.247.193:8080",
+      "status": "ok",
+      "latency": 9.53,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.155.168.178:8299",
+      "status": "ok",
+      "latency": 9.58,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.154.152.104:8090",
+      "status": "ok",
+      "latency": 8.63,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.169.188.122:3125",
+      "status": "ok",
+      "latency": 8.06,
+      "model_count": 60
+    },
+    {
+      "proxy": "203.2.151.21:8080",
+      "status": "ok",
+      "latency": 6.0,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.247.23.244:1111",
+      "status": "ok",
+      "latency": 7.87,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.156.248.60:8080",
+      "status": "ok",
+      "latency": 6.01,
+      "model_count": 60
+    },
+    {
+      "proxy": "119.15.84.74:8080",
+      "status": "ok",
+      "latency": 6.03,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.71.114.185:999",
+      "status": "ok",
+      "latency": 4.12,
+      "model_count": 60
+    },
+    {
+      "proxy": "91.230.110.6:443",
+      "status": "ok",
+      "latency": 7.79,
+      "model_count": 60
+    },
+    {
+      "proxy": "200.10.28.240:999",
+      "status": "ok",
+      "latency": 7.69,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.174.94.18:8087",
+      "status": "ok",
+      "latency": 6.81,
+      "model_count": 60
+    },
+    {
+      "proxy": "168.194.147.18:8080",
+      "status": "ok",
+      "latency": 6.11,
+      "model_count": 60
+    },
+    {
+      "proxy": "46.10.209.230:8080",
+      "status": "ok",
+      "latency": 4.88,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.97.226.44:999",
+      "status": "ok",
+      "latency": 6.16,
+      "model_count": 60
+    },
+    {
+      "proxy": "115.187.29.25:89",
+      "status": "ok",
+      "latency": 8.42,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.75.82.220:999",
+      "status": "ok",
+      "latency": 9.03,
+      "model_count": 60
+    },
+    {
+      "proxy": "120.28.220.169:8080",
+      "status": "ok",
+      "latency": 9.12,
+      "model_count": 60
+    },
+    {
+      "proxy": "122.2.48.121:8080",
+      "status": "ok",
+      "latency": 5.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.67.84.58:8081",
+      "status": "ok",
+      "latency": 7.41,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.140.25.185:8080",
+      "status": "ok",
+      "latency": 8.11,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.184.62.10:8080",
+      "status": "ok",
+      "latency": 8.02,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.189.119.87:8080",
+      "status": "ok",
+      "latency": 7.96,
+      "model_count": 60
+    },
+    {
+      "proxy": "185.32.45.61:8090",
+      "status": "ok",
+      "latency": 4.66,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.252.120.18:8090",
+      "status": "ok",
+      "latency": 5.66,
+      "model_count": 60
+    },
+    {
+      "proxy": "138.204.12.65:999",
+      "status": "ok",
+      "latency": 8.56,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.156.233.137:8080",
+      "status": "ok",
+      "latency": 4.14,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.9.213.86:999",
+      "status": "ok",
+      "latency": 6.09,
+      "model_count": 60
+    },
+    {
+      "proxy": "102.90.0.146:8080",
+      "status": "ok",
+      "latency": 9.18,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.87.202.198:1111",
+      "status": "ok",
+      "latency": 7.0,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.110.64.144:8080",
+      "status": "ok",
+      "latency": 5.54,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.167.156.86:8083",
+      "status": "ok",
+      "latency": 6.35,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.188.100.73:999",
+      "status": "ok",
+      "latency": 4.79,
+      "model_count": 60
+    },
+    {
+      "proxy": "91.217.33.137:8080",
+      "status": "ok",
+      "latency": 4.88,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.156.233.195:3125",
+      "status": "ok",
+      "latency": 10.43,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.204.185.98:8081",
+      "status": "ok",
+      "latency": 6.01,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.172.170.89:999",
+      "status": "ok",
+      "latency": 3.85,
+      "model_count": 60
+    },
+    {
+      "proxy": "202.165.94.170:8082",
+      "status": "ok",
+      "latency": 9.51,
+      "model_count": 60
+    },
+    {
+      "proxy": "191.44.125.14:8080",
+      "status": "ok",
+      "latency": 9.07,
+      "model_count": 60
+    },
+    {
+      "proxy": "84.54.156.237:8080",
+      "status": "ok",
+      "latency": 6.95,
+      "model_count": 60
+    },
+    {
+      "proxy": "58.254.153.147:17981",
+      "status": "ok",
+      "latency": 10.87,
+      "model_count": 60
+    },
+    {
+      "proxy": "122.246.3.12:17981",
+      "status": "ok",
+      "latency": 11.02,
+      "model_count": 60
+    },
+    {
+      "proxy": "113.160.132.26:8080",
+      "status": "ok",
+      "latency": 10.42,
+      "model_count": 60
+    },
+    {
+      "proxy": "117.50.194.130:7890",
+      "status": "ok",
+      "latency": 10.53,
+      "model_count": 60
+    },
+    {
+      "proxy": "147.45.166.120:3333",
+      "status": "ok",
+      "latency": 9.45,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.39.25.196:8118",
+      "status": "ok",
+      "latency": 10.79,
+      "model_count": 60
+    },
+    {
+      "proxy": "114.236.137.41:21000",
+      "status": "ok",
+      "latency": 9.97,
+      "model_count": 60
+    },
+    {
+      "proxy": "15.235.21.254:8080",
+      "status": "ok",
+      "latency": 11.37,
+      "model_count": 60
+    },
+    {
+      "proxy": "157.66.36.130:8080",
+      "status": "ok",
+      "latency": 9.97,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.88.234.239:40009",
+      "status": "ok",
+      "latency": 9.06,
+      "model_count": 60
+    },
+    {
+      "proxy": "95.3.69.222:8080",
+      "status": "ok",
+      "latency": 7.25,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.88.234.239:40001",
+      "status": "ok",
+      "latency": 1.4,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.81.195.150:3125",
+      "status": "ok",
+      "latency": 10.15,
+      "model_count": 60
+    },
+    {
+      "proxy": "126.209.124.147:8089",
+      "status": "ok",
+      "latency": 1.82,
+      "model_count": 60
+    },
+    {
+      "proxy": "116.196.150.180:17981",
+      "status": "ok",
+      "latency": 0.88,
+      "model_count": 60
+    },
+    {
+      "proxy": "178.252.180.59:10909",
+      "status": "ok",
+      "latency": 4.51,
+      "model_count": 60
+    },
+    {
+      "proxy": "144.79.187.10:8080",
+      "status": "ok",
+      "latency": 2.15,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.39.51.130:1080",
+      "status": "ok",
+      "latency": 6.08,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.244.107.150:8080",
+      "status": "ok",
+      "latency": 3.87,
+      "model_count": 60
+    },
+    {
+      "proxy": "175.139.255.25:8181",
+      "status": "ok",
+      "latency": 3.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "115.231.181.40:8128",
+      "status": "ok",
+      "latency": 1.07,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.227.187.241:6090",
+      "status": "ok",
+      "latency": 1.72,
+      "model_count": 60
+    },
+    {
+      "proxy": "153.72.68.0:8080",
+      "status": "ok",
+      "latency": 2.18,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.183.146.53:8080",
+      "status": "ok",
+      "latency": 4.66,
+      "model_count": 60
+    },
+    {
+      "proxy": "157.66.51.201:8080",
+      "status": "ok",
+      "latency": 6.34,
+      "model_count": 60
+    },
+    {
+      "proxy": "85.117.61.112:8080",
+      "status": "ok",
+      "latency": 6.96,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.157.79.230:8080",
+      "status": "ok",
+      "latency": 5.24,
+      "model_count": 60
+    },
+    {
+      "proxy": "36.136.48.61:995",
+      "status": "ok",
+      "latency": 8.45,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.224.150.84:999",
+      "status": "ok",
+      "latency": 8.77,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.18.205.162:8080",
+      "status": "ok",
+      "latency": 5.23,
+      "model_count": 60
+    },
+    {
+      "proxy": "203.2.151.13:8080",
+      "status": "ok",
+      "latency": 4.95,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.237.102.191:11111",
+      "status": "ok",
+      "latency": 4.27,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.156.57.135:9988",
+      "status": "ok",
+      "latency": 5.29,
+      "model_count": 60
+    },
+    {
+      "proxy": "188.132.249.144:8080",
+      "status": "ok",
+      "latency": 5.75,
+      "model_count": 60
+    },
+    {
+      "proxy": "71.168.71.12:8891",
+      "status": "ok",
+      "latency": 2.89,
+      "model_count": 60
+    },
+    {
+      "proxy": "157.20.233.184:8080",
+      "status": "ok",
+      "latency": 8.07,
+      "model_count": 60
+    },
+    {
+      "proxy": "189.50.45.46:1995",
+      "status": "ok",
+      "latency": 6.53,
+      "model_count": 60
+    },
+    {
+      "proxy": "119.93.53.24:8082",
+      "status": "ok",
+      "latency": 2.82,
+      "model_count": 60
+    },
+    {
+      "proxy": "160.19.18.241:3125",
+      "status": "ok",
+      "latency": 5.34,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.121.239.195:999",
+      "status": "ok",
+      "latency": 4.58,
+      "model_count": 60
+    },
+    {
+      "proxy": "160.19.19.18:8080",
+      "status": "ok",
+      "latency": 2.67,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.203.233.43:8080",
+      "status": "ok",
+      "latency": 8.91,
+      "model_count": 60
+    },
+    {
+      "proxy": "160.19.18.29:8080",
+      "status": "ok",
+      "latency": 5.38,
+      "model_count": 60
+    },
+    {
+      "proxy": "113.11.126.238:30226",
+      "status": "ok",
+      "latency": 6.44,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.141.174.54:11411",
+      "status": "ok",
+      "latency": 3.3,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.179.252.235:8080",
+      "status": "ok",
+      "latency": 10.46,
+      "model_count": 60
+    },
+    {
+      "proxy": "139.59.59.122:8118",
+      "status": "ok",
+      "latency": 8.2,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.147.134.33:8082",
+      "status": "ok",
+      "latency": 5.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "59.36.210.211:13552",
+      "status": "ok",
+      "latency": 6.82,
+      "model_count": 60
+    },
+    {
+      "proxy": "101.255.150.129:7777",
+      "status": "ok",
+      "latency": 5.97,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.172.70.195:1111",
+      "status": "ok",
+      "latency": 8.33,
+      "model_count": 60
+    },
+    {
+      "proxy": "161.49.87.222:8095",
+      "status": "ok",
+      "latency": 8.62,
+      "model_count": 60
+    },
+    {
+      "proxy": "164.52.11.194:18080",
+      "status": "ok",
+      "latency": 8.35,
+      "model_count": 60
+    },
+    {
+      "proxy": "139.255.5.98:443",
+      "status": "ok",
+      "latency": 9.03,
+      "model_count": 60
+    },
+    {
+      "proxy": "51.159.97.242:10006",
+      "status": "ok",
+      "latency": 5.61,
+      "model_count": 60
+    },
+    {
+      "proxy": "122.3.127.68:8080",
+      "status": "ok",
+      "latency": 6.52,
+      "model_count": 60
+    },
+    {
+      "proxy": "201.71.2.25:999",
+      "status": "ok",
+      "latency": 4.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "202.148.13.182:8080",
+      "status": "ok",
+      "latency": 4.71,
+      "model_count": 60
+    },
+    {
+      "proxy": "163.61.112.241:8080",
+      "status": "ok",
+      "latency": 4.14,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.172.120.189:8080",
+      "status": "ok",
+      "latency": 4.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "113.192.30.43:8090",
+      "status": "ok",
+      "latency": 6.62,
+      "model_count": 60
+    },
+    {
+      "proxy": "178.252.171.229:8080",
+      "status": "ok",
+      "latency": 3.52,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.161.112.227:999",
+      "status": "ok",
+      "latency": 2.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.145.34.133:1111",
+      "status": "ok",
+      "latency": 6.49,
+      "model_count": 60
+    },
+    {
+      "proxy": "177.136.86.155:999",
+      "status": "ok",
+      "latency": 3.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.181.12.10:999",
+      "status": "ok",
+      "latency": 4.7,
+      "model_count": 60
+    },
+    {
+      "proxy": "113.160.130.183:8080",
+      "status": "ok",
+      "latency": 8.18,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.156.16.67:8818",
+      "status": "ok",
+      "latency": 5.46,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.171.194.52:83",
+      "status": "ok",
+      "latency": 8.79,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.183.8.139:8080",
+      "status": "ok",
+      "latency": 2.89,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.189.63.149:56457",
+      "status": "ok",
+      "latency": 7.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.174.168.4:999",
+      "status": "ok",
+      "latency": 4.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.51.209.80:999",
+      "status": "ok",
+      "latency": 5.69,
+      "model_count": 60
+    },
+    {
+      "proxy": "175.136.239.173:8181",
+      "status": "ok",
+      "latency": 5.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.176.2.246:8443",
+      "status": "ok",
+      "latency": 6.2,
+      "model_count": 60
+    },
+    {
+      "proxy": "213.6.249.37:19000",
+      "status": "ok",
+      "latency": 5.7,
+      "model_count": 60
+    },
+    {
+      "proxy": "47.242.155.74:12522",
+      "status": "ok",
+      "latency": 3.57,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.124.252.129:6666",
+      "status": "ok",
+      "latency": 4.42,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.51.221.17:999",
+      "status": "ok",
+      "latency": 10.83,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.19.230.101:999",
+      "status": "ok",
+      "latency": 6.05,
+      "model_count": 60
+    },
+    {
+      "proxy": "202.162.195.157:8080",
+      "status": "ok",
+      "latency": 3.57,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.28.113.254:8081",
+      "status": "ok",
+      "latency": 5.53,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.15.194.72:8080",
+      "status": "ok",
+      "latency": 5.4,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.176.99.58:999",
+      "status": "ok",
+      "latency": 5.53,
+      "model_count": 60
+    },
+    {
+      "proxy": "65.108.159.129:1080",
+      "status": "ok",
+      "latency": 1.69,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.119.90.114:8080",
+      "status": "ok",
+      "latency": 3.81,
+      "model_count": 60
+    },
+    {
+      "proxy": "154.62.127.161:999",
+      "status": "ok",
+      "latency": 8.3,
+      "model_count": 60
+    },
+    {
+      "proxy": "91.203.8.74:8080",
+      "status": "ok",
+      "latency": 6.83,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.171.167.1:999",
+      "status": "ok",
+      "latency": 4.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "177.234.217.45:999",
+      "status": "ok",
+      "latency": 5.32,
+      "model_count": 60
+    },
+    {
+      "proxy": "160.19.16.6:8181",
+      "status": "ok",
+      "latency": 10.35,
+      "model_count": 60
+    },
+    {
+      "proxy": "191.44.125.3:8080",
+      "status": "ok",
+      "latency": 4.6,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.217.216.65:8181",
+      "status": "ok",
+      "latency": 4.87,
+      "model_count": 60
+    },
+    {
+      "proxy": "144.178.199.118:8443",
+      "status": "ok",
+      "latency": 2.2,
+      "model_count": 60
+    },
+    {
+      "proxy": "139.28.49.226:8080",
+      "status": "ok",
+      "latency": 4.92,
+      "model_count": 60
+    },
+    {
+      "proxy": "200.125.170.221:999",
+      "status": "ok",
+      "latency": 6.79,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.115.253.30:83",
+      "status": "ok",
+      "latency": 8.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "13.212.214.47:8090",
+      "status": "ok",
+      "latency": 1.41,
+      "model_count": 60
+    },
+    {
+      "proxy": "65.108.159.129:8080",
+      "status": "ok",
+      "latency": 2.79,
+      "model_count": 60
+    },
+    {
+      "proxy": "122.246.4.6:17981",
+      "status": "ok",
+      "latency": 1.48,
+      "model_count": 60
+    },
+    {
+      "proxy": "175.184.236.12:1111",
+      "status": "ok",
+      "latency": 6.86,
+      "model_count": 60
+    },
+    {
+      "proxy": "47.176.240.250:4228",
+      "status": "ok",
+      "latency": 10.8,
+      "model_count": 60
+    },
+    {
+      "proxy": "79.137.192.65:30081",
+      "status": "ok",
+      "latency": 9.29,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.26.110.186:9256",
+      "status": "ok",
+      "latency": 4.16,
+      "model_count": 60
+    },
+    {
+      "proxy": "163.223.116.244:7777",
+      "status": "ok",
+      "latency": 4.7,
+      "model_count": 60
+    },
+    {
+      "proxy": "147.45.215.249:8443",
+      "status": "ok",
+      "latency": 3.81,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.209.96.155:999",
+      "status": "ok",
+      "latency": 2.41,
+      "model_count": 60
+    },
+    {
+      "proxy": "27.147.28.73:8080",
+      "status": "ok",
+      "latency": 5.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "41.33.245.139:1981",
+      "status": "ok",
+      "latency": 7.83,
+      "model_count": 60
+    },
+    {
+      "proxy": "185.239.50.122:10808",
+      "status": "ok",
+      "latency": 8.9,
+      "model_count": 60
+    },
+    {
+      "proxy": "148.222.153.74:999",
+      "status": "ok",
+      "latency": 4.89,
+      "model_count": 60
+    },
+    {
+      "proxy": "31.15.169.77:808",
+      "status": "ok",
+      "latency": 7.49,
+      "model_count": 60
+    },
+    {
+      "proxy": "24.152.53.68:999",
+      "status": "ok",
+      "latency": 2.41,
+      "model_count": 60
+    },
+    {
+      "proxy": "153.80.240.37:1080",
+      "status": "ok",
+      "latency": 3.32,
+      "model_count": 60
+    },
+    {
+      "proxy": "202.180.21.213:80",
+      "status": "ok",
+      "latency": 6.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "179.1.13.52:999",
+      "status": "ok",
+      "latency": 7.1,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.78.44.63:999",
+      "status": "ok",
+      "latency": 7.02,
+      "model_count": 60
+    },
+    {
+      "proxy": "185.82.99.210:8724",
+      "status": "ok",
+      "latency": 7.44,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.169.33.30:3125",
+      "status": "ok",
+      "latency": 6.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "14.224.181.172:8080",
+      "status": "ok",
+      "latency": 8.4,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.199.66.11:999",
+      "status": "ok",
+      "latency": 3.69,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.157.78.117:7777",
+      "status": "ok",
+      "latency": 5.62,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.172.142.38:999",
+      "status": "ok",
+      "latency": 5.75,
+      "model_count": 60
+    },
+    {
+      "proxy": "153.80.240.37:8080",
+      "status": "ok",
+      "latency": 7.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "162.4.38.23:8080",
+      "status": "ok",
+      "latency": 8.7,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.119.103.237:999",
+      "status": "ok",
+      "latency": 3.19,
+      "model_count": 60
+    },
+    {
+      "proxy": "101.206.186.99:8080",
+      "status": "ok",
+      "latency": 1.97,
+      "model_count": 60
+    },
+    {
+      "proxy": "157.20.157.82:8080",
+      "status": "ok",
+      "latency": 5.62,
+      "model_count": 60
+    },
+    {
+      "proxy": "91.218.244.153:8989",
+      "status": "ok",
+      "latency": 6.07,
+      "model_count": 60
+    },
+    {
+      "proxy": "37.230.57.120:999",
+      "status": "ok",
+      "latency": 4.56,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.107.23.150:8080",
+      "status": "ok",
+      "latency": 6.16,
+      "model_count": 60
+    },
+    {
+      "proxy": "202.1.24.114:8090",
+      "status": "ok",
+      "latency": 5.87,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.158.97.83:8080",
+      "status": "ok",
+      "latency": 8.11,
+      "model_count": 60
+    },
+    {
+      "proxy": "49.144.25.241:8082",
+      "status": "ok",
+      "latency": 5.04,
+      "model_count": 60
+    },
+    {
+      "proxy": "185.196.182.22:8080",
+      "status": "ok",
+      "latency": 5.6,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.78.25.252:999",
+      "status": "ok",
+      "latency": 4.6,
+      "model_count": 60
+    },
+    {
+      "proxy": "200.39.152.161:999",
+      "status": "ok",
+      "latency": 6.71,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.87.202.19:8181",
+      "status": "ok",
+      "latency": 4.22,
+      "model_count": 60
+    },
+    {
+      "proxy": "190.9.48.193:999",
+      "status": "ok",
+      "latency": 8.12,
+      "model_count": 60
+    },
+    {
+      "proxy": "154.73.29.161:8080",
+      "status": "ok",
+      "latency": 7.67,
+      "model_count": 60
+    },
+    {
+      "proxy": "187.251.224.167:80",
+      "status": "ok",
+      "latency": 6.39,
+      "model_count": 60
+    },
+    {
+      "proxy": "200.119.141.114:999",
+      "status": "ok",
+      "latency": 6.64,
+      "model_count": 60
+    },
+    {
+      "proxy": "157.10.97.133:8080",
+      "status": "ok",
+      "latency": 7.45,
+      "model_count": 60
+    },
+    {
+      "proxy": "205.235.1.36:999",
+      "status": "ok",
+      "latency": 5.21,
+      "model_count": 60
+    },
+    {
+      "proxy": "43.133.128.153:16012",
+      "status": "ok",
+      "latency": 3.87,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.155.199.68:7777",
+      "status": "ok",
+      "latency": 6.7,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.129.158.131:999",
+      "status": "ok",
+      "latency": 2.3,
+      "model_count": 60
+    },
+    {
+      "proxy": "219.148.171.178:9445",
+      "status": "ok",
+      "latency": 2.01,
+      "model_count": 60
+    },
+    {
+      "proxy": "185.248.179.99:8080",
+      "status": "ok",
+      "latency": 5.36,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.172.170.148:999",
+      "status": "ok",
+      "latency": 8.2,
+      "model_count": 60
+    },
+    {
+      "proxy": "66.163.118.99:10006",
+      "status": "ok",
+      "latency": 2.51,
+      "model_count": 60
+    },
+    {
+      "proxy": "187.190.114.57:999",
+      "status": "ok",
+      "latency": 4.43,
+      "model_count": 60
+    },
+    {
+      "proxy": "181.78.95.59:999",
+      "status": "ok",
+      "latency": 5.09,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.39.75.123:8080",
+      "status": "ok",
+      "latency": 8.93,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.167.170.65:3125",
+      "status": "ok",
+      "latency": 9.44,
+      "model_count": 60
+    },
+    {
+      "proxy": "89.42.71.98:8097",
+      "status": "ok",
+      "latency": 6.57,
+      "model_count": 60
+    },
+    {
+      "proxy": "195.189.190.245:9090",
+      "status": "ok",
+      "latency": 2.85,
+      "model_count": 60
+    },
+    {
+      "proxy": "122.51.226.233:2332",
+      "status": "ok",
+      "latency": 2.55,
+      "model_count": 60
+    },
+    {
+      "proxy": "165.154.162.73:8888",
+      "status": "ok",
+      "latency": 3.51,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.19.43.75:999",
+      "status": "ok",
+      "latency": 8.93,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.236.65.201:8520",
+      "status": "ok",
+      "latency": 4.69,
+      "model_count": 60
+    },
+    {
+      "proxy": "103.165.155.254:2016",
+      "status": "ok",
+      "latency": 9.06,
+      "model_count": 60
+    },
+    {
+      "proxy": "182.160.100.142:12331",
+      "status": "ok",
+      "latency": 5.92,
+      "model_count": 60
+    },
+    {
+      "proxy": "38.188.100.252:999",
+      "status": "ok",
+      "latency": 7.49,
+      "model_count": 60
+    },
+    {
+      "proxy": "45.61.133.104:7777",
+      "status": "ok",
+      "latency": 8.55,
+      "model_count": 60
+    },
+    {
+      "proxy": "92.247.12.136:9510",
+      "status": "ok",
+      "latency": 7.85,
+      "model_count": 60
+    },
+    {
+      "proxy": "102.206.118.204:8088",
+      "status": "ok",
+      "latency": 7.56,
+      "model_count": 60
+    },
+    {
+      "proxy": "107.173.153.119:2080",
+      "status": "ok",
+      "latency": 8.29,
+      "model_count": 60
+    }
+  ]
+}

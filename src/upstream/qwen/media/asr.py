@@ -14,10 +14,10 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import aiohttp
 
-from core.transport.compat import removeprefix
+from core.transport.http import removeprefix
 
 from upstream.qwen.auth.crypto import build_asr_ws_headers_async
-from upstream.qwen.chat.routes import (
+from upstream.qwen.chat.endpoints import (
     ASR_AUDIO_CHUNK_BYTES,
     ASR_MAX_DURATION_SEC,
     ASR_SAMPLE_RATE,

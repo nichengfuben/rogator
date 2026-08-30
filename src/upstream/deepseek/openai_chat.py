@@ -7,7 +7,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from echotools.base.logger import get_logger
 
-from core.transport.conn_retry import reraise_transport_error
+from core.transport.http import reraise_transport_error
 from handlers.chat_request import apply_prompt_budget, prepare_injected_messages
 from upstream.deepseek.lib.adapter.helpers.biz_error import (
     DeepSeekAccountsExhaustedError,

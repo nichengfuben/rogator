@@ -15,15 +15,15 @@ from aiohttp.client_exceptions import (
 
 
 class PayloadTooLargeError(RuntimeError):
-    """?? Qwen ????????HTTP 413??"""
+    """客户端请求体超过上限；上游 Qwen 触发 HTTP 413 时抛出。"""
 
 
 class UpstreamTimeoutError(RuntimeError):
-    """?? HTTP / SSE ????"""
+    """上游 HTTP / SSE 读超时统一抛出。"""
 
 
 class UpstreamUnavailableError(RuntimeError):
-    """??????????????"""
+    """上游不可用（业务层语义，非网络层）。"""
 
     status: int = 503
     error_type: str = "upstream_unavailable"
@@ -47,7 +47,7 @@ class UpstreamChatNotFoundError(UpstreamUnavailableError):
 
 
 class UpstreamConnectionError(RuntimeError):
-    """?????????/??/DNS??"""
+    """上游连接失败：TCP/SSL/DNS 错误统一映射。"""
 
     status: int = 502
     error_type: str = "upstream_connection_error"
@@ -65,11 +65,68 @@ class UpstreamStsError(UpstreamConnectionError):
 
 
 class TokenExpiredError(Exception):
-    """Token ??????? session"""
+    """Token 失效，需切换/重建 session。"""
 
 
 class BaxiaSmBlockedError(Exception):
     """Baxia SM 人机验证拦截：账号仍有效，换号重试即可。"""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        proxy_used_enabled: Optional[bool] = None,
+    ) -> None:
+        super().__init__(message)
+        self.proxy_used_enabled = proxy_used_enabled
+
+
+class UpstreamWafBlockedErrorWithProxy(UpstreamWafBlockedError):
+    """携带请求期代理开关快照的 WAF 拦截异常。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        upstream: str = "",
+        proxy_used_enabled: Optional[bool] = None,
+    ) -> None:
+        super().__init__(message, upstream=upstream)
+        self.proxy_used_enabled = proxy_used_enabled
+
+
+def attach_proxy_toggle(exc: BaseException, used_enabled: Optional[bool]) -> BaseException:
+    """把请求期的代理开关快照挂到现有异常上；不改原异常类型。
+
+    兼容老代码 ``getattr(exc, "_proxy_used_enabled", None)`` 的同时，
+    优先返回标准化字段 ``proxy_used_enabled``。``None`` 表示"未知"。
+    """
+    if used_enabled is None:
+        return exc
+    try:
+        setattr(exc, "proxy_used_enabled", used_enabled)
+        setattr(exc, "_proxy_used_enabled", used_enabled)  # noqa: legacy alias
+    except Exception:
+        pass
+    return exc
+
+
+def read_proxy_used_enabled(exc: BaseException, client: Any) -> Optional[bool]:
+    """按"显式字段 → client 当前值 → None"顺序解析请求期代理开关。"""
+    val = getattr(exc, "proxy_used_enabled", None)
+    if val is None:
+        val = getattr(exc, "_proxy_used_enabled", None)
+    if val is not None:
+        return val
+    if client is not None:
+        val = getattr(client, "_last_used_proxy_enabled", None)
+        if val is not None:
+            return val
+    try:
+        from upstream.qwen.media.proxy_toggle import get_proxy_toggle
+        return get_proxy_toggle().enabled
+    except Exception:
+        return None
 
 
 class DataInspectionFailedError(Exception):
@@ -85,7 +142,7 @@ class DataInspectionFailedError(Exception):
 
 
 class ClientDisconnectedError(Exception):
-    """????????????????"""
+    """客户端在响应写出前断开连接，handler 据此返 499。"""
 
 
 _CLIENT_DISCONNECT_ERRORS = (
@@ -100,8 +157,17 @@ _CLIENT_DISCONNECT_ERRORS = (
 
 
 async def read_request_json(request: web.Request) -> Dict[str, Any]:
-    """?? JSON ???????????? ``ClientDisconnectedError``?"""
+    """读取请求 JSON；空 body 视为 ``{}``，客户端断连抛 ``ClientDisconnectedError``。
+
+    Content-Length 与实际 body 不一致（恶意/损坏请求）直接抛 ``web.HTTPBadRequest``，
+    让上游网关明确返 4xx 而非吞掉错误。
+    """
     if not request.can_read_body:
+        cl = request.headers.get("Content-Length")
+        if cl is not None and cl.strip() != "0":
+            raise web.HTTPBadRequest(
+                reason="Content-Length declared but body is empty",
+            )
         return {}
     try:
         body = await request.json()
@@ -115,7 +181,7 @@ async def read_request_json(request: web.Request) -> Dict[str, Any]:
 
 
 def client_disconnected_response() -> web.Response:
-    """???????????499 Client Closed Request??"""
+    """返回 499 Client Closed Request，匹配 nginx 语义。"""
     return web.Response(status=499, text="Client disconnected")
 
 

@@ -12,7 +12,7 @@ from handlers.realtime.protocol import (
     build_transcription_session,
     parse_transcription_language,
 )
-from handlers.realtime.oai import OaiRealtimeAsrConnection
+from handlers.realtime.openai import OaiRealtimeAsrConnection
 
 
 def test_parse_transcription_language_nested() -> None:
@@ -69,7 +69,7 @@ async def test_oai_realtime_connection_commit_flow() -> None:
     mock_qwen._ensure_http_session = AsyncMock(return_value=MagicMock())
     mock_session = MagicMock(token="tok")
 
-    with patch("handlers.realtime.oai.AsrRealtimeSession", FakeUpstream):
+    with patch("handlers.realtime.openai.AsrRealtimeSession", FakeUpstream):
         conn = OaiRealtimeAsrConnection(ws, mock_qwen, mock_session, model="qwen-asr")
         await conn.send_created()
         await conn.handle_client_event({

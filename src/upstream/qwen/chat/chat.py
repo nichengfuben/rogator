@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-"""Qwen chat creation, stop/delete, and SSE parsing."""
+"""Qwen chat creation, stop/delete, SSE parsing, plus chat-side constants/endpoints.
+
+Merged from: chat.py, routes.py.
+"""
 
 import asyncio
 import logging
-import time
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 import aiohttp
 
-from upstream.qwen.auth.crypto import build_headers_async, build_stop_headers_async
-from upstream.qwen.chat.sse import iter_sse_events, raise_sse_inline_error
-from upstream.qwen.chat.routes import BASE_URL, DELETE_CHAT_PATH, NEW_CHAT_PATH, STOP_CHAT_PATH
-from upstream.qwen.chat.upload.payload import build_stop_payload
-from upstream.qwen.auth.http import run_with_connection_retry, absorb_response_cookies
 from core.transport.http import request_json, upstream_timeout
 from server.config import CONFIG
 from server.formats import (
@@ -23,7 +20,18 @@ from server.formats import (
     UpstreamTimeoutError,
     UpstreamWafBlockedError,
 )
+from upstream.qwen.auth.crypto import build_headers_async, build_stop_headers_async
+from upstream.qwen.auth.http import absorb_response_cookies, run_with_connection_retry
+from upstream.qwen.chat.endpoints import (
+    BASE_URL,
+    CAPS,
+    DELETE_CHAT_PATH,
+    NEW_CHAT_PATH,
+    STOP_CHAT_PATH,
+)
+from upstream.qwen.chat.sse import iter_sse_events, raise_sse_inline_error
 from upstream.qwen.chat.store import QwenSession, is_session_fatal_error
+from upstream.qwen.chat.upload import build_stop_payload
 
 if TYPE_CHECKING:
     from upstream.qwen.client import QwenClient
@@ -122,7 +130,7 @@ async def _post_create_chat(
     timeout_s: float,
     cookies: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    from upstream.qwen.chat.upload.payload import build_new_chat_payload
+    from upstream.qwen.chat.upload import build_new_chat_payload
 
     payload = build_new_chat_payload(model)
     cookies = _resolve_create_chat_cookies(client, session, cookies)
@@ -254,7 +262,7 @@ async def delete_upstream_chat(
 
 
 async def abort_upstream_on_cancel(
-    client: "QwenClient",
+    client: QwenClient,
     session: QwenSession,
     chat_id: str,
     response_id: str = "",
@@ -288,3 +296,16 @@ async def handle_chat_error(client: QwenClient, resp: aiohttp.ClientResponse, se
             upstream="qwen",
         )
     raise RuntimeError(f"Chat HTTP {resp.status}: {snippet}")
+
+
+__all__ = [
+    "abort_upstream_on_cancel",
+    "check_create_chat_error",
+    "create_chat_for_session",
+    "delete_upstream_chat",
+    "handle_chat_error",
+    "iter_sse_events",
+    "raise_qwen_session_error",
+    "raise_sse_inline_error",
+    "stop_upstream_generation",
+]
